@@ -1,0 +1,37 @@
+# Build artifacts (tools.build)
+/target
+/classes
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+
+# tools.deps / REPL
+/.cpcache/
+/.nrepl-port
+/.prepl-port
+.nrepl-history
+
+# Legacy Leiningen (if present)
+/checkouts
+profiles.clj
+/.lein-*
+# IDE / Editor
+.lsp/
+.clj-kondo/
+/.#Readme.org
+
+# Legacy
+.hgignore
+.hg/
+
+# Node / npm
+node_modules/
+package-lock.json
+
+# Shadow-CLJS
+.shadow-cljs/
+resources/public/js/
+
+# Other
+/.clojure-mcp/

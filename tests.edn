@@ -1,0 +1,12 @@
+#kaocha/v1
+{:tests
+ [{:id :unit
+   :test-paths ["test"]
+   :source-paths ["src"]
+   :ns-patterns ["-test$"]}]
+
+ :plugins
+ [:kaocha.plugin/profiling]
+
+ :color? true
+ :fail-fast? false}
