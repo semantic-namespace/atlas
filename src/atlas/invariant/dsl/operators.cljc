@@ -15,183 +15,185 @@
          (conj id :semantic-namespace.invariant/operator)
          operator-def))
 
-;; =============================================================================
+
+(defn register-operators []
+  ;; =============================================================================
 ;; ENTITY PREDICATES
 ;; =============================================================================
 
-(register-operator! #{:dsl.op/entity-has-aspect}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if entity has the specified aspect."
-                     :operator/compile-fn
-                     (fn [aspect]
-                       {:type :entity-predicate
-                        :check-fn (fn [entity-id] (rt/has-aspect? entity-id aspect))})})
+  (register-operator! #{:dsl.op/entity-has-aspect}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if entity has the specified aspect."
+                       :operator/compile-fn
+                       (fn [aspect]
+                         {:type :entity-predicate
+                          :check-fn (fn [entity-id] (rt/has-aspect? entity-id aspect))})})
 
-(register-operator! #{:dsl.op/entity-lacks-aspect}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if entity lacks the specified aspect."
-                     :operator/compile-fn
-                     (fn [aspect]
-                       {:type :entity-predicate
-                        :check-fn (fn [entity-id] (not (rt/has-aspect? entity-id aspect)))})})
+  (register-operator! #{:dsl.op/entity-lacks-aspect}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if entity lacks the specified aspect."
+                       :operator/compile-fn
+                       (fn [aspect]
+                         {:type :entity-predicate
+                          :check-fn (fn [entity-id] (not (rt/has-aspect? entity-id aspect)))})})
 
-(register-operator! #{:dsl.op/entity-depends-on}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if entity depends on specified entity."
-                     :operator/compile-fn
-                     (fn [dep-id]
-                       {:type :entity-predicate
-                        :check-fn (fn [entity-id]
-                                    (contains? (set (rt/deps-for entity-id)) dep-id))})})
+  (register-operator! #{:dsl.op/entity-depends-on}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if entity depends on specified entity."
+                       :operator/compile-fn
+                       (fn [dep-id]
+                         {:type :entity-predicate
+                          :check-fn (fn [entity-id]
+                                      (contains? (set (rt/deps-for entity-id)) dep-id))})})
 
-(register-operator! #{:dsl.op/entity-produces}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if entity produces specified data key."
-                     :operator/compile-fn
-                     (fn [data-key]
-                       {:type :entity-predicate
-                        :check-fn (fn [entity-id]
-                                    (let [props (rt/props-for entity-id)
-                                          response-keys (or (:interface-endpoint/response props)
-                                                            (:execution-function/response props))]
-                                      (contains? (set response-keys) data-key)))})})
+  (register-operator! #{:dsl.op/entity-produces}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if entity produces specified data key."
+                       :operator/compile-fn
+                       (fn [data-key]
+                         {:type :entity-predicate
+                          :check-fn (fn [entity-id]
+                                      (let [props (rt/props-for entity-id)
+                                            response-keys (or (:interface-endpoint/response props)
+                                                              (:execution-function/response props))]
+                                        (contains? (set response-keys) data-key)))})})
 
-(register-operator! #{:dsl.op/entity-consumes}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if entity consumes specified data key."
-                     :operator/compile-fn
-                     (fn [data-key]
-                       {:type :entity-predicate
-                        :check-fn (fn [entity-id]
-                                    (let [props (rt/props-for entity-id)
-                                          context-keys (or (:interface-endpoint/context props)
-                                                           (:execution-function/context props))]
-                                      (contains? (set context-keys) data-key)))})})
+  (register-operator! #{:dsl.op/entity-consumes}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if entity consumes specified data key."
+                       :operator/compile-fn
+                       (fn [data-key]
+                         {:type :entity-predicate
+                          :check-fn (fn [entity-id]
+                                      (let [props (rt/props-for entity-id)
+                                            context-keys (or (:interface-endpoint/context props)
+                                                             (:execution-function/context props))]
+                                        (contains? (set context-keys) data-key)))})})
 
 ;; =============================================================================
 ;; DATAFLOW PREDICATES
 ;; =============================================================================
 
-(register-operator! #{:dsl.op/data-has-producer}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if data key has at least one producer."
-                     :operator/compile-fn
-                     (fn [data-key]
-                       {:type :global-predicate
-                        :check-fn (fn [_entity-id]
-                                    (some (fn [[_id props]]
-                                            (contains? (set (:interface-endpoint/response props)) data-key))
-                                          @cid/registry))})})
+  (register-operator! #{:dsl.op/data-has-producer}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if data key has at least one producer."
+                       :operator/compile-fn
+                       (fn [data-key]
+                         {:type :global-predicate
+                          :check-fn (fn [_entity-id]
+                                      (some (fn [[_id props]]
+                                              (contains? (set (:interface-endpoint/response props)) data-key))
+                                            @cid/registry))})})
 
-(register-operator! #{:dsl.op/data-has-consumer}
-                    {:operator/arity 1
-                     :operator/args-type :keyword
-                     :operator/doc "Checks if data key has at least one consumer."
-                     :operator/compile-fn
-                     (fn [data-key]
-                       {:type :global-predicate
-                        :check-fn (fn [_entity-id]
-                                    (some (fn [[_id props]]
-                                            (contains? (set (:interface-endpoint/context props)) data-key))
-                                          @cid/registry))})})
+  (register-operator! #{:dsl.op/data-has-consumer}
+                      {:operator/arity 1
+                       :operator/args-type :keyword
+                       :operator/doc "Checks if data key has at least one consumer."
+                       :operator/compile-fn
+                       (fn [data-key]
+                         {:type :global-predicate
+                          :check-fn (fn [_entity-id]
+                                      (some (fn [[_id props]]
+                                              (contains? (set (:interface-endpoint/context props)) data-key))
+                                            @cid/registry))})})
 
 ;; =============================================================================
 ;; LOGICAL OPERATORS
 ;; =============================================================================
 
-(register-operator! #{:dsl.op/logic-and}
-                    {:operator/arity :variadic
-                     :operator/args-type :node
-                     :operator/doc "Logical AND of child predicates."
-                     :operator/compile-fn
-                     (fn [children]
-                       {:type :combinator
-                        :check-fn (fn [entity-id compiled-children]
-                                    (every? (fn [child]
+  (register-operator! #{:dsl.op/logic-and}
+                      {:operator/arity :variadic
+                       :operator/args-type :node
+                       :operator/doc "Logical AND of child predicates."
+                       :operator/compile-fn
+                       (fn [children]
+                         {:type :combinator
+                          :check-fn (fn [entity-id compiled-children]
+                                      (every? (fn [child]
+                                                ((:check-fn child) entity-id))
+                                              compiled-children))})})
+
+  (register-operator! #{:dsl.op/logic-or}
+                      {:operator/arity :variadic
+                       :operator/args-type :node
+                       :operator/doc "Logical OR of child predicates."
+                       :operator/compile-fn
+                       (fn [children]
+                         {:type :combinator
+                          :check-fn (fn [entity-id compiled-children]
+                                      (some (fn [child]
                                               ((:check-fn child) entity-id))
                                             compiled-children))})})
 
-(register-operator! #{:dsl.op/logic-or}
-                    {:operator/arity :variadic
-                     :operator/args-type :node
-                     :operator/doc "Logical OR of child predicates."
-                     :operator/compile-fn
-                     (fn [children]
-                       {:type :combinator
-                        :check-fn (fn [entity-id compiled-children]
-                                    (some (fn [child]
-                                            ((:check-fn child) entity-id))
-                                          compiled-children))})})
+  (register-operator! #{:dsl.op/logic-not}
+                      {:operator/arity 1
+                       :operator/args-type :node
+                       :operator/doc "Logical NOT of child predicate."
+                       :operator/compile-fn
+                       (fn [child]
+                         {:type :combinator
+                          :check-fn (fn [entity-id compiled-child]
+                                      (not ((:check-fn compiled-child) entity-id)))})})
 
-(register-operator! #{:dsl.op/logic-not}
-                    {:operator/arity 1
-                     :operator/args-type :node
-                     :operator/doc "Logical NOT of child predicate."
-                     :operator/compile-fn
-                     (fn [child]
-                       {:type :combinator
-                        :check-fn (fn [entity-id compiled-child]
-                                    (not ((:check-fn compiled-child) entity-id)))})})
-
-(register-operator! #{:dsl.op/logic-implies}
-                    {:operator/arity 2
-                     :operator/args-type :node
-                     :operator/doc "Logical implication: A implies B = (not A) or B"
-                     :operator/compile-fn
-                     (fn [[antecedent consequent]]
-                       {:type :combinator
-                        :check-fn (fn [entity-id [compiled-a compiled-b]]
-                                    (or (not ((:check-fn compiled-a) entity-id))
-                                        ((:check-fn compiled-b) entity-id)))})})
+  (register-operator! #{:dsl.op/logic-implies}
+                      {:operator/arity 2
+                       :operator/args-type :node
+                       :operator/doc "Logical implication: A implies B = (not A) or B"
+                       :operator/compile-fn
+                       (fn [[antecedent consequent]]
+                         {:type :combinator
+                          :check-fn (fn [entity-id [compiled-a compiled-b]]
+                                      (or (not ((:check-fn compiled-a) entity-id))
+                                          ((:check-fn compiled-b) entity-id)))})})
 
 ;; =============================================================================
 ;; GRAPH OPERATORS
 ;; =============================================================================
 
-(register-operator! #{:dsl.op/graph-acyclic}
-                    {:operator/arity 1
-                     :operator/args-type :map
-                     :operator/doc "Checks if dependency graph is acyclic."
-                     :operator/compile-fn
-                     (fn [{:keys [edge]}]
-                       {:type :graph-predicate
-                        :check-fn (fn [_entity-id]
-                                    (let [all-ids (map #(:atlas/dev-id (second %)) @cid/registry)
-                                          deps-map (case edge
-                                                     :depends (into {} (map (fn [id] [id (rt/deps-for id)]) all-ids))
-                                                     :data-flow (into {} (map (fn [id] [id (rt/compute-data-deps id)]) all-ids)))]
-                                      (letfn [(has-cycle? [id visited path]
-                                                (cond
-                                                  (contains? path id) false
-                                                  (contains? visited id) true
-                                                  :else (every? #(has-cycle? % (conj visited id) (conj path id))
-                                                                (get deps-map id #{}))))]
-                                        (every? #(has-cycle? % #{} #{}) all-ids))))})})
+  (register-operator! #{:dsl.op/graph-acyclic}
+                      {:operator/arity 1
+                       :operator/args-type :map
+                       :operator/doc "Checks if dependency graph is acyclic."
+                       :operator/compile-fn
+                       (fn [{:keys [edge]}]
+                         {:type :graph-predicate
+                          :check-fn (fn [_entity-id]
+                                      (let [all-ids (map #(:atlas/dev-id (second %)) @cid/registry)
+                                            deps-map (case edge
+                                                       :depends (into {} (map (fn [id] [id (rt/deps-for id)]) all-ids))
+                                                       :data-flow (into {} (map (fn [id] [id (rt/compute-data-deps id)]) all-ids)))]
+                                        (letfn [(has-cycle? [id visited path]
+                                                  (cond
+                                                    (contains? path id) false
+                                                    (contains? visited id) true
+                                                    :else (every? #(has-cycle? % (conj visited id) (conj path id))
+                                                                  (get deps-map id #{}))))]
+                                          (every? #(has-cycle? % #{} #{}) all-ids))))})})
 
-(register-operator! #{:dsl.op/graph-reachable}
-                    {:operator/arity 1
-                     :operator/args-type :map
-                     :operator/doc "Checks if entity is reachable from endpoints."
-                     :operator/compile-fn
-                     (fn [{:keys [edge]}]
-                       {:type :graph-predicate
-                        :check-fn (fn [entity-id]
-                                    (let [endpoints (rt/all-with-aspect :atlas/interface-endpoint)
-                                          reachable (atom #{})
-                                          collect-reachable (fn collect [id]
-                                                              (when-not (@reachable id)
-                                                                (swap! reachable conj id)
-                                                                (doseq [dep (rt/deps-for id)]
-                                                                  (collect dep))))]
-                                      (doseq [ep endpoints]
-                                        (collect-reachable ep))
-                                      (contains? @reachable entity-id)))})})
+  (register-operator! #{:dsl.op/graph-reachable}
+                      {:operator/arity 1
+                       :operator/args-type :map
+                       :operator/doc "Checks if entity is reachable from endpoints."
+                       :operator/compile-fn
+                       (fn [{:keys [edge]}]
+                         {:type :graph-predicate
+                          :check-fn (fn [entity-id]
+                                      (let [endpoints (rt/all-with-aspect :atlas/interface-endpoint)
+                                            reachable (atom #{})
+                                            collect-reachable (fn collect [id]
+                                                                (when-not (@reachable id)
+                                                                  (swap! reachable conj id)
+                                                                  (doseq [dep (rt/deps-for id)]
+                                                                    (collect dep))))]
+                                        (doseq [ep endpoints]
+                                          (collect-reachable ep))
+                                        (contains? @reachable entity-id)))})}))
 
 ;; =============================================================================
 ;; COMPILER

@@ -5,7 +5,7 @@
 ;; =============================================================================
 ;; TIER AXIOMS
 ;; =============================================================================
-
+(dsl/register-operators)
 (def invariant-components-are-foundation
   {:invariant/id :invariant/components-are-foundation
    :invariant/level :error

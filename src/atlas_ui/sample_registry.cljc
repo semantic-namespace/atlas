@@ -62,33 +62,36 @@
   "Shopping cart registry merged with atlas-ui self-description."
   (merge shopping-cart-registry ui-reg/ui-registry))
 
-;; ============================================================================
+(defn sample-entities []
+  ;; ============================================================================
 ;; INTERFACE PROTOCOLS
 ;; ============================================================================
 
-(cid/register!
- :protocol/email-provider
- :atlas/interface-protocol
- #{ :domain/inbox}
-  {:atlas/dev-id :protocol/email-provider
-   :interface-protocol/functions
-   [:fn/read-inbox]})
+  (cid/register!
+   :protocol/email-provider
+   :atlas/interface-protocol
+   #{:domain/inbox}
+   {:atlas/dev-id :protocol/email-provider
+    :interface-protocol/functions
+    [:fn/read-inbox]})
 
-(cid/register!
- :protocol/oauth2
- :atlas/interface-protocol
- #{ :domain/security}
-  {:atlas/dev-id :protocol/oauth2
-   :interface-protocol/functions
-   [:fn/grant-consent :fn/revoke-consent]})
+  (cid/register!
+   :protocol/oauth2
+   :atlas/interface-protocol
+   #{:domain/security}
+   {:atlas/dev-id :protocol/oauth2
+    :interface-protocol/functions
+    [:fn/grant-consent :fn/revoke-consent]})
 
-(cid/register!
- :protocol/wikidata
- :atlas/interface-protocol
- #{ :domain/enrichment}
-  {:atlas/dev-id :protocol/wikidata
-   :interface-protocol/functions
-   [:fn/enrich-service]})
+  (cid/register!
+   :protocol/wikidata
+   :atlas/interface-protocol
+   #{:domain/enrichment}
+   {:atlas/dev-id :protocol/wikidata
+    :interface-protocol/functions
+    [:fn/enrich-service]})
+
+
 
 ;; ============================================================================
 ;; IDENTITY ROLES
@@ -227,6 +230,9 @@
    :risk-failure-mode/detection :http-429
    :risk-failure-mode/recovery-path :retry-with-backoff
    :risk-failure-mode/preventable false})
+
+  )
+
 
 ;; ============================================================================
 ;; SUMMARY

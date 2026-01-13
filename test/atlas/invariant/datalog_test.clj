@@ -4,6 +4,7 @@
    [atlas.datalog :as graph.datalog]
    [atlas.invariant.datalog :as invariant.datalog]
    [atlas.invariant.dsl.datalog :as invariant.dsl.datalog]
+   [atlas.invariant.dsl.operators :as dsl.operators]
    [atlas.invariant.unified :as invariant.unified]
    [atlas.registry :as registry]))
 
@@ -20,6 +21,7 @@
 (defn- seed-basic-registry!
   "Basic registry for dataflow tests."
   []
+  (dsl.operators/register-operators)
   ;; Endpoint depends on downstream functions
   (registry/register!
 
