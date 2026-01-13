@@ -20,7 +20,7 @@ Add Atlas to your `deps.edn`:
 
 ```clojure
 {:deps {semantic-namespace/atlas {:git/url "https://github.com/semantic-namespace/atlas"
-                                   :git/sha "..."}}}
+                                   :sha "..."}}}
 ```
 
 Start a REPL:

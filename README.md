@@ -62,7 +62,7 @@ Add to your `deps.edn`:
 
 ```clojure
 {:deps {semantic-namespace/atlas {:git/url "https://github.com/semantic-namespace/atlas"
-                                   :git/sha "..."}}}
+                                   :sha "..."}}}
 ```
 
 ### Basic Usage
