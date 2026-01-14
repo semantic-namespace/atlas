@@ -176,7 +176,7 @@ Atlas enforces tier boundaries (services can't skip to foundation, etc.).
 
 ### Visual Explorer (PoC)
 
-![Atlas UI graph visualization](https://github.com/user-attachments/assets/c6804949-a356-4871-91e7-4cabf908296f)
+![Atlas UI graph visualization](https://github.com/user-attachments/assets/7b0259bd-d272-4b20-a834-16357c708583)
 
 Interactive graph visualization for exploring semantic registries:
 
