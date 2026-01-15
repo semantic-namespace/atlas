@@ -60,10 +60,11 @@ Every identity and relation lives in a global registry that can be translated in
 
 Add to your `deps.edn`:
 
+
 ```clojure
-{:deps {semantic-namespace/atlas {:git/url "https://github.com/semantic-namespace/atlas"
-                                   :sha "..."}}}
+{:deps {com.github.semantic-namespace/atlas {:mvn/version "0.0.1-SNAPSHOT"}}
 ```
+
 
 ### Basic Usage
 
