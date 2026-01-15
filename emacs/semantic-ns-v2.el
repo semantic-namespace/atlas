@@ -107,11 +107,30 @@
 
 ;;; CIDER Evaluation
 
+(defun semantic-ns--edn-set-p (obj)
+  "Check if OBJ is an edn-set representation from parseedn."
+  (and (consp obj)  ; Use consp instead of listp to exclude nil
+       (symbolp (car obj))
+       (or (eq (car obj) 'edn-set)
+           (equal (symbol-name (car obj)) "edn-set"))))
+
+(defun semantic-ns--unwrap-edn-set (obj)
+  "Unwrap edn-set to get list of elements.
+Handles both (edn-set elem1 elem2 ...) and (edn-set (elem1 elem2 ...))."
+  (let ((contents (cdr obj)))
+    ;; If there's a single element that's a list, unwrap it
+    (if (and (= (length contents) 1) (listp (car contents)))
+        (car contents)
+      contents)))
+
 (defun semantic-ns--to-list (obj)
   "Convert OBJ to list if it's a vector, otherwise return as-is.
-Parseedn converts Clojure vectors to Emacs vectors and sets to lists."
+Parseedn converts Clojure vectors to Emacs vectors and sets to (edn-set ...)."
   (cond
    ((vectorp obj) (append obj nil))
+   ;; Handle edn-set: (edn-set (elem1 elem2 ...)) or (edn-set elem1 elem2 ...)
+   ((semantic-ns--edn-set-p obj)
+    (semantic-ns--unwrap-edn-set obj))
    ((listp obj) obj)
    (t (list obj))))
 
@@ -337,14 +356,38 @@ Returns nil on error with message to user."
                         'help-echo "Click: show info, d: jump to definition")))
 
 (defun semantic-ns--insert-aspect (aspect)
-  "Insert ASPECT with proper face and make it clickable."
-  (let ((aspect-str (if (symbolp aspect) (symbol-name aspect) aspect)))
-    (insert-text-button aspect-str
-                        'face 'semantic-ns-aspect-face
-                        'action (let ((a aspect-str))
-                                  (lambda (_) (semantic-ns-find-by-aspect a)))
-                        'follow-link t
-                        'help-echo "Click to find entities with this aspect")))
+  "Insert ASPECT with proper face and make it clickable.
+Handles edn-set objects by unwrapping and displaying as a set."
+  (cond
+   ;; Handle edn-set object - this means we got a whole set instead of a single aspect
+   ((semantic-ns--edn-set-p aspect)
+    (insert "#{")
+    (let ((first t)
+          (items (semantic-ns--unwrap-edn-set aspect)))
+      (dolist (item items)
+        (unless first (insert " "))
+        (setq first nil)
+        (semantic-ns--insert-aspect item)))  ; Recursive call for each item
+    (insert "}"))
+
+   ;; Regular aspect handling
+   (t
+    (let ((aspect-str
+           (cond
+            ;; If it's a symbol
+            ((symbolp aspect)
+             (symbol-name aspect))
+            ;; If it's a string
+            ((stringp aspect)
+             aspect)
+            ;; Otherwise convert to string
+            (t (format "%s" aspect)))))
+      (insert-text-button aspect-str
+                          'face 'semantic-ns-aspect-face
+                          'action (let ((a aspect-str))
+                                    (lambda (_) (semantic-ns-find-by-aspect a)))
+                          'follow-link t
+                          'help-echo "Click to find entities with this aspect")))))
 
 (defun semantic-ns--insert-data-key (key)
   "Insert data KEY with proper face and make it clickable."
@@ -361,6 +404,9 @@ Returns nil on error with message to user."
 Handles edn-set representations from parseedn or other set formats."
   (let ((set-items
          (cond
+          ;; If it's an edn-set object from parseedn
+          ((semantic-ns--edn-set-p set-obj)
+           (semantic-ns--unwrap-edn-set set-obj))
           ;; If it's a string representation like (edn-set :a :b :c)
           ((stringp set-obj)
            (if (string-prefix-p "(edn-set " set-obj)

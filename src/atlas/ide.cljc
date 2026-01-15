@@ -480,9 +480,10 @@
         results (query/semantic-similarity @cid/registry target-identity 0.0)]
     (->> results
          (map (fn [{:keys [identity similarity shared]}]
-                {:similarity/entity identity
-                 :similarity/score (double similarity)
-                 :similarity/shared-aspects (sorted-vec shared)}))
+                (let [dev-id-for-identity (get-in @cid/registry [identity :atlas/dev-id])]
+                  {:similarity/entity dev-id-for-identity
+                   :similarity/score (double similarity)
+                   :similarity/shared-aspects (sorted-vec shared)})))
          vec)))
 
 ;; =============================================================================
