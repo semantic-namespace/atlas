@@ -32,6 +32,7 @@ package-lock.json
 # Shadow-CLJS
 .shadow-cljs/
 resources/public/js/
+resources/public-v2/js/
 
 # Other
 /.clojure-mcp/
