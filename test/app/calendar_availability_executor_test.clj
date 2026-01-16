@@ -65,33 +65,41 @@
   (testing "Pipeline executes functions in dependency order"
     (let [execution-order (atom [])
 
-          ;; Create simple tracking implementations
-          make-tracking-impl (fn [dev-id output-key]
-                              (fn [ctx]
-                                (swap! execution-order conj dev-id)
-                                {output-key true}))
+          ;; Create tracking implementations that produce all required response keys
+          ;; Each impl must produce the keys declared in :execution-function/response
+          ;; so downstream context validation passes
+          make-tracking-impl (fn [dev-id response-keys]
+                               (fn [ctx]
+                                 (swap! execution-order conj dev-id)
+                                 (zipmap response-keys (repeat true))))
 
           impl-map {:fn/find-users-by-language
-                    (make-tracking-impl :fn/find-users-by-language :user/email)
+                    (make-tracking-impl :fn/find-users-by-language
+                                        [:user/email :user/gcal-refresh-token])
 
                     :fn/refresh-oauth-token
-                    (make-tracking-impl :fn/refresh-oauth-token :oauth/access-token)
+                    (make-tracking-impl :fn/refresh-oauth-token
+                                        [:oauth/access-token])
 
                     :fn/check-user-availability
-                    (make-tracking-impl :fn/check-user-availability :scheduling/available?)
+                    (make-tracking-impl :fn/check-user-availability
+                                        [:scheduling/available?])
 
                     :fn/collect-available-users
-                    (make-tracking-impl :fn/collect-available-users :availability/users)
+                    (make-tracking-impl :fn/collect-available-users
+                                        [:availability/users])
 
                     :endpoint/query-availability
-                    (make-tracking-impl :endpoint/query-availability :status)}
+                    (make-tracking-impl :endpoint/query-availability
+                                        [:availability/users])}
 
           pipeline (executor/build-pipeline :endpoint/query-availability impl-map)]
 
       (pipeline {:query/language "en" :query/date "2025-01-15"})
 
-      ;; Verify execution happened
-      (is (pos? (count @execution-order)))
+      ;; Verify all functions executed
+      (is (= 5 (count @execution-order))
+          (str "Expected 5 functions to execute, got: " @execution-order))
 
       ;; Verify :fn/find-users-by-language happens before functions that need its output
       (let [order-vec @execution-order
@@ -99,8 +107,10 @@
             refresh-token-idx (.indexOf order-vec :fn/refresh-oauth-token)]
         ;; find-users produces :user/gcal-refresh-token which refresh-token needs
         ;; So find-users should come before refresh-token
-        (when (and (>= find-users-idx 0) (>= refresh-token-idx 0))
-          (is (< find-users-idx refresh-token-idx)))))))
+        (is (>= find-users-idx 0) "find-users-by-language should execute")
+        (is (>= refresh-token-idx 0) "refresh-oauth-token should execute")
+        (is (< find-users-idx refresh-token-idx)
+            "find-users-by-language should execute before refresh-oauth-token")))))
 
 ;; =============================================================================
 ;; CONTEXT VALIDATION TESTS
