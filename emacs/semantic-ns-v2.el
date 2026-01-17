@@ -2178,6 +2178,216 @@ Writes to .clj-kondo/.cache/semantic-search-index.edn"
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
+;;; ==========================================================================
+;;; Explorer v2 - Dual Map with AND/OR filtering
+;;; ==========================================================================
+
+(defvar semantic-ns-explorer--aspects-and '()
+  "List of aspects in AND mode (must have ALL).")
+
+(defvar semantic-ns-explorer--aspects-or '()
+  "List of aspects in OR mode (must have ANY).")
+
+(defun semantic-ns-explorer--clear-selection ()
+  "Clear all aspect selections."
+  (interactive)
+  (setq semantic-ns-explorer--aspects-and '())
+  (setq semantic-ns-explorer--aspects-or '())
+  (message "Selection cleared"))
+
+(defun semantic-ns-explorer--aspects-by-namespace ()
+  "Get aspects grouped by namespace from the registry."
+  (let ((aspects (semantic-ns--get-aspects-with-counts)))
+    (when aspects
+      (let ((aspects-list (if (vectorp aspects) (append aspects nil) aspects))
+            (grouped (make-hash-table :test 'equal)))
+        (dolist (a aspects-list)
+          (let* ((aspect-kw (semantic-ns--to-string
+                             (or (semantic-ns--get a 'aspect/aspect)
+                                 (semantic-ns--get a 'aspect))))
+                 (count (or (semantic-ns--get a 'aspect/count)
+                            (semantic-ns--get a 'count) 0))
+                 (parts (split-string aspect-kw ":"))
+                 (ns-part (if (> (length parts) 1) (nth 1 parts) ""))
+                 (ns-parts (split-string ns-part "/"))
+                 (ns-name (car ns-parts))
+                 (aspect-name (cadr ns-parts)))
+            (when (and ns-name aspect-name)
+              (let ((existing (gethash ns-name grouped)))
+                (puthash ns-name
+                         (cons (list aspect-name count aspect-kw) existing)
+                         grouped)))))
+        grouped))))
+
+(defun semantic-ns-explorer--cycle-aspect (aspect-kw)
+  "Cycle ASPECT-KW through: not selected -> AND -> OR -> not selected."
+  (let ((in-and (member aspect-kw semantic-ns-explorer--aspects-and))
+        (in-or (member aspect-kw semantic-ns-explorer--aspects-or)))
+    (cond
+     ;; Not selected -> AND
+     ((and (not in-and) (not in-or))
+      (push aspect-kw semantic-ns-explorer--aspects-and)
+      (message "AND: %s" aspect-kw))
+     ;; AND -> OR
+     (in-and
+      (setq semantic-ns-explorer--aspects-and
+            (delete aspect-kw semantic-ns-explorer--aspects-and))
+      (push aspect-kw semantic-ns-explorer--aspects-or)
+      (message "OR: %s" aspect-kw))
+     ;; OR -> Not selected
+     (in-or
+      (setq semantic-ns-explorer--aspects-or
+            (delete aspect-kw semantic-ns-explorer--aspects-or))
+      (message "Deselected: %s" aspect-kw)))))
+
+(defun semantic-ns-explorer--matching-entities ()
+  "Get entities matching current AND/OR selection."
+  (when (or semantic-ns-explorer--aspects-and
+            semantic-ns-explorer--aspects-or)
+    (let* ((and-str (if semantic-ns-explorer--aspects-and
+                        (format "#{%s}"
+                                (mapconcat #'identity
+                                           semantic-ns-explorer--aspects-and " "))
+                      "#{}"))
+           (or-str (if semantic-ns-explorer--aspects-or
+                       (format "#{%s}"
+                               (mapconcat #'identity
+                                          semantic-ns-explorer--aspects-or " "))
+                     "#{}"))
+           (query (format "(explorer-filter-entities %s %s)" and-str or-str)))
+      (semantic-ns--eval-safe query []))))
+
+(defun semantic-ns-explorer-list-aspects ()
+  "Show aspects grouped by namespace with selection state, in columns."
+  (interactive)
+  (let* ((grouped (semantic-ns-explorer--aspects-by-namespace))
+         (buf (semantic-ns--buffer "explorer-aspects")))
+    (if (not grouped)
+        (message "No aspects found")
+      (with-current-buffer buf
+        (setq semantic-ns--last-command #'semantic-ns-explorer-list-aspects)
+        (semantic-ns--insert-header "Aspects by Namespace (click to toggle)")
+        (insert "\n")
+        (insert (propertize "  Legend: " 'face 'semantic-ns-subheader-face))
+        (insert (propertize "[A]" 'face '(:foreground "#4a9eff" :weight bold)))
+        (insert "=AND (must have ALL)  ")
+        (insert (propertize "[O]" 'face '(:foreground "#4aef7a" :weight bold)))
+        (insert "=OR (must have ANY)\n")
+        (when (or semantic-ns-explorer--aspects-and semantic-ns-explorer--aspects-or)
+          (insert "\n")
+          (when semantic-ns-explorer--aspects-and
+            (insert (propertize "  AND: " 'face '(:foreground "#4a9eff")))
+            (insert (format "%d selected  " (length semantic-ns-explorer--aspects-and))))
+          (when semantic-ns-explorer--aspects-or
+            (insert (propertize "  OR: " 'face '(:foreground "#4aef7a")))
+            (insert (format "%d selected" (length semantic-ns-explorer--aspects-or))))
+          (insert "\n"))
+        (insert "\n")
+        (maphash
+         (lambda (ns-name aspects)
+           (insert (propertize (format "  %s/ " ns-name)
+                               'face 'semantic-ns-subheader-face))
+           ;; Display aspects in columns (inline)
+           (let ((sorted-aspects (sort aspects (lambda (a b) (string< (car a) (car b))))))
+             (dolist (a sorted-aspects)
+               (let* ((aspect-name (nth 0 a))
+                      (aspect-kw (nth 2 a))
+                      (in-and (member aspect-kw semantic-ns-explorer--aspects-and))
+                      (in-or (member aspect-kw semantic-ns-explorer--aspects-or))
+                      (prefix (cond
+                               (in-and (propertize "[A]" 'face '(:foreground "#4a9eff" :weight bold)))
+                               (in-or (propertize "[O]" 'face '(:foreground "#4aef7a" :weight bold)))
+                               (t "   "))))
+                 (insert prefix)
+                 (insert-text-button
+                  aspect-name
+                  'action (lambda (_btn)
+                            (semantic-ns-explorer--cycle-aspect aspect-kw)
+                            (semantic-ns-explorer-list-aspects))
+                  'follow-link t
+                  'face (cond
+                         (in-and '(:foreground "#4a9eff" :weight bold))
+                         (in-or '(:foreground "#4aef7a" :weight bold))
+                         (t 'semantic-ns-aspect-face)))
+                 (insert "  "))))
+           (insert "\n"))
+         grouped)
+        (goto-char (point-min))
+        (read-only-mode 1))
+      (pop-to-buffer buf))))
+
+(defun semantic-ns-explorer-show-filtered ()
+  "Show entities matching current AND/OR selection."
+  (interactive)
+  (if (and (null semantic-ns-explorer--aspects-and)
+           (null semantic-ns-explorer--aspects-or))
+      (message "No aspects selected. Use 'a' to select aspects first.")
+    (let* ((entities (semantic-ns-explorer--matching-entities))
+           (buf (semantic-ns--buffer "explorer-entities")))
+      (with-current-buffer buf
+        (setq semantic-ns--last-command #'semantic-ns-explorer-show-filtered)
+        (semantic-ns--insert-header "Filtered Entities")
+        (insert "\n")
+        (when semantic-ns-explorer--aspects-and
+          (insert (propertize "  AND: " 'face '(:foreground "#4a9eff")))
+          (insert (format "%s\n" (mapconcat #'identity
+                                            semantic-ns-explorer--aspects-and ", "))))
+        (when semantic-ns-explorer--aspects-or
+          (insert (propertize "  OR: " 'face '(:foreground "#4aef7a")))
+          (insert (format "%s\n" (mapconcat #'identity
+                                            semantic-ns-explorer--aspects-or ", "))))
+        (insert "\n")
+        (let ((entities-list (semantic-ns--to-list entities)))
+          (if (and entities-list (> (length entities-list) 0))
+              (let ((by-type (make-hash-table :test 'equal)))
+                ;; Group by type
+                (dolist (e entities-list)
+                  (let* ((dev-id (semantic-ns--to-string
+                                  (or (semantic-ns--get e 'entity/dev-id)
+                                      (semantic-ns--get e 'dev-id)
+                                      e)))
+                         (etype (semantic-ns--to-string
+                                 (or (semantic-ns--get e 'entity/type)
+                                     (semantic-ns--get e 'type)
+                                     "unknown"))))
+                    (puthash etype (cons dev-id (gethash etype by-type)) by-type)))
+                ;; Display by type
+                (maphash
+                 (lambda (etype dev-ids)
+                   (insert (propertize (format "  %s (%d)\n" etype (length dev-ids))
+                                       'face 'semantic-ns-subheader-face))
+                   (dolist (dev-id (sort dev-ids #'string<))
+                     (insert "    ")
+                     (semantic-ns--insert-entity dev-id)
+                     (insert "\n"))
+                   (insert "\n"))
+                 by-type))
+            (insert "  (no matching entities)\n")))
+        (goto-char (point-min))
+        (read-only-mode 1))
+      (pop-to-buffer buf))))
+
+(defun semantic-ns-explorer-select-aspect ()
+  "Interactively select an aspect to toggle."
+  (interactive)
+  (let* ((aspect (semantic-ns--completing-read-aspect "Toggle aspect: "))
+         (aspect-kw (semantic-ns--to-keyword aspect)))
+    (semantic-ns-explorer--cycle-aspect aspect-kw)
+    (semantic-ns-explorer-show-filtered)))
+
+;;; Explorer Transient Menu
+(transient-define-prefix semantic-ns-explorer ()
+  "Atlas Explorer - Dual map with AND/OR filtering."
+  [["Selection"
+    ("a" "Browse aspects (toggle)" semantic-ns-explorer-list-aspects)
+    ("s" "Select aspect" semantic-ns-explorer-select-aspect)
+    ("c" "Clear selection" semantic-ns-explorer--clear-selection)]
+   ["Results"
+    ("f" "Show filtered entities" semantic-ns-explorer-show-filtered)
+    ("e" "Entity info" semantic-ns-entity-info)]
+   ["Navigation"
+    ("q" "Back to main menu" semantic-ns)]])
+
 ;;; Main Menu (Beginner/Daily Use)
 (transient-define-prefix semantic-ns ()
   "Atlas: Compound Identity Registry Explorer.
@@ -2186,7 +2396,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
   [["Browse"
     ("e" "List entities" semantic-ns-list-entities)
     ("a" "Find by aspect" semantic-ns-find-by-aspect)
-    ("A" "List aspects" semantic-ns-list-aspects)]
+    ("A" "List aspects" semantic-ns-list-aspects)
+    ("X" "Explorer (v2)" semantic-ns-explorer)]
    ["Entity Details"
     ("i" "Entity info" semantic-ns-entity-info)
     ("D" "Dependencies" semantic-ns-dependencies)

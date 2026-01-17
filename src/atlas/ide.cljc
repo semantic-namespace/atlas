@@ -779,6 +779,32 @@
       (:experiences grouped) (assoc :business/experiences (sorted-vec (:experiences grouped))))))
 
 ;; =============================================================================
+;; EXPLORER API (v2 dual-map filtering)
+;; =============================================================================
+
+(defn explorer-filter-entities
+  "Filter entities matching AND/OR aspect criteria.
+   - Entity matches if it has ALL aspects from aspects-and
+   - OR entity matches if it has ANY aspect from aspects-or
+   Returns vector of {:dev-id :type} maps."
+  [aspects-and aspects-or]
+  (let [registry @cid/registry]
+    (when (or (seq aspects-and) (seq aspects-or))
+      (->> registry
+           (filter (fn [[identity _props]]
+                     (let [matches-and? (and (seq aspects-and)
+                                             (every? #(contains? identity %) aspects-and))
+                           matches-or? (and (seq aspects-or)
+                                            (some #(contains? identity %) aspects-or))]
+                       (or matches-and? matches-or?))))
+           (map (fn [[identity props]]
+                  {:dev-id (:atlas/dev-id props)
+                   :type (to-string (:atlas/type props))}))
+           (filter :dev-id)
+           (sort-by :dev-id)
+           vec))))
+
+;; =============================================================================
 ;; LLM EXPORT API
 ;; =============================================================================
 
