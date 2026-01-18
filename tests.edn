@@ -2,7 +2,7 @@
 {:tests
  [{:id :unit
    :test-paths ["test"]
-   :source-paths ["src"]
+   :source-paths ["core/src"]
    :ns-patterns ["-test$"]}]
 
  :plugins

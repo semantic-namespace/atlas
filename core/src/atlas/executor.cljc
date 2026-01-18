@@ -47,7 +47,7 @@
     (cond-> impl-fn
       true (wrap-merge-response)
       true (wrap-validate-context dev-id)
-      (contains? id :integration/external) (wrap-timeout *timeout-ms*)
+      (contains? id :integration/external) (wrap-timeout *timeout-ms*) ;; instead of :integration/external :atlas/integration-external or :atlas/external ?
       *trace* (wrap-trace dev-id))))
 
 (defn execute

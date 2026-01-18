@@ -5,7 +5,8 @@
             [atlas.ontology :as ontology]
             [app.pet-shop :as pet-shop-app]
             [atlas.registry :as registry]
-            [atlas.atlas-ui.server :as ui]))
+;;            [atlas.atlas-ui.server :as ui] only on atlas-ui repl
+            ))
 
 
 

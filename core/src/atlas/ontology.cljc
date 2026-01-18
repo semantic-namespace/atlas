@@ -538,4 +538,4 @@
                     :experience-journey/delivers-value
                     :experience-journey/replaces]})
 
-  12)
+  )

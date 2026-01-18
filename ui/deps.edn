@@ -1,0 +1,35 @@
+{:paths ["src" "resources"]
+
+ :deps
+ {;; Atlas core library (local during dev, published for release)
+  io.github.semantic-namespace/atlas {:local/root "../core"}
+
+  ;; Server dependencies
+  ring/ring-core {:mvn/version "1.10.0"}
+  ring/ring-jetty-adapter {:mvn/version "1.10.0"}
+  ring/ring-devel {:mvn/version "1.10.0"}
+  compojure/compojure {:mvn/version "1.7.0"}}
+
+ :aliases
+ {;; REPL with dev namespace (for monorepo development)
+  :repl
+  {:extra-paths ["../dev/src" "../test" "../core/src"]
+   :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
+
+  ;; Run the UI server
+  :run
+  {:main-opts ["-m" "atlas.atlas-ui.main"]}
+
+  ;; Build for deployment
+  :build
+  {:deps {io.github.clojure/tools.build {:git/tag "v0.9.6" :git/sha "8e78bcc"}}
+   :ns-default build}
+
+  ;; Deploy to Clojars
+  :deploy
+  {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.0"}}
+   :exec-fn deps-deploy.deps-deploy/deploy
+   :exec-args {:installer :remote
+               :sign-releases? false
+               :pom-file "pom.xml"
+               :repository "clojars"}}}}

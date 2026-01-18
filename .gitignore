@@ -5,6 +5,8 @@ pom.xml
 pom.xml.asc
 *.jar
 *.class
+/core/pom.xml
+/ui/pom.xml
 
 # tools.deps / REPL
 /.cpcache/
@@ -31,8 +33,15 @@ package-lock.json
 
 # Shadow-CLJS
 .shadow-cljs/
-resources/public/js/
-resources/public-v2/js/
+ui/resources/public/js/
+ui/resources/public-v2/js/
 
 # Other
 /.clojure-mcp/
+
+/core/.cpcache/
+/ui/.cpcache/
+/core/target/
+/ui/target/
+/core/.nrepl-port
+/ui/.nrepl-port

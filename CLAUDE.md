@@ -59,13 +59,6 @@ clojure -M:repl
 (app/init-registry!)
 ```
 
-### Project Build
-```bash
-clojure -T:build jar      # Build JAR
-clojure -T:build install  # Install to local Maven
-clojure -X:deploy         # Deploy to Clojars (maintainers)
-```
-
 ### Visual Explorer (PoC)
 
 ```clojure
@@ -76,10 +69,30 @@ clojure -X:deploy         # Deploy to Clojars (maintainers)
 
 ## Code Architecture
 
-### Source Structure
+This is a **monorepo** with two libraries:
 
 ```
-src/atlas/
+atlas/
+├── deps.edn           # Root aggregator (dev/test aliases)
+├── core/              # atlas - production library
+│   ├── deps.edn
+│   ├── build.clj
+│   ├── build-and-deploy.sh
+│   └── src/atlas/
+├── ui/                # atlas-ui - dev tool (depends on core)
+│   ├── deps.edn
+│   ├── build.clj
+│   ├── build-and-deploy.sh
+│   ├── shadow-cljs.edn
+│   ├── package.json   # npm dependencies (React, shadow-cljs)
+│   └── src/
+└── test/              # Tests (run from root)
+```
+
+### Core Library Structure
+
+```
+core/src/atlas/
 ├── core.cljc          # Public API entry point
 ├── registry.cljc      # Semantic kernel, compound identity algebra
 ├── query.cljc         # Querying by aspects
@@ -87,8 +100,104 @@ src/atlas/
 ├── invariant.cljc     # Architectural validation
 ├── ontology.cljc      # Tools, templates, discovery
 ├── graph.cljc         # Graph algorithms
-├── datalog.cljc       # Datascript backend
-└── atlas_ui/          # Visual explorer (PoC)
+└── datalog.cljc       # Datascript backend
+```
+
+### UI Dev Tool Structure
+
+```
+ui/src/
+├── atlas/atlas_ui/    # Server-side (clj)
+├── atlas_ui/          # Client-side (cljs/cljc)
+└── atlas_ui_v2/       # V2 client
+```
+
+## Building & Publishing
+
+### Atlas Core (production library)
+
+```bash
+cd core
+
+# Quick: Use build script
+./build-and-deploy.sh              # Build JAR
+./build-and-deploy.sh --install    # Build and install to ~/.m2
+./build-and-deploy.sh --deploy     # Build and deploy to Clojars
+
+# Manual: Direct commands
+clojure -T:build jar         # => target/atlas-0.1.0-SNAPSHOT.jar
+clojure -T:build install     # Install to local Maven
+clojure -X:deploy            # Deploy to Clojars (uses ~/.lein/credentials.clj)
+```
+
+### Atlas UI (dev tool)
+
+**First time setup:**
+```bash
+cd ui
+npm install  # Install React, shadow-cljs, etc.
+```
+
+**Build:**
+```bash
+cd ui
+
+# Quick: Use build script (recommended)
+./build-and-deploy.sh              # Compile ClojureScript + build JAR
+./build-and-deploy.sh --install    # + install to ~/.m2
+./build-and-deploy.sh --deploy     # + deploy to Clojars
+./build-and-deploy.sh --jar-only   # Skip ClojureScript compilation (faster rebuilds)
+
+# Manual: Step by step
+npx shadow-cljs release atlas-ui       # Compile ClojureScript v1
+npx shadow-cljs release atlas-ui-v2    # Compile ClojureScript v2
+clojure -T:build jar                   # Build JAR
+clojure -T:build install               # Install to local Maven
+clojure -X:deploy                      # Deploy to Clojars
+```
+
+### Clojars Credentials
+
+The deployment scripts (`--deploy` flag) automatically use credentials from `~/.lein/credentials.clj`:
+
+```clojure
+{#"https://repo.clojars.org"
+ {:username "your-username"
+  :password "your-deploy-token"}}
+```
+
+Alternatively, set environment variables:
+
+```bash
+export CLOJARS_USERNAME="your-username"
+export CLOJARS_PASSWORD="your-deploy-token"
+```
+
+### Development Workflow
+
+```bash
+# From root - run tests
+clojure -M:test
+
+# From root - start dev REPL with everything
+clojure -M:dev
+
+# From ui/ - start shadow-cljs watch
+cd ui && npx shadow-cljs watch atlas-ui
+```
+
+### Dependency Between Libraries
+
+In `ui/deps.edn`, the core library is referenced via `:local/root` for development:
+
+```clojure
+{:deps {io.github.semantic-namespace/atlas {:local/root "../core"}}}
+```
+
+For release, change to a published version:
+
+```clojure
+{:deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.0"}}}
 ```
 
 ### Example Applications

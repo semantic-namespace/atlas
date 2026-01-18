@@ -3,7 +3,9 @@
   (:require [atlas.registry :as registry]
             [atlas.query :as query]
             [clojure.set :as set]))
+;; that is more related to ontology ???
 
+;; TODO this namespace is almost everything as API dev-id  except all-with-aspect
 (defn- fetch-by-dev-id
   "Find the [identity value] pair for a given dev-id.
    Delegates to atlas.query/find-by-dev-id."

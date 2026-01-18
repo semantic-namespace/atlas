@@ -1,52 +1,51 @@
-{:paths ["src" "resources"]
+{;; Root deps.edn - aggregates core and ui for development
+ ;; For production, use core/deps.edn directly
 
- :deps
- {org.clojure/clojure {:mvn/version "1.11.1"}
-  
-  com.taoensso/telemere {:mvn/version "1.2.1"}
-  com.cognitect/transit-clj {:mvn/version "1.0.333"}
-  org.clojure/data.json {:mvn/version "2.5.1"}
-  datascript/datascript {:mvn/version "1.6.5"}
-  ;; UI Server dependencies
-  ring/ring-core {:mvn/version "1.10.0"}
-  ring/ring-jetty-adapter {:mvn/version "1.10.0"}}
+ :paths []
 
  :aliases
- {;; Development alias - includes dev sources and tools
+ {;; Development: load everything
   :dev
-  {:extra-paths ["dev/src" "test"]
-   :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}
+  {:extra-paths ["core/src" "ui/src" "dev/src" "test"]
+   :extra-deps {org.clojure/clojure {:mvn/version "1.11.1"}
+                datascript/datascript {:mvn/version "1.6.5"}
+                org.clojure/data.json {:mvn/version "2.5.1"}
+                com.taoensso/telemere {:mvn/version "1.2.1"}
+                com.cognitect/transit-clj {:mvn/version "1.0.333"}
+                ;; UI server deps
+                ring/ring-core {:mvn/version "1.10.0"}
+                ring/ring-jetty-adapter {:mvn/version "1.10.0"}
                 ring/ring-devel {:mvn/version "1.10.0"}
-                compojure/compojure {:mvn/version "1.7.0"}}}
+                compojure/compojure {:mvn/version "1.7.0"}
+                ;; Dev tools
+                org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
 
-  ;; REPL with dev namespace pre-loaded
+  ;; REPL with dev namespace
   :repl
-  {:extra-paths ["dev/src" "test"]
-   :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}
+  {:extra-paths ["core/src" "ui/src" "dev/src" "test"]
+   :extra-deps {org.clojure/clojure {:mvn/version "1.11.1"}
+                datascript/datascript {:mvn/version "1.6.5"}
+                org.clojure/data.json {:mvn/version "2.5.1"}
+                com.taoensso/telemere {:mvn/version "1.2.1"}
+                com.cognitect/transit-clj {:mvn/version "1.0.333"}
+                ring/ring-core {:mvn/version "1.10.0"}
+                ring/ring-jetty-adapter {:mvn/version "1.10.0"}
                 ring/ring-devel {:mvn/version "1.10.0"}
-                compojure/compojure {:mvn/version "1.7.0"}}
-   :main-opts ["-e" "(require,'dev)" "-r"]}
+                compojure/compojure {:mvn/version "1.7.0"}
+                org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
 
-  ;; Test runner
+  ;; Test runner (core only)
   :test
-  {:extra-paths ["test"]
-   :extra-deps {lambdaisland/kaocha {:mvn/version "1.87.1366"}}
+  {:extra-paths ["core/src" "test"]
+   :extra-deps {org.clojure/clojure {:mvn/version "1.11.1"}
+                datascript/datascript {:mvn/version "1.6.5"}
+                org.clojure/data.json {:mvn/version "2.5.1"}
+                com.taoensso/telemere {:mvn/version "1.2.1"}
+                com.cognitect/transit-clj {:mvn/version "1.0.333"}
+                lambdaisland/kaocha {:mvn/version "1.87.1366"}}
    :main-opts ["-m" "kaocha.runner"]}
 
-  ;; Alternative: Simple test runner using clojure.test
-  :test-runner
-  {:extra-paths ["test"]
-   :main-opts ["-m" "clojure.test"]}
-
-  ;; Build for deployment
+  ;; Build core library
   :build
   {:deps {io.github.clojure/tools.build {:git/tag "v0.9.6" :git/sha "8e78bcc"}}
-   :ns-default build}
-
-  ;; Deploy to Clojars
-  :deploy
-  {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.0"}}
-   :exec-fn deps-deploy.deps-deploy/deploy
-   :exec-args {:installer :remote
-               :sign-releases? false
-               :repository "clojars"}}}}
+   :ns-default build}}}

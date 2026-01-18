@@ -294,7 +294,7 @@
 ;; =============================================================================
 ;; SEMANTIC BENEFITS DEMONSTRATION
 ;; =============================================================================
-
+;; is this really useful?
 (deftest test-semantic-registry-introspection
   (testing "Can query all test implementation entities"
     ;; Find all entities with :test/impl aspect
