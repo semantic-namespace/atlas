@@ -6,133 +6,41 @@
             [clojure.string :as str]))
 
 ;; =============================================================================
-;; REGISTRY DEFINITIONS - Definition keys per semantic-namespace type
+;; ONTOLOGY QUERIES - Query ontologies from registry
+;; =============================================================================
+
+(defn all-ontologies
+  "Return all registered ontologies from the registry."
+  []
+  (q/find-by-aspect @registry/registry :atlas/ontology))
+
+(defn ontology-for
+  "Return the ontology definition for a given entity type from the registry.
+   Returns nil if not found."
+  [entity-type]
+  (let [results (q/find-by-aspect @registry/registry #{:atlas/ontology entity-type})]
+    (when (seq results)
+      (val (first results)))))
+
+(defn ontology-keys-for
+  "Return the ontology keys for a given entity type from the registry."
+  [entity-type]
+  (:ontology/keys (ontology-for entity-type)))
+
+;; =============================================================================
+;; DEFINITION HELPERS - For backward compatibility
 ;; =============================================================================
 
 (def ^:private common-registry-keys
   [:atlas/dev-id])
 
-(def registry-definitions
-  [{:registry-definition/for :atlas/execution-function
-    :registry-definition/keys [:execution-function/context
-                               :execution-function/response
-                               :execution-function/deps]}
-   {:registry-definition/for :atlas/structure-component
-    :registry-definition/keys [:structure-component/deps
-                               :structure-component/consumes
-                               :structure-component/emits
-                               :structure-component/visual-purpose
-                               :structure-component/rendering-features
-                               :structure-component/provides]}
-
-   {:registry-definition/for :atlas/interface-endpoint
-    :registry-definition/keys [:interface-endpoint/context
-                               :interface-endpoint/response
-                               :interface-endpoint/deps]} ;; perhaps rename to service-functions
-   {:registry-definition/for :atlas/interface-protocol
-    :registry-definition/keys [:interface-protocol/functions]}
-
-   {:registry-definition/for :atlas/data-schema
-    :registry-definition/keys [:data-schema/fields]}
-
-   {:registry-definition/for :atlas/business-pattern
-    :registry-definition/keys [:business-pattern/principle
-                               :business-pattern/justification
-                               :business-pattern/experience-journey
-                               :business-pattern/failure-recovery
-                               :business-pattern/alternative-rejected
-                               :business-pattern/why-rejected
-                               :business-pattern/business-value
-                               :business-pattern/metrics-improved]}
-
-
-   {:registry-definition/for :atlas/governance-constraint
-    :registry-definition/keys [:governance-constraint/enforced-by
-                               :governance-constraint/rationale
-                               :governance-constraint/compliance-requirement
-                               :governance-constraint/violation-response
-                               :governance-constraint/user-sees
-                               :governance-constraint/business-impact
-                               :governance-constraint/google-oauth-scope
-                               :governance-constraint/user-benefit
-                               :governance-constraint/alternative-rejected
-                               :governance-constraint/why-rejected
-                               :governance-constraint/user-experiences
-                               :governance-constraint/recovery-path
-                               :governance-constraint/revocable
-                               :governance-constraint/revocation-path]}
-
-
-
-   
-   {:registry-definition/for :atlas/risk-failure-mode
-    :registry-definition/keys [:risk-failure-mode/triggered-by
-                               :risk-failure-mode/detection
-                               :risk-failure-mode/user-experiences
-                               :risk-failure-mode/recovery-path
-                               :risk-failure-mode/recovery-steps
-                               :risk-failure-mode/data-loss
-                               :risk-failure-mode/business-impact
-                               :risk-failure-mode/frequency
-                               :risk-failure-mode/preventable
-                               :risk-failure-mode/why-not-preventable
-                               :risk-failure-mode/prevention-strategy
-                               :risk-failure-mode/security-event
-                               :risk-failure-mode/logged
-                               :risk-failure-mode/log-details]}
-
-
-
-
-   {:registry-definition/for :atlas/value-proposition
-    :registry-definition/keys [:value-proposition/business-problem
-                               :value-proposition/before-state
-                               :value-proposition/after-state
-                               :value-proposition/time-saved
-                               :value-proposition/solution
-                               :value-proposition/metrics-improved
-                               :value-proposition/user-segment
-                               :value-proposition/business-value-quantified
-                               :value-proposition/business-value
-                               :value-proposition/competitive-advantage
-                               :value-proposition/implements-pattern
-                               :value-proposition/trust-factors
-                               :value-proposition/risk-mitigation
-                               :value-proposition/compliance-benefit]}
-
-
-
-   {:registry-definition/for :atlas/identity-role
-    :registry-definition/keys [:identity-role/description
-                               :identity-role/cannot-access
-                               :identity-role/responsibilities
-                               :identity-role/expectations
-                               :identity-role/data-access
-                               :identity-role/granted-by
-                               :identity-role/security-requirement
-                               :identity-role/audit-logged
-                               :identity-role/typical-users
-                               :identity-role/privacy-constraint]}
-
-
-   {:registry-definition/for :atlas/experience-journey
-    :registry-definition/keys [:experience-journey/user-journey
-                               :experience-journey/time-to-complete
-                               :experience-journey/friction-points
-                               :experience-journey/why-designed-this-way
-                               :experience-journey/user-sentiment
-                               :experience-journey/risk-failure-mode
-                               :experience-journey/recovery-time
-                               :experience-journey/delivers-value
-                               :experience-journey/replaces]}])
-
 (defn registry-definition-for
-  "Return registry definition for a semantic-namespace aspect."
+  "Return registry definition for a semantic-namespace aspect.
+   Queries from the registry (requires register-ontologies! to be called first)."
   [aspect]
-  (some (fn [definition]
-          (when (= aspect (:registry-definition/for definition))
-            definition))
-        registry-definitions))
+  (when-let [ont (ontology-for aspect)]
+    {:registry-definition/for (:ontology/for ont)
+     :registry-definition/keys (:ontology/keys ont)}))
 
 (defn- ordered-distinct
   [coll]
@@ -144,14 +52,14 @@
           coll))
 
 (defn definition-keys-for-identity
-  "Return ordered definition keys for a compound identity set."
+  "Return ordered definition keys for a compound identity set.
+   Queries from the registry (requires register-ontologies! to be called first)."
   [identity]
-  (let [definitions (filter (fn [definition]
-                              (contains? identity (:registry-definition/for definition)))
-                            registry-definitions)
+  (let [entity-types (filter #(= "atlas" (namespace %)) identity)
+        ontologies (keep ontology-for entity-types)
         keys (ordered-distinct (concat common-registry-keys
-                                       (mapcat :registry-definition/keys definitions)))]
-    (when (seq definitions)
+                                       (mapcat :ontology/keys ontologies)))]
+    (when (seq ontologies)
       (vec keys))))
 
 ;; =============================================================================
@@ -449,12 +357,185 @@
   "Register all entity types in the registry with :atlas/type.
 
   This makes entity types discoverable and enables runtime type validation.
-  Call this once during initialization."
+  Call this once during initialization, after register-ontologies!."
   []
-  (doseq [{:keys [registry-definition/for]} registry-definitions]
-    (registry/register!
-     for
-     :atlas/type
-     #{}
-     {:registry-definition/keys (definition-keys-for-identity #{for})}))
-  (count registry-definitions))
+  (let [ontologies (all-ontologies)]
+    (doseq [[_ ont] ontologies
+            :let [entity-type (:ontology/for ont)]]
+      (registry/register!
+       entity-type
+       :atlas/type
+       #{}
+       {:registry-definition/keys (vec (cons :atlas/dev-id (:ontology/keys ont)))}))
+    (count ontologies)))
+
+;; =============================================================================
+;; Ontology Registration - Ontologies as semantic entities
+;; =============================================================================
+
+(defn register-ontologies!
+  "Register all ontology definitions as semantic entities with :atlas/ontology.
+
+  Each ontology becomes queryable:
+    (q/find-by-aspect @registry :atlas/ontology)
+    (q/find-by-aspect @registry #{:atlas/ontology :atlas/structure-component})
+
+  Call this once during initialization, after register-entity-types!."
+  []
+  (registry/register!
+   :ontology/ontology
+   :atlas/ontology
+   #{:atlas/ontology}
+   {:ontology/for :atlas/ontology
+    :ontology/keys [:ontology/for :ontology/keys]})
+
+  (registry/register!
+   :ontology/execution-function
+   :atlas/ontology
+   #{:atlas/execution-function}
+   {:ontology/for :atlas/execution-function
+    :ontology/keys [:execution-function/context
+                    :execution-function/response
+                    :execution-function/deps]})
+
+  (registry/register!
+   :ontology/structure-component
+   :atlas/ontology
+   #{:atlas/structure-component}
+   {:ontology/for :atlas/structure-component
+    :ontology/keys [:structure-component/deps
+                    :structure-component/consumes
+                    :structure-component/emits
+                    :structure-component/visual-purpose
+                    :structure-component/rendering-features
+                    :structure-component/provides]})
+
+  (registry/register!
+   :ontology/interface-endpoint
+   :atlas/ontology
+   #{:atlas/interface-endpoint}
+   {:ontology/for :atlas/interface-endpoint
+    :ontology/keys [:interface-endpoint/context
+                    :interface-endpoint/response
+                    :interface-endpoint/deps]})
+
+  (registry/register!
+   :ontology/interface-protocol
+   :atlas/ontology
+   #{:atlas/interface-protocol}
+   {:ontology/for :atlas/interface-protocol
+    :ontology/keys [:interface-protocol/functions]})
+
+  (registry/register!
+   :ontology/data-schema
+   :atlas/ontology
+   #{:atlas/data-schema}
+   {:ontology/for :atlas/data-schema
+    :ontology/keys [:data-schema/fields]})
+
+  (registry/register!
+   :ontology/business-pattern
+   :atlas/ontology
+   #{:atlas/business-pattern}
+   {:ontology/for :atlas/business-pattern
+    :ontology/keys [:business-pattern/principle
+                    :business-pattern/justification
+                    :business-pattern/experience-journey
+                    :business-pattern/failure-recovery
+                    :business-pattern/alternative-rejected
+                    :business-pattern/why-rejected
+                    :business-pattern/business-value
+                    :business-pattern/metrics-improved]})
+
+  (registry/register!
+   :ontology/governance-constraint
+   :atlas/ontology
+   #{:atlas/governance-constraint}
+   {:ontology/for :atlas/governance-constraint
+    :ontology/keys [:governance-constraint/enforced-by
+                    :governance-constraint/rationale
+                    :governance-constraint/compliance-requirement
+                    :governance-constraint/violation-response
+                    :governance-constraint/user-sees
+                    :governance-constraint/business-impact
+                    :governance-constraint/google-oauth-scope
+                    :governance-constraint/user-benefit
+                    :governance-constraint/alternative-rejected
+                    :governance-constraint/why-rejected
+                    :governance-constraint/user-experiences
+                    :governance-constraint/recovery-path
+                    :governance-constraint/revocable
+                    :governance-constraint/revocation-path]})
+
+  (registry/register!
+   :ontology/risk-failure-mode
+   :atlas/ontology
+   #{:atlas/risk-failure-mode}
+   {:ontology/for :atlas/risk-failure-mode
+    :ontology/keys [:risk-failure-mode/triggered-by
+                    :risk-failure-mode/detection
+                    :risk-failure-mode/user-experiences
+                    :risk-failure-mode/recovery-path
+                    :risk-failure-mode/recovery-steps
+                    :risk-failure-mode/data-loss
+                    :risk-failure-mode/business-impact
+                    :risk-failure-mode/frequency
+                    :risk-failure-mode/preventable
+                    :risk-failure-mode/why-not-preventable
+                    :risk-failure-mode/prevention-strategy
+                    :risk-failure-mode/security-event
+                    :risk-failure-mode/logged
+                    :risk-failure-mode/log-details]})
+
+  (registry/register!
+   :ontology/value-proposition
+   :atlas/ontology
+   #{:atlas/value-proposition}
+   {:ontology/for :atlas/value-proposition
+    :ontology/keys [:value-proposition/business-problem
+                    :value-proposition/before-state
+                    :value-proposition/after-state
+                    :value-proposition/time-saved
+                    :value-proposition/solution
+                    :value-proposition/metrics-improved
+                    :value-proposition/user-segment
+                    :value-proposition/business-value-quantified
+                    :value-proposition/business-value
+                    :value-proposition/competitive-advantage
+                    :value-proposition/implements-pattern
+                    :value-proposition/trust-factors
+                    :value-proposition/risk-mitigation
+                    :value-proposition/compliance-benefit]})
+
+  (registry/register!
+   :ontology/identity-role
+   :atlas/ontology
+   #{:atlas/identity-role}
+   {:ontology/for :atlas/identity-role
+    :ontology/keys [:identity-role/description
+                    :identity-role/cannot-access
+                    :identity-role/responsibilities
+                    :identity-role/expectations
+                    :identity-role/data-access
+                    :identity-role/granted-by
+                    :identity-role/security-requirement
+                    :identity-role/audit-logged
+                    :identity-role/typical-users
+                    :identity-role/privacy-constraint]})
+
+  (registry/register!
+   :ontology/experience-journey
+   :atlas/ontology
+   #{:atlas/experience-journey}
+   {:ontology/for :atlas/experience-journey
+    :ontology/keys [:experience-journey/user-journey
+                    :experience-journey/time-to-complete
+                    :experience-journey/friction-points
+                    :experience-journey/why-designed-this-way
+                    :experience-journey/user-sentiment
+                    :experience-journey/risk-failure-mode
+                    :experience-journey/recovery-time
+                    :experience-journey/delivers-value
+                    :experience-journey/replaces]})
+
+  12)
