@@ -138,14 +138,15 @@
 ;; These functions query ontologies for :dataflow/* keys to find context,
 ;; response, and deps properties for entities.
 
-;; Default dataflow keys for built-in ontologies.
-;; These are always included and merged with ontology-defined keys.
-;; For execution-function keys, load the EF ontology via (ef/load!).
-;; For structure-component keys, load the SC ontology via (sc/load!).
+;; Default dataflow keys - empty by default.
+;; All dataflow keys come from ontology modules:
+;; - (ef/load!) for execution-function
+;; - (sc/load!) for structure-component
+;; - (ie/load!) for interface-endpoint
 (def ^:private default-dataflow-keys
-  {:dataflow/context-key [:interface-endpoint/context]
-   :dataflow/response-key [:interface-endpoint/response]
-   :dataflow/deps-key [:interface-endpoint/deps]})
+  {:dataflow/context-key []
+   :dataflow/response-key []
+   :dataflow/deps-key []})
 
 (defn- dataflow-keys
   "Find all dataflow keys of given type from registered ontologies.
@@ -473,17 +474,10 @@
     ;; NOTE: :atlas/structure-component is now loaded via
     ;; (require '[atlas.ontology.structure-component :as sc]) (sc/load!)
     ;; This allows structure-component to be truly optional.
-    :atlas/interface-endpoint  (registry/register!
-                                   :atlas/interface-endpoint
-                                   :atlas/ontology
-                                   #{:atlas/interface-endpoint}
-                                   {:ontology/for :atlas/interface-endpoint
-                                    :ontology/keys [:interface-endpoint/context
-                                                    :interface-endpoint/response
-                                                    :interface-endpoint/deps]
-                                    :dataflow/context-key :interface-endpoint/context
-                                    :dataflow/response-key :interface-endpoint/response
-                                    :dataflow/deps-key :interface-endpoint/deps})
+
+    ;; NOTE: :atlas/interface-endpoint is now loaded via
+    ;; (require '[atlas.ontology.interface-endpoint :as ie]) (ie/load!)
+    ;; This allows interface-endpoint to be truly optional.
 
     :atlas/interface-protocol  (registry/register!
                                    :atlas/interface-protocol

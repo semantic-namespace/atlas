@@ -18,6 +18,7 @@
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
+   [atlas.ontology.interface-endpoint :as ie]
    [atlas.ontology.execution-function.executor :as exec]
    [atlas.invariant.unified :as ax]
    [app.calendar-availability-invariants :as dsl-invariants]
@@ -227,8 +228,10 @@
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
     (sc/reset-loaded-state!)
+    (ie/reset-loaded-state!)
     (ef/load!)
     (sc/load!)
+    (ie/load!)
     (init-test-registry!)
     (f)))
 

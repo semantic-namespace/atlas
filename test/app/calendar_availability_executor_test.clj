@@ -19,6 +19,7 @@
    [atlas.graph :as graph]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
+   [atlas.ontology.interface-endpoint :as ie]
    [atlas.ontology.execution-function.executor :as executor]
    [app.calendar-availability :as app]))
 
@@ -31,8 +32,10 @@
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
     (sc/reset-loaded-state!)
+    (ie/reset-loaded-state!)
     (ef/load!)
     (sc/load!)
+    (ie/load!)
     (app/init-registry!)
     (f)))
 

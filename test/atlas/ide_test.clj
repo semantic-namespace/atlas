@@ -8,6 +8,7 @@
             [atlas.ontology :as ot]
             [atlas.ontology.execution-function :as ef]
             [atlas.ontology.structure-component :as sc]
+            [atlas.ontology.interface-endpoint :as ie]
             [atlas.ide :as ide]))
 
 ;; ---------------------------------------------------------------------------
@@ -19,8 +20,10 @@
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
     (sc/reset-loaded-state!)
+    (ie/reset-loaded-state!)
     (ef/load!)
     (sc/load!)
+    (ie/load!)
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     (f)
@@ -148,7 +151,7 @@
   (let [entities (ide/list-all-entities)
         aspects (ide/list-aspects)
         ;; Filter out ontology definitions from entity list for deterministic comparison
-        ontology-dev-ids #{:atlas/execution-function :atlas/structure-component}
+        ontology-dev-ids #{:atlas/execution-function :atlas/structure-component :atlas/interface-endpoint}
         non-ontology-entities (remove #(ontology-dev-ids (:entity/dev-id %)) entities)
         ;; Filter out ontology aspect from aspects list
         non-ontology-aspects (remove #(= :atlas/ontology (:aspect/aspect %)) aspects)]

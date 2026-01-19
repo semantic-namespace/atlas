@@ -129,17 +129,11 @@
 ;; TIER AXIOMS (unchanged)
 ;; =============================================================================
 
-(defn invariant-endpoints-are-api-tier
-  "Endpoints should be :tier/api."
-  []
-  (let [endpoints (rt/all-with-aspect :atlas/interface-endpoint)
-        violations (remove #(rt/has-aspect? % :tier/api) endpoints)]
-    (when (seq violations)
-      {:invariant :endpoints-are-api-tier
-       :violation :wrong-tier
-       :endpoints violations
-       :severity :error
-       :message (str "Endpoints should be :tier/api: " violations)})))
+;; NOTE: invariant-endpoints-are-api-tier has been moved to
+;; atlas.ontology.interface-endpoint namespace.
+;; It is registered automatically when the IE ontology is loaded:
+;;   (require '[atlas.ontology.interface-endpoint :as ie])
+;;   (ie/load!)
 
 ;; =============================================================================
 ;; SEMANTIC CONSISTENCY AXIOMS
@@ -194,8 +188,6 @@
   [;; Structural
    invariant-deps-exist
    invariant-no-circular-deps
-   ;; Tier
-   invariant-endpoints-are-api-tier
    ;; Dataflow
    invariant-context-satisfiable
    invariant-no-orphan-responses        ; ← uses fixed version

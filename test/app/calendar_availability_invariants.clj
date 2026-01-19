@@ -96,7 +96,9 @@
    :calendar/endpoints-api
    :error
    "Endpoints must be API tier"
-   {:op :dsl.op/entity-has-aspect :args :atlas/interface-endpoint}
+   {:op :dsl.op/logic-and
+    :args [{:op :dsl.op/entity-has-aspect :args :atlas/interface-endpoint}
+           {:op :dsl.op/entity-lacks-aspect :args :atlas/ontology}]}
    {:op :dsl.op/entity-has-aspect :args :tier/api}))
 
 (def functions-are-service

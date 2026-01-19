@@ -19,6 +19,7 @@
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
+   [atlas.ontology.interface-endpoint :as ie]
    [atlas.ontology.execution-function.executor :as exec]
    [atlas.ide :as ide]))
 
@@ -98,7 +99,7 @@
     (f)))
 
 (defn make-fixture-with-ontologies
-  "Creates a test fixture that loads execution-function and structure-component ontologies.
+  "Creates a test fixture that loads all core ontologies.
 
   Use this for tests that use ontology features like
   context-for, response-for, deps-for, or the executor.
@@ -113,8 +114,10 @@
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
     (sc/reset-loaded-state!)
+    (ie/reset-loaded-state!)
     (ef/load!)
     (sc/load!)
+    (ie/load!)
     (init-fn)
     (f)))
 
@@ -140,8 +143,8 @@
     (f)))
 
 (defn make-fixture-with-ontologies-and-reset
-  "Creates a test fixture that loads execution-function and structure-component
-  ontologies and runs a custom reset function.
+  "Creates a test fixture that loads all core ontologies
+  and runs a custom reset function.
 
   Example:
     (use-fixtures :each
@@ -153,8 +156,10 @@
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
     (sc/reset-loaded-state!)
+    (ie/reset-loaded-state!)
     (ef/load!)
     (sc/load!)
+    (ie/load!)
     (init-fn)
     (reset-fn)
     (f)))
