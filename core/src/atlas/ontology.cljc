@@ -459,143 +459,30 @@
    {:ontology/for :atlas/ontology
     :ontology/keys [:ontology/for :ontology/keys]})
 
-(defn load-ontology
-  "Load a built-in ontology by type.
-
-   For :atlas/execution-function, use atlas.ontology.execution-function/load! instead.
-   This provides a cleaner separation and allows the EF ontology to be truly optional."
-  [ontology-type]
-
-  (condp = ontology-type
-    ;; NOTE: :atlas/execution-function is now loaded via
-    ;; (require '[atlas.ontology.execution-function :as ef]) (ef/load!)
-    ;; This allows execution-function to be truly optional.
-
-    ;; NOTE: :atlas/structure-component is now loaded via
-    ;; (require '[atlas.ontology.structure-component :as sc]) (sc/load!)
-    ;; This allows structure-component to be truly optional.
-
-    ;; NOTE: :atlas/interface-endpoint is now loaded via
-    ;; (require '[atlas.ontology.interface-endpoint :as ie]) (ie/load!)
-    ;; This allows interface-endpoint to be truly optional.
-
-    :atlas/interface-protocol  (registry/register!
-                                   :atlas/interface-protocol
-                                   :atlas/ontology
-                                   #{:atlas/interface-protocol}
-                                   {:ontology/for :atlas/interface-protocol
-                                    :ontology/keys [:interface-protocol/functions]})
-
-    :atlas/data-schema  (registry/register!
-                            :atlas/data-schema
-                            :atlas/ontology
-                            #{:atlas/data-schema}
-                            {:ontology/for :atlas/data-schema
-                             :ontology/keys [:data-schema/fields]})
-
-    :atlas/business-pattern  (registry/register!
-                                 :atlas/business-pattern
-                                 :atlas/ontology
-                                 #{:atlas/business-pattern}
-                                 {:ontology/for :atlas/business-pattern
-                                  :ontology/keys [:business-pattern/principle
-                                                  :business-pattern/justification
-                                                  :business-pattern/experience-journey
-                                                  :business-pattern/failure-recovery
-                                                  :business-pattern/alternative-rejected
-                                                  :business-pattern/why-rejected
-                                                  :business-pattern/business-value
-                                                  :business-pattern/metrics-improved]})
-
-    :atlas/governance-constraint  (registry/register!
-                                      :atlas/governance-constraint
-                                      :atlas/ontology
-                                      #{:atlas/governance-constraint}
-                                      {:ontology/for :atlas/governance-constraint
-                                       :ontology/keys [:governance-constraint/enforced-by
-                                                       :governance-constraint/rationale
-                                                       :governance-constraint/compliance-requirement
-                                                       :governance-constraint/violation-response
-                                                       :governance-constraint/user-sees
-                                                       :governance-constraint/business-impact
-                                                       :governance-constraint/google-oauth-scope
-                                                       :governance-constraint/user-benefit
-                                                       :governance-constraint/alternative-rejected
-                                                       :governance-constraint/why-rejected
-                                                       :governance-constraint/user-experiences
-                                                       :governance-constraint/recovery-path
-                                                       :governance-constraint/revocable
-                                                       :governance-constraint/revocation-path]})
-
-    :atlas/risk-failure-mode  (registry/register!
-                                  :atlas/risk-failure-mode
-                                  :atlas/ontology
-                                  #{:atlas/risk-failure-mode}
-                                  {:ontology/for :atlas/risk-failure-mode
-                                   :ontology/keys [:risk-failure-mode/triggered-by
-                                                   :risk-failure-mode/detection
-                                                   :risk-failure-mode/user-experiences
-                                                   :risk-failure-mode/recovery-path
-                                                   :risk-failure-mode/recovery-steps
-                                                   :risk-failure-mode/data-loss
-                                                   :risk-failure-mode/business-impact
-                                                   :risk-failure-mode/frequency
-                                                   :risk-failure-mode/preventable
-                                                   :risk-failure-mode/why-not-preventable
-                                                   :risk-failure-mode/prevention-strategy
-                                                   :risk-failure-mode/security-event
-                                                   :risk-failure-mode/logged
-                                                   :risk-failure-mode/log-details]})
-
-    :atlas/value-proposition  (registry/register!
-                                  :atlas/value-proposition
-                                  :atlas/ontology
-                                  #{:atlas/value-proposition}
-                                  {:ontology/for :atlas/value-proposition
-                                   :ontology/keys [:value-proposition/business-problem
-                                                   :value-proposition/before-state
-                                                   :value-proposition/after-state
-                                                   :value-proposition/time-saved
-                                                   :value-proposition/solution
-                                                   :value-proposition/metrics-improved
-                                                   :value-proposition/user-segment
-                                                   :value-proposition/business-value-quantified
-                                                   :value-proposition/business-value
-                                                   :value-proposition/competitive-advantage
-                                                   :value-proposition/implements-pattern
-                                                   :value-proposition/trust-factors
-                                                   :value-proposition/risk-mitigation
-                                                   :value-proposition/compliance-benefit]})
-
-    :atlas/identity-role  (registry/register!
-                              :atlas/identity-role
-                              :atlas/ontology
-                              #{:atlas/identity-role}
-                              {:ontology/for :atlas/identity-role
-                               :ontology/keys [:identity-role/description
-                                               :identity-role/cannot-access
-                                               :identity-role/responsibilities
-                                               :identity-role/expectations
-                                               :identity-role/data-access
-                                               :identity-role/granted-by
-                                               :identity-role/security-requirement
-                                               :identity-role/audit-logged
-                                               :identity-role/typical-users
-                                               :identity-role/privacy-constraint]})
-
-    :atlas/experience-journey  (registry/register!
-                                   :atlas/experience-journey
-                                   :atlas/ontology
-                                   #{:atlas/experience-journey}
-                                   {:ontology/for :atlas/experience-journey
-                                    :ontology/keys [:experience-journey/user-journey
-                                                    :experience-journey/time-to-complete
-                                                    :experience-journey/friction-points
-                                                    :experience-journey/why-designed-this-way
-                                                    :experience-journey/user-sentiment
-                                                    :experience-journey/risk-failure-mode
-                                                    :experience-journey/recovery-time
-                                                    :experience-journey/delivers-value
-                                                    :experience-journey/replaces]})))
+;; =============================================================================
+;; ONTOLOGY MODULES
+;; =============================================================================
+;;
+;; All ontologies have been moved to their own namespaces under atlas.ontology.*
+;; Each ontology can be loaded independently via (ontology/load!).
+;;
+;; Core ontologies (with invariants):
+;;   atlas.ontology.execution-function  - execution functions with context/response/deps
+;;   atlas.ontology.structure-component - infrastructure components
+;;   atlas.ontology.interface-endpoint  - API endpoints
+;;
+;; Supporting ontologies:
+;;   atlas.ontology.interface-protocol  - protocol definitions
+;;   atlas.ontology.data-schema         - data structure schemas
+;;   atlas.ontology.business-pattern    - business patterns
+;;   atlas.ontology.governance-constraint - governance rules
+;;   atlas.ontology.risk-failure-mode   - failure mode analysis
+;;   atlas.ontology.value-proposition   - value propositions
+;;   atlas.ontology.identity-role       - user roles
+;;   atlas.ontology.experience-journey  - user journeys
+;;
+;; Example usage:
+;;   (require '[atlas.ontology.execution-function :as ef])
+;;   (ef/load!)
 
 
