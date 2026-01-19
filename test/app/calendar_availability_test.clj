@@ -17,6 +17,7 @@
    [atlas.registry.lookup :as rt]
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.structure-component :as sc]
    [atlas.ontology.execution-function.executor :as exec]
    [atlas.invariant.unified :as ax]
    [app.calendar-availability-invariants :as dsl-invariants]
@@ -224,8 +225,10 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
-    (ef/reset-loaded-state!)  ; Reset EF module state for clean load
-    (ef/load!)  ; Load execution-function ontology
+    (ef/reset-loaded-state!)
+    (sc/reset-loaded-state!)
+    (ef/load!)
+    (sc/load!)
     (init-test-registry!)
     (f)))
 

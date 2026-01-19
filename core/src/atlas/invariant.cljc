@@ -3,7 +3,6 @@
   (:require [atlas.registry :as cid]
             [atlas.registry.lookup :as rt]
             [atlas.graph :as graph]
-            [atlas.invariant.component :as component]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -118,10 +117,13 @@
 (def invariant-all-fns-reachable graph/invariant-all-fns-reachable)
 (def graph-invariants graph/graph-invariants)
 
-(def invariant-components-are-foundation component/invariant-components-are-foundation)
-(def invariant-protocol-exists component/invariant-protocol-exists)
-(def invariant-protocol-conformance component/invariant-protocol-conformance)
-(def component-invariants component/component-invariants)
+;; NOTE: Component invariants have been moved to atlas.ontology.structure-component:
+;;   - invariant-components-are-foundation
+;;   - invariant-protocol-exists
+;;   - invariant-protocol-conformance
+;; They are registered automatically when the SC ontology is loaded:
+;;   (require '[atlas.ontology.structure-component :as sc])
+;;   (sc/load!)
 
 ;; =============================================================================
 ;; TIER AXIOMS (unchanged)
@@ -193,16 +195,12 @@
    invariant-deps-exist
    invariant-no-circular-deps
    ;; Tier
-   invariant-components-are-foundation
    invariant-endpoints-are-api-tier
    ;; Dataflow
    invariant-context-satisfiable
    invariant-no-orphan-responses        ; ← uses fixed version
    ;; Reachability
-   invariant-all-fns-reachable
-   ;; Protocol conformance
-   invariant-protocol-exists
-   invariant-protocol-conformance])
+   invariant-all-fns-reachable])
 
 (defn all-invariants
   "All invariants including core and ontology-contributed invariants."

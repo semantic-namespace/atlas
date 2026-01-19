@@ -7,6 +7,7 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ot]
             [atlas.ontology.execution-function :as ef]
+            [atlas.ontology.structure-component :as sc]
             [atlas.ide :as ide]))
 
 ;; ---------------------------------------------------------------------------
@@ -17,7 +18,9 @@
   (fn [f]
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
-    (ef/load!)  ; Load execution-function ontology for tests
+    (sc/reset-loaded-state!)
+    (ef/load!)
+    (sc/load!)
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     (f)
@@ -144,8 +147,9 @@
   (seed-registry!)
   (let [entities (ide/list-all-entities)
         aspects (ide/list-aspects)
-        ;; Filter out ontology definition from entity list for deterministic comparison
-        non-ontology-entities (remove #(= :atlas/execution-function (:entity/dev-id %)) entities)
+        ;; Filter out ontology definitions from entity list for deterministic comparison
+        ontology-dev-ids #{:atlas/execution-function :atlas/structure-component}
+        non-ontology-entities (remove #(ontology-dev-ids (:entity/dev-id %)) entities)
         ;; Filter out ontology aspect from aspects list
         non-ontology-aspects (remove #(= :atlas/ontology (:aspect/aspect %)) aspects)]
     (is (= [:component/audit :component/cache :component/storage :endpoint/order :fn/alpha :fn/beta :fn/gamma :fn/http-handler :fn/profile]
@@ -289,9 +293,10 @@
 (deftest validation-and-docs-apis-are-namespaced
   (seed-registry!)
 
+  ;; Filter out ontology entity from structure-component query
   (is (= [:component/audit :component/cache :component/storage]
-         (ide/entities-with-aspect :atlas/structure-component))
-      "entities-with-aspect returns sorted vector")
+         (vec (remove #{:atlas/structure-component} (ide/entities-with-aspect :atlas/structure-component))))
+      "entities-with-aspect returns sorted vector (excluding ontology)")
 
   (let [result (with-redefs [atlas.invariant/check-all
                              (fn [] {:valid? true :errors [] :warnings []})]

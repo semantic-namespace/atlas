@@ -8,7 +8,9 @@
   - Test fixtures for registry management
   - Runtime integration (invariants, executor, ide queries)
 
-  NOTE: Tests using executor functions must call (ef/load!) before use."
+  NOTE: Tests using ontology features must load the appropriate ontologies:
+  - (ef/load!) for execution-function
+  - (sc/load!) for structure-component"
   (:require
    [atlas.registry :as cid]
    [atlas.registry.lookup :as rt]
@@ -16,6 +18,7 @@
    [atlas.invariant :as ax]
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.structure-component :as sc]
    [atlas.ontology.execution-function.executor :as exec]
    [atlas.ide :as ide]))
 
@@ -94,24 +97,29 @@
     (init-fn)
     (f)))
 
-(defn make-fixture-with-ef
-  "Creates a test fixture that loads the execution-function ontology.
+(defn make-fixture-with-ontologies
+  "Creates a test fixture that loads execution-function and structure-component ontologies.
 
-  Use this for tests that use execution-function features like
+  Use this for tests that use ontology features like
   context-for, response-for, deps-for, or the executor.
 
   Takes an init-fn that will be called to populate the registry.
   Returns a fixture function suitable for use with clojure.test/use-fixtures.
 
   Example:
-    (use-fixtures :each (make-fixture-with-ef sut/init-registry!))"
+    (use-fixtures :each (make-fixture-with-ontologies sut/init-registry!))"
   [init-fn]
   (fn [f]
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
+    (sc/reset-loaded-state!)
     (ef/load!)
+    (sc/load!)
     (init-fn)
     (f)))
+
+;; Alias for backwards compatibility
+(def make-fixture-with-ef make-fixture-with-ontologies)
 
 (defn make-fixture-with-reset
   "Creates a test fixture with custom reset function.
@@ -131,23 +139,28 @@
     (reset-fn)
     (f)))
 
-(defn make-fixture-with-ef-and-reset
-  "Creates a test fixture that loads the execution-function ontology
-  and runs a custom reset function.
+(defn make-fixture-with-ontologies-and-reset
+  "Creates a test fixture that loads execution-function and structure-component
+  ontologies and runs a custom reset function.
 
   Example:
     (use-fixtures :each
-      (make-fixture-with-ef-and-reset
+      (make-fixture-with-ontologies-and-reset
         sut/init-registry!
         reset-mock-sessions!))"
   [init-fn reset-fn]
   (fn [f]
     (reset! cid/registry {})
     (ef/reset-loaded-state!)
+    (sc/reset-loaded-state!)
     (ef/load!)
+    (sc/load!)
     (init-fn)
     (reset-fn)
     (f)))
+
+;; Alias for backwards compatibility
+(def make-fixture-with-ef-and-reset make-fixture-with-ontologies-and-reset)
 
 ;; =============================================================================
 ;; COMMON TEST HELPERS

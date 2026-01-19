@@ -166,7 +166,9 @@
    :cart/components-foundation
    :error
    "Components must be foundation tier"
-   {:op :dsl.op/entity-has-aspect :args :atlas/structure-component}
+   {:op :dsl.op/logic-and
+    :args [{:op :dsl.op/entity-has-aspect :args :atlas/structure-component}
+           {:op :dsl.op/entity-lacks-aspect :args :atlas/ontology}]}
    {:op :dsl.op/entity-has-aspect :args :tier/foundation}))
 
 (def endpoints-are-api

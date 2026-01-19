@@ -141,10 +141,11 @@
 ;; Default dataflow keys for built-in ontologies.
 ;; These are always included and merged with ontology-defined keys.
 ;; For execution-function keys, load the EF ontology via (ef/load!).
+;; For structure-component keys, load the SC ontology via (sc/load!).
 (def ^:private default-dataflow-keys
   {:dataflow/context-key [:interface-endpoint/context]
    :dataflow/response-key [:interface-endpoint/response]
-   :dataflow/deps-key [:interface-endpoint/deps :structure-component/deps]})
+   :dataflow/deps-key [:interface-endpoint/deps]})
 
 (defn- dataflow-keys
   "Find all dataflow keys of given type from registered ontologies.
@@ -302,26 +303,18 @@
 ;; TEMPLATE TOOLS - Reducing boilerplate
 ;; =============================================================================
 
-(defn template:foundation-component
-  "Template for foundation-tier components"
-  [domain & {:keys [external? async? traced?]
-             :or {external? false async? false traced? false}}]
-  (cond-> #{:atlas/structure-component
-            :semantic/docs
-            :tier/foundation
-            :effect/read}
-    domain (conj domain)
-    external? (conj :integration/external)
-    (not external?) (conj :integration/internal)
-    async? (conj :temporal/async :temporal/timeout-configured)
-    traced? (conj :observability/traced)
-    (not traced?) (conj :observability/metered)))
-
-;; NOTE: template:service-function and template:api-endpoint have been moved to
-;; atlas.ontology.execution-function namespace as part of the modular ontology refactor.
-;; Use: (require '[atlas.ontology.execution-function :as ef])
-;;      (ef/template:service-function :domain/x :operation/y)
-;;      (ef/template:api-endpoint :domain/x :operation/y)
+;; NOTE: Templates have been moved to their respective ontology modules:
+;;
+;; For execution-function templates:
+;;   (require '[atlas.ontology.execution-function :as ef])
+;;   (ef/load!)
+;;   (ef/template:service-function :domain/x :operation/y)
+;;   (ef/template:api-endpoint :domain/x :operation/y)
+;;
+;; For structure-component templates:
+;;   (require '[atlas.ontology.structure-component :as sc])
+;;   (sc/load!)
+;;   (sc/template:foundation-component :domain/x :external? true)
 
 ;; =============================================================================
 ;; REFACTORING TOOLS - Safe evolution
@@ -477,18 +470,9 @@
     ;; (require '[atlas.ontology.execution-function :as ef]) (ef/load!)
     ;; This allows execution-function to be truly optional.
 
-    :atlas/structure-component (registry/register!
-                                :atlas/structure-component
-                                :atlas/ontology
-                                #{:atlas/structure-component}
-                                {:ontology/for :atlas/structure-component
-                                 :ontology/keys [:structure-component/deps
-                                                 :structure-component/consumes
-                                                 :structure-component/emits
-                                                 :structure-component/visual-purpose
-                                                 :structure-component/rendering-features
-                                                 :structure-component/provides]
-                                 :dataflow/deps-key :structure-component/deps})
+    ;; NOTE: :atlas/structure-component is now loaded via
+    ;; (require '[atlas.ontology.structure-component :as sc]) (sc/load!)
+    ;; This allows structure-component to be truly optional.
     :atlas/interface-endpoint  (registry/register!
                                    :atlas/interface-endpoint
                                    :atlas/ontology
