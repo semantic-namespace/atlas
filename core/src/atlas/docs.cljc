@@ -2,7 +2,8 @@
   "Generate documentation from semantic registry.
    Demonstrates that semantic structure enables self-documenting systems."
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]
+            [atlas.registry.lookup :as rt]
+            [atlas.ontology :as ontology]
             [atlas.invariant :as ax]
             [clojure.string :as str]
             [clojure.set :as set]))
@@ -87,7 +88,7 @@
   (let [props (rt/props-for dev-id)
         context (:interface-endpoint/context props)
         response (:interface-endpoint/response props)
-        trace (rt/trace-data-flow dev-id)]
+        trace (ontology/trace-data-flow dev-id)]
     {:function dev-id
      :needs context
      :entity/produces response
@@ -116,10 +117,10 @@
 ;; =============================================================================
 
 (defn dependency-doc [dev-id]
-  (let [deps (rt/deps-for dev-id)
+  (let [deps (ontology/deps-for dev-id)
         dependents (->> (rt/all-with-aspect :atlas/execution-function)
                         (concat (rt/all-with-aspect :atlas/interface-endpoint))
-                        (filter #(contains? (set (rt/deps-for %)) dev-id)))]
+                        (filter #(contains? (set (ontology/deps-for %)) dev-id)))]
     {:entity dev-id
      :type (type-of dev-id)
      :depends-on (vec (sort deps))

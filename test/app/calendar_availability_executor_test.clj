@@ -14,9 +14,11 @@
   (:require
    [clojure.test :refer [deftest testing is use-fixtures]]
    [atlas.registry :as cid]
-   [atlas.entity :as rt]
+   [atlas.registry.lookup :as rt]
+   [atlas.ontology :as o]
    [atlas.graph :as graph]
-   [atlas.executor :as executor]
+   [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.execution-function.executor :as executor]
    [app.calendar-availability :as app]))
 
 ;; =============================================================================
@@ -26,6 +28,8 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
+    (ef/reset-loaded-state!)  ; Reset EF module state for clean load
+    (ef/load!)  ; Load execution-function ontology
     (app/init-registry!)
     (f)))
 

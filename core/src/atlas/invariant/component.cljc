@@ -1,7 +1,7 @@
 (ns atlas.invariant.component
   "Component-related invariants and helpers."
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]
+            [atlas.registry.lookup :as rt]
             [clojure.set :as set]))
 
 ;; =============================================================================

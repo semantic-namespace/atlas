@@ -1,7 +1,7 @@
 (ns atlas.invariant
   "Fixed invariants that understand dataflow markers and terminal outputs."
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]
+            [atlas.registry.lookup :as rt]
             [atlas.graph :as graph]
             [atlas.invariant.component :as component]
             [clojure.set :as set]))
@@ -105,25 +105,9 @@
        :severity :warning
        :message (str "These response keys are produced but never consumed or displayed: " orphans)})))
 
-(defn invariant-no-orphan-responses-strict
-  "Strict version: only allows consumed keys, not terminal.
-   Use for internal service layers where everything should chain."
-  []
-  (let [;; Only look at non-endpoint functions
-        internal-fns (->> @cid/registry
-                          (filter (fn [[id _]]
-                                    (and (contains? id :atlas/execution-function)
-                                         (not (contains? id :atlas/interface-endpoint)))))
-                          (map second))
-        produced (->> internal-fns (mapcat :interface-endpoint/response) (remove nil?) set)
-        consumed (all-context-keys)
-        orphans (set/difference produced consumed)]
-    (when (seq orphans)
-      {:invariant :no-orphan-responses-strict
-       :violation :orphan-internal-outputs
-       :orphans orphans
-       :severity :warning
-       :message (str "Internal function outputs not consumed: " orphans)})))
+;; NOTE: invariant-no-orphan-responses-strict has been replaced by
+;; invariant-internal-fn-outputs-consumed in atlas.ontology.execution-function.
+;; The new version uses ontology/response-for instead of hardcoded keys.
 
 ;; =============================================================================
 ;; GRAPH + COMPONENT INVARIANTS (RE-EXPORTS)
@@ -159,42 +143,52 @@
 ;; SEMANTIC CONSISTENCY AXIOMS
 ;; =============================================================================
 
-(defn invariant-external-is-async
-  "Functions marked :integration/external should also be :temporal/async."
-  []
-  (let [external-fns (filter #(rt/has-aspect? % :atlas/execution-function)
-                             (rt/all-with-aspect :integration/external))
-        violations (remove #(rt/has-aspect? % :temporal/async) external-fns)]
-    (when (seq violations)
-      {:invariant :external-is-async
-       :violation :external-not-async
-       :functions violations
-       :severity :warning
-       :message (str "External integrations should be async: " violations)})))
+;; NOTE: Execution-function specific invariants have been moved to
+;; atlas.ontology.execution-function namespace:
+;;   - invariant-pure-has-no-deps
+;;   - invariant-external-is-async
+;;
+;; They are registered automatically when the EF ontology is loaded:
+;;   (require '[atlas.ontology.execution-function :as ef])
+;;   (ef/load!)
 
-(defn invariant-pure-has-no-deps
-  "Functions marked :effect/pure should have no component dependencies."
+;; =============================================================================
+;; ONTOLOGY INVARIANT REGISTRY
+;; =============================================================================
+;;
+;; Ontology modules can register their own invariants here.
+;; This allows modular ontologies to contribute invariants without
+;; modifying this core invariant namespace.
+
+;; Registry of invariants contributed by ontology modules.
+;; Ontology modules add their invariants here via `register-ontology-invariant!`.
+(defonce ontology-invariants (atom []))
+
+(defn register-ontology-invariant!
+  "Register an invariant function from an ontology module.
+
+   invariant-fn should be a zero-arg function that returns:
+   - nil if the invariant passes
+   - A map with :invariant, :violation, :severity, :message if it fails"
+  [invariant-fn]
+  (swap! ontology-invariants conj invariant-fn))
+
+(defn unregister-ontology-invariant!
+  "Unregister an invariant function (useful for testing)."
+  [invariant-fn]
+  (swap! ontology-invariants (fn [invs] (vec (remove #{invariant-fn} invs)))))
+
+(defn reset-ontology-invariants!
+  "Reset ontology invariants to empty (useful for testing)."
   []
-  (let [pure-fns (filter #(rt/has-aspect? % :effect/pure)
-                         (rt/all-with-aspect :atlas/execution-function))
-        violations (for [fn-id pure-fns
-                         :let [deps (rt/deps-for fn-id)
-                               component-deps (filter #(rt/has-aspect? % :atlas/structure-component) deps)]
-                         :when (seq component-deps)]
-                     {:fn fn-id :component-deps (vec component-deps)})]
-    (when (seq violations)
-      {:invariant :pure-has-no-deps
-       :violation :pure-fn-with-deps
-       :details violations
-       :severity :error
-       :message "Pure functions should not depend on components"})))
+  (reset! ontology-invariants []))
 
 ;; =============================================================================
 ;; CHECK ALL
 ;; =============================================================================
 
-(def all-invariants
-  "All invariants in check order."
+(def core-invariants
+  "Core invariants that are always checked (not ontology-specific)."
   [;; Structural
    invariant-deps-exist
    invariant-no-circular-deps
@@ -206,12 +200,14 @@
    invariant-no-orphan-responses        ; ← uses fixed version
    ;; Reachability
    invariant-all-fns-reachable
-   ;; Semantic consistency
-   invariant-external-is-async
-   invariant-pure-has-no-deps
    ;; Protocol conformance
    invariant-protocol-exists
    invariant-protocol-conformance])
+
+(defn all-invariants
+  "All invariants including core and ontology-contributed invariants."
+  []
+  (into core-invariants @ontology-invariants))
 
 (defn- result-level [result]
   (or (:level result) (:severity result)))
@@ -243,7 +239,7 @@
 (defn check-all
   "Run all invariants, return {:valid? :errors :warnings :violations}."
   []
-  (check all-invariants))
+  (check (all-invariants)))
 
 (defn report
   "Print human-readable invariant report."

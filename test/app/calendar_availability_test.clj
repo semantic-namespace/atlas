@@ -14,8 +14,10 @@
    [clojure.set :as set]
    [atlas.registry :as cid]
    [atlas.query :as q]
-   [atlas.entity :as rt]
-   [atlas.executor :as exec]
+   [atlas.registry.lookup :as rt]
+   [atlas.ontology :as o]
+   [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.execution-function.executor :as exec]
    [atlas.invariant.unified :as ax]
    [app.calendar-availability-invariants :as dsl-invariants]
    [app.calendar-availability :as sut]))
@@ -189,7 +191,7 @@
 (defn resolve-component-deps
   "Resolve component dependencies, fetching their test implementations."
   [dev-id]
-  (let [dep-ids (rt/deps-for dev-id)]
+  (let [dep-ids (o/deps-for dev-id)]
     (reduce (fn [acc dep-id]
               (if-let [test-impl (find-test-impl dep-id)]
                 (assoc acc (keyword (name dep-id)) test-impl)
@@ -222,6 +224,8 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
+    (ef/reset-loaded-state!)  ; Reset EF module state for clean load
+    (ef/load!)  ; Load execution-function ontology
     (init-test-registry!)
     (f)))
 
@@ -329,9 +333,12 @@
 
   (testing "Can verify test coverage semantically"
     ;; All production functions should have corresponding test entities
+    ;; (excluding meta-entities: ontology definitions and test implementations)
     (let [prod-functions (->> @cid/registry
                              (filter (fn [[aspects _]]
-                                       (contains? aspects :atlas/execution-function)))
+                                       (and (contains? aspects :atlas/execution-function)
+                                            (not (contains? aspects :atlas/ontology))
+                                            (not (contains? aspects :test/impl)))))
                              (map (fn [[_ v]] (:atlas/dev-id v)))
                              set)
           tested-functions (->> @cid/registry

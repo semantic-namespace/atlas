@@ -2,7 +2,8 @@
   "Pure graph algorithms and graph invariants"
   (:require [atlas.registry :as registry]
             [atlas.query :as query]
-            [atlas.entity :as entity]
+            [atlas.registry.lookup :as entity]
+            [atlas.ontology :as ontology]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -12,7 +13,7 @@
 (defn topo-sort
   "Topological sort of dev-ids by dependencies."
   [dev-ids]
-  (let [deps-map (into {} (map (fn [id] [id (entity/deps-for id)]) dev-ids))
+  (let [deps-map (into {} (map (fn [id] [id (ontology/deps-for id)]) dev-ids))
         sorted (atom [])
         visited (atom #{})]
     (letfn [(visit [id]
@@ -29,7 +30,7 @@
   "Topological sort based on data flow (context/response)."
   [dev-ids]
   (let [dev-ids-set (set dev-ids)
-        deps-map (into {} (map (fn [id] [id (entity/compute-data-deps id)]) dev-ids))
+        deps-map (into {} (map (fn [id] [id (ontology/compute-data-deps id)]) dev-ids))
         sorted (atom [])
         visited (atom #{})]
     (letfn [(visit [id]
@@ -56,7 +57,7 @@
   (let [all-ids (set (all-dev-ids))
         violations (for [[_ v] @registry/registry
                          :let [dev-id (:atlas/dev-id v)
-                               deps (entity/deps-for dev-id)]
+                               deps (ontology/deps-for dev-id)]
                          :when deps
                          :let [missing (set/difference deps all-ids)]
                          :when (seq missing)]
@@ -73,7 +74,7 @@
   "Dependency graph must be acyclic."
   []
   (let [all-ids (all-dev-ids)
-        deps-map (into {} (map (fn [id] [id (entity/deps-for id)]) all-ids))]
+        deps-map (into {} (map (fn [id] [id (ontology/deps-for id)]) all-ids))]
     (letfn [(has-cycle? [id visited path]
               (cond
                 (contains? path id) {:cycle (conj (vec path) id)}
@@ -106,7 +107,7 @@
         collect-reachable (fn collect [id]
                             (when-not (@reachable id)
                               (swap! reachable conj id)
-                              (doseq [dep (entity/deps-for id)]
+                              (doseq [dep (ontology/deps-for id)]
                                 (collect dep))))]
     (doseq [ep endpoints]
       (collect-reachable ep))

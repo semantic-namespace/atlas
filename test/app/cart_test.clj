@@ -3,7 +3,8 @@
   (:require
    [clojure.test :refer [deftest testing is use-fixtures]]
    [atlas.registry :as cid]
-   [atlas.entity :as rt]
+   [atlas.registry.lookup :as rt]
+   [atlas.ontology :as ot]
    [atlas.invariant.unified :as ax]
    [app.cart :as sut]
    [app.cart-invariants :as dsl-invariants]
@@ -206,7 +207,7 @@
                                         :cart/guest? false}}}))
 
 (use-fixtures :each
-  (test-utils/make-fixture-with-reset
+  (test-utils/make-fixture-with-ef-and-reset
     sut/init-registry!
     reset-mock-sessions!))
 

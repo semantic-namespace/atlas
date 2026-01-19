@@ -3,7 +3,8 @@
   (:require [atlas.registry :as reg]
             [atlas.query :as q]
             [atlas.invariant :as inv]
-            [atlas.entity :as g]))
+            [atlas.registry.lookup :as g]
+            [atlas.ontology :as o]))
 
 
 ;; Registration
@@ -26,7 +27,7 @@
 (def all-entities reg/all-entities)
 
   )
-(defn deps-of [dev-id] (g/deps-for dev-id))
+(defn deps-of [dev-id] (o/deps-for dev-id))
 
 ;; Validation
 (defn check-invariants [] (inv/check-all))

@@ -1,71 +1,56 @@
 (ns atlas.executor
-  "Execute functions with semantic-driven wrappers."
-  (:require [atlas.entity :as rt]
-            [atlas.graph :as graph]
-            [atlas.cljc.platform :as platform]
-            [clojure.set :as set]))
+  "DEPRECATED: This namespace has been moved to atlas.ontology.execution-function.executor
 
-(def ^:dynamic *timeout-ms* 5000)
-(def ^:dynamic *trace* false)
+   Migration:
+     ;; Old code:
+     (require '[atlas.executor :as executor])
+     (executor/execute :fn/my-function impl-fn ctx)
 
-(defn wrap-timeout [f timeout-ms]
-  (fn [ctx]
-    (let [result (platform/call-with-timeout timeout-ms #(f ctx))]
-      (if (platform/timeout? result)
-        {:error :timeout :timeout-ms timeout-ms}
-        result))))
+     ;; New code:
+     (require '[atlas.ontology.execution-function :as ef])
+     (ef/load!)  ; Must load the ontology first!
 
-(defn wrap-trace [f dev-id]
-  (fn [ctx]
-    (when *trace*
-      (println "[TRACE]" dev-id "input:" (keys ctx)))
-    (let [result (f ctx)]
-      (when *trace*
-        (println "[TRACE]" dev-id "output:" (keys result)))
-      result)))
+     (require '[atlas.ontology.execution-function.executor :as executor])
+     (executor/execute :fn/my-function impl-fn ctx)
 
-(defn wrap-validate-context [f dev-id]
-  (fn [ctx]
-    (let [required (set (rt/context-for dev-id))
-          provided (set (keys ctx))
-          missing (set/difference required provided)]
-      (if (seq missing)
-        {:error :missing-context :missing missing :dev-id dev-id}
-        (f ctx)))))
+   This namespace re-exports functions from the new location for backward
+   compatibility, but will be removed in a future version."
+  {:deprecated "0.2.0"}
+  (:require [atlas.ontology.execution-function.executor :as new-executor]))
 
-(defn wrap-merge-response [f]
-  (fn [ctx]
-    (let [result (f ctx)]
-      (if (:error result)
-        result
-        (merge ctx result)))))
+;; Re-export for backward compatibility
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/*timeout-ms*"}
+  ^:dynamic *timeout-ms* new-executor/*timeout-ms*)
 
-(defn build-executor
-  "Build executor for a function, applying semantic wrappers."
-  [dev-id impl-fn]
-  (let [id (rt/identity-for dev-id)]
-    (cond-> impl-fn
-      true (wrap-merge-response)
-      true (wrap-validate-context dev-id)
-      (contains? id :integration/external) (wrap-timeout *timeout-ms*) ;; instead of :integration/external :atlas/integration-external or :atlas/external ?
-      *trace* (wrap-trace dev-id))))
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/*trace*"}
+  ^:dynamic *trace* new-executor/*trace*)
 
-(defn execute
-  "Execute a function by dev-id with given context."
-  [dev-id impl-fn ctx]
-  ((build-executor dev-id impl-fn) ctx))
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/wrap-timeout"}
+  wrap-timeout new-executor/wrap-timeout)
 
-(defn build-pipeline
-  "Build execution pipeline from endpoint through its deps, ordered by data flow."
-  [endpoint-id impl-map]
-  (let [all-fns (conj (rt/deps-for endpoint-id) endpoint-id)
-        order (graph/topo-sort-by-data all-fns)]
-    (fn [initial-ctx]
-      (reduce (fn [ctx dev-id]
-                (if (:error ctx)
-                  (reduced ctx)
-                  (if-let [impl (get impl-map dev-id)]
-                    (execute dev-id impl ctx)
-                    ctx)))
-              initial-ctx
-              order))))
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/wrap-trace"}
+  wrap-trace new-executor/wrap-trace)
+
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/wrap-validate-context"}
+  wrap-validate-context new-executor/wrap-validate-context)
+
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/wrap-merge-response"}
+  wrap-merge-response new-executor/wrap-merge-response)
+
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/build-executor"}
+  build-executor new-executor/build-executor)
+
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/execute"}
+  execute new-executor/execute)
+
+(def ^{:deprecated "0.2.0"
+       :doc "DEPRECATED: Use atlas.ontology.execution-function.executor/build-pipeline"}
+  build-pipeline new-executor/build-pipeline)

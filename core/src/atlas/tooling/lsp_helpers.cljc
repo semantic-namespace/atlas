@@ -9,7 +9,7 @@
   - hover-info: Generate hover text for IDE display
   - export-definitions: Export for external tool consumption"
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]
+            [atlas.registry.lookup :as rt]
             [atlas.query :as q]
             [atlas.cljc.platform :as platform]
             [clojure.string :as str]

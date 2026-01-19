@@ -186,7 +186,8 @@
    "Service functions must be service tier"
    {:op :dsl.op/logic-and
     :args [{:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
-           {:op :dsl.op/entity-lacks-aspect :args :atlas/interface-endpoint}]}
+           {:op :dsl.op/entity-lacks-aspect :args :atlas/interface-endpoint}
+           {:op :dsl.op/entity-lacks-aspect :args :atlas/ontology}]}
    {:op :dsl.op/entity-has-aspect :args :tier/service}))
 
 ;; =============================================================================

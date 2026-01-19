@@ -70,6 +70,15 @@
 ;; TIER AXIOMS
 ;; =============================================================================
 
+;; Helper: excludes meta-entities (ontology definitions, test implementations)
+;; from business-logic invariants
+(def ^:private not-meta-entity
+  "Predicate that excludes ontology definitions and test implementations."
+  {:op :dsl.op/logic-not
+   :args [{:op :dsl.op/logic-or
+           :args [{:op :dsl.op/entity-has-aspect :args :atlas/ontology}
+                  {:op :dsl.op/entity-has-aspect :args :test/impl}]}]})
+
 (def components-are-foundation
   "All components must be in foundation tier."
   (ax/dsl-invariant
@@ -89,12 +98,14 @@
    {:op :dsl.op/entity-has-aspect :args :tier/api}))
 
 (def functions-are-service
-  "All functions must be in service tier."
+  "All functions must be in service tier (excluding ontology definitions and test impls)."
   (ax/dsl-invariant
    :calendar/functions-service
    :error
    "Functions must be service tier"
-   {:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+   {:op :dsl.op/logic-and
+    :args [{:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+           not-meta-entity]}
    {:op :dsl.op/entity-has-aspect :args :tier/service}))
 
 ;; =============================================================================
@@ -102,21 +113,25 @@
 ;; =============================================================================
 
 (def no-dependency-cycles
-  "Dependency graph must be acyclic."
+  "Dependency graph must be acyclic (excluding ontology definitions and test impls)."
   (ax/dsl-invariant
    :calendar/no-cycles
    :error
    "Dependency graph must be acyclic"
-   {:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+   {:op :dsl.op/logic-and
+    :args [{:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+           not-meta-entity]}
    {:op :dsl.op/graph-acyclic :args {:edge :depends}}))
 
 (def all-functions-reachable
-  "All functions should be reachable from endpoints."
+  "All functions should be reachable from endpoints (excluding ontology definitions and test impls)."
   (ax/dsl-invariant
    :calendar/all-reachable
    :warning
    "All functions should be reachable from endpoints"
-   {:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+   {:op :dsl.op/logic-and
+    :args [{:op :dsl.op/entity-has-aspect :args :atlas/execution-function}
+           not-meta-entity]}
    {:op :dsl.op/graph-reachable :args {:edge :depends}}))
 
 ;; =============================================================================

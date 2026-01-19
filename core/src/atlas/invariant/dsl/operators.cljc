@@ -1,7 +1,8 @@
 (ns atlas.invariant.dsl.operators
   "DSL operators for semantic invariants. Each operator is itself a semantic entity."
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]))
+            [atlas.ontology :as ot]
+            [atlas.registry.lookup :as rt]))
 
 ;; =============================================================================
 ;; DSL OPERATOR REGISTRY
@@ -47,7 +48,7 @@
                        (fn [dep-id]
                          {:type :entity-predicate
                           :check-fn (fn [entity-id]
-                                      (contains? (set (rt/deps-for entity-id)) dep-id))})})
+                                      (contains? (set (ot/deps-for entity-id)) dep-id))})})
 
   (register-operator! #{:dsl.op/entity-produces}
                       {:operator/arity 1
@@ -166,8 +167,8 @@
                           :check-fn (fn [_entity-id]
                                       (let [all-ids (map #(:atlas/dev-id (second %)) @cid/registry)
                                             deps-map (case edge
-                                                       :depends (into {} (map (fn [id] [id (rt/deps-for id)]) all-ids))
-                                                       :data-flow (into {} (map (fn [id] [id (rt/compute-data-deps id)]) all-ids)))]
+                                                       :depends (into {} (map (fn [id] [id (ot/deps-for id)]) all-ids))
+                                                       :data-flow (into {} (map (fn [id] [id (ot/compute-data-deps id)]) all-ids)))]
                                         (letfn [(has-cycle? [id visited path]
                                                   (cond
                                                     (contains? path id) false
@@ -189,7 +190,7 @@
                                             collect-reachable (fn collect [id]
                                                                 (when-not (@reachable id)
                                                                   (swap! reachable conj id)
-                                                                  (doseq [dep (rt/deps-for id)]
+                                                                  (doseq [dep (ot/deps-for id)]
                                                                     (collect dep))))]
                                         (doseq [ep endpoints]
                                           (collect-reachable ep))

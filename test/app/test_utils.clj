@@ -6,13 +6,17 @@
   - Function invocation with dependency injection
   - Context/response key queries
   - Test fixtures for registry management
-  - Runtime integration (invariants, executor, ide queries)"
+  - Runtime integration (invariants, executor, ide queries)
+
+  NOTE: Tests using executor functions must call (ef/load!) before use."
   (:require
    [atlas.registry :as cid]
-   [atlas.entity :as rt]
+   [atlas.registry.lookup :as rt]
    [atlas.graph :as graph]
    [atlas.invariant :as ax]
-   [atlas.executor :as exec]
+   [atlas.ontology :as o]
+   [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.execution-function.executor :as exec]
    [atlas.ide :as ide]))
 
 ;; =============================================================================
@@ -29,7 +33,7 @@
     (resolve-deps :fn/get-product component-impls)
     ;=> {:db {...}, :cache {...}}"
   [dev-id component-impls]
-  (let [dep-ids (rt/deps-for dev-id)]
+  (let [dep-ids (o/deps-for dev-id)]
     (reduce (fn [acc dep-id]
               (if-let [component (get component-impls dep-id)]
                 (assoc acc (keyword (name dep-id)) component)
@@ -90,6 +94,25 @@
     (init-fn)
     (f)))
 
+(defn make-fixture-with-ef
+  "Creates a test fixture that loads the execution-function ontology.
+
+  Use this for tests that use execution-function features like
+  context-for, response-for, deps-for, or the executor.
+
+  Takes an init-fn that will be called to populate the registry.
+  Returns a fixture function suitable for use with clojure.test/use-fixtures.
+
+  Example:
+    (use-fixtures :each (make-fixture-with-ef sut/init-registry!))"
+  [init-fn]
+  (fn [f]
+    (reset! cid/registry {})
+    (ef/reset-loaded-state!)
+    (ef/load!)
+    (init-fn)
+    (f)))
+
 (defn make-fixture-with-reset
   "Creates a test fixture with custom reset function.
 
@@ -104,6 +127,24 @@
   [init-fn reset-fn]
   (fn [f]
     (reset! cid/registry {})
+    (init-fn)
+    (reset-fn)
+    (f)))
+
+(defn make-fixture-with-ef-and-reset
+  "Creates a test fixture that loads the execution-function ontology
+  and runs a custom reset function.
+
+  Example:
+    (use-fixtures :each
+      (make-fixture-with-ef-and-reset
+        sut/init-registry!
+        reset-mock-sessions!))"
+  [init-fn reset-fn]
+  (fn [f]
+    (reset! cid/registry {})
+    (ef/reset-loaded-state!)
+    (ef/load!)
     (init-fn)
     (reset-fn)
     (f)))
@@ -158,7 +199,7 @@
   "Checks if all dependencies for a dev-id exist in the registry.
   Returns [true nil] if all exist, [false missing-deps] otherwise."
   [dev-id all-dev-ids]
-  (let [deps (rt/deps-for dev-id)
+  (let [deps (o/deps-for dev-id)
         missing (remove (set all-dev-ids) deps)]
     (if (empty? missing)
       [true nil]
@@ -262,7 +303,7 @@
     (pipeline {:auth/user-id \"user-1\" :pet/id \"pet-1\" :payment/token \"tok_123\"})"
   [endpoint-id function-impls component-impls]
   (let [invoke (make-semantic-invoke function-impls component-impls)
-        all-fns (conj (rt/deps-for endpoint-id) endpoint-id)
+        all-fns (conj (o/deps-for endpoint-id) endpoint-id)
         order (graph/topo-sort-by-data all-fns)]
     (fn [initial-ctx]
       (reduce (fn [ctx dev-id]

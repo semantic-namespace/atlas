@@ -17,7 +17,8 @@
    [clojure.test :refer [deftest testing is use-fixtures run-tests]]
    [clojure.pprint :as pp]
    [atlas.registry :as cid]
-   [atlas.entity :as rt]
+   [atlas.registry.lookup :as rt]
+   [atlas.ontology :as o]
    [atlas.datalog :as ax.dl]
    [atlas.invariant.unified :as ax]
    [app.pet-shop :as sut]
@@ -282,7 +283,7 @@
     (throw (ex-info "Unauthorized" {:endpoint endpoint-id})))
 
   ;; Simple endpoints: invoke first dep
-  (let [deps (rt/deps-for endpoint-id)
+  (let [deps (o/deps-for endpoint-id)
         fn-dep (first (filter #(rt/has-aspect? % :atlas/execution-function) deps))]
     (if fn-dep
       (invoke fn-dep ctx)
@@ -696,7 +697,7 @@
 ;; --- Test Fixture ---
 
 (use-fixtures :each
-  (test-utils/make-fixture-with-reset
+  (test-utils/make-fixture-with-ef-and-reset
     sut/init-registry!
     reset-mock-db!))
 

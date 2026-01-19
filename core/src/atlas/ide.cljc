@@ -2,7 +2,7 @@
   "IDE integration API - clean interface for editor tooling.
    Returns EDN that editors can parse and display."
   (:require [atlas.registry :as cid]
-            [atlas.entity :as rt]
+            [atlas.registry.lookup :as rt]
             [atlas.graph :as graph]
             [atlas.invariant :as ax]
             [atlas.docs :as docs]
@@ -66,7 +66,7 @@
   "Build reverse dependency index: maps dev-id to set of dependents."
   (let [all-ids (ax/all-dev-ids)]
     (reduce (fn [acc dev-id]
-              (let [deps (rt/deps-for dev-id)]
+              (let [deps (ot/deps-for dev-id)]
                 (reduce (fn [inner dep]
                           (update inner dep (fnil conj #{}) dev-id))
                         acc
@@ -88,8 +88,8 @@
   "Build indexes for producers/consumers keyed by data-key."
   (reduce (fn [acc [_ props]]
             (let [id (:atlas/dev-id props)
-                  context (rt/context-for id)
-                  response (rt/response-for id)
+                  context (ot/context-for id)
+                  response (ot/response-for id)
                   produces (:entity/produces acc)
                   consumes (:entity/consumes acc)
                   producer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) produces response)
@@ -203,14 +203,14 @@
                                           :atlas/schema)))
          :entity/definition-keys definition-keys
          :entity/definition-values definition-values
-         :interface-endpoint/context (vec (sort (rt/context-for dev-id-kw)))
-         :interface-endpoint/response (vec (sort (rt/response-for dev-id-kw)))
-         :execution-function/deps (vec (sort (rt/deps-for dev-id-kw)))
+         :interface-endpoint/context (vec (sort (ot/context-for dev-id-kw)))
+         :interface-endpoint/response (vec (sort (ot/response-for dev-id-kw)))
+         :execution-function/deps (vec (sort (ot/deps-for dev-id-kw)))
          :atlas/fields (vec (sort (fields-for props)))}))))
 
 (defn data-flow [dev-id]
   "Get data flow info for a function."
-  (->> (rt/trace-data-flow (ensure-keyword dev-id))
+  (->> (ot/trace-data-flow (ensure-keyword dev-id))
        (map (fn [{:keys [needs produced-by satisfied?]}]
               {:dataflow/needs needs
                :dataflow/produced-by (sorted-vec produced-by)
@@ -280,7 +280,7 @@
 (defn dependencies-of 
   "Find what this entity depends on."
   [dev-id]
-  (vec (sort (rt/deps-for (ensure-keyword dev-id)))))
+  (vec (sort (ot/deps-for (ensure-keyword dev-id)))))
 
 (defn producers-of
   "Find functions that produce a data key."

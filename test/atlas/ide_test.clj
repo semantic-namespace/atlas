@@ -4,6 +4,9 @@
    without mutating shared state."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [atlas.registry :as cid]
+            [atlas.registry.lookup :as entity]
+            [atlas.ontology :as ot]
+            [atlas.ontology.execution-function :as ef]
             [atlas.ide :as ide]))
 
 ;; ---------------------------------------------------------------------------
@@ -13,6 +16,8 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
+    (ef/reset-loaded-state!)
+    (ef/load!)  ; Load execution-function ontology for tests
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     (f)
@@ -138,10 +143,14 @@
 (deftest ide-listings-are-namespaced-and-sorted
   (seed-registry!)
   (let [entities (ide/list-all-entities)
-        aspects (ide/list-aspects)]
+        aspects (ide/list-aspects)
+        ;; Filter out ontology definition from entity list for deterministic comparison
+        non-ontology-entities (remove #(= :atlas/execution-function (:entity/dev-id %)) entities)
+        ;; Filter out ontology aspect from aspects list
+        non-ontology-aspects (remove #(= :atlas/ontology (:aspect/aspect %)) aspects)]
     (is (= [:component/audit :component/cache :component/storage :endpoint/order :fn/alpha :fn/beta :fn/gamma :fn/http-handler :fn/profile]
-           (map :entity/dev-id entities))
-        "list-all-entities returns deterministic order for dev-ids")
+           (map :entity/dev-id non-ontology-entities))
+        "list-all-entities returns deterministic order for dev-ids (excluding ontology)")
     (is (= [{:aspect/aspect :authorization/required :aspect/count 1}
             {:aspect/aspect :capacity/rate-limited :aspect/count 1}
             {:aspect/aspect :compliance/audited :aspect/count 1}
@@ -159,8 +168,8 @@
             {:aspect/aspect :tier/api :aspect/count 1}
             {:aspect/aspect :tier/service :aspect/count 4}
             {:aspect/aspect :temporal/timeout :aspect/count 1}]
-           aspects)
-        "list-aspects returns namespaced aspect maps with counts")))
+           non-ontology-aspects)
+        "list-aspects returns namespaced aspect maps with counts (excluding ontology)")))
 
 ;; ---------------------------------------------------------------------------
 ;; 🔤 Completion helpers return editor-friendly strings
