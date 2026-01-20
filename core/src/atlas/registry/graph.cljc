@@ -1,8 +1,6 @@
-(ns atlas.graph
-  "Pure graph algorithms and graph invariants"
+(ns atlas.registry.graph
+  "Graph algorithms and structural invariants on registry data."
   (:require [atlas.registry :as registry]
-            [atlas.query :as query]
-            [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [clojure.set :as set]))
 
@@ -88,43 +86,10 @@
          :severity :error
          :message (str "Dependency cycle detected: " (:cycle cycle))}))))
 
-(defn invariant-all-fns-reachable
-  "Every function should be reachable from some endpoint.
-
-   Excludes functions marked with :lifecycle/* aspects (setup, migration, etc.)"
-  []
-  (let [endpoints (entity/all-with-aspect :atlas/interface-endpoint)
-        all-fns (set (entity/all-with-aspect :atlas/execution-function))
-        ;; Exclude lifecycle functions (not meant to be endpoint-reachable)
-        lifecycle-fns (->> @registry/registry
-                           (filter (fn [[id _]]
-                                     (some #(= "lifecycle" (namespace %)) id)))
-                           (map (fn [[_ v]] (:atlas/dev-id v)))
-                           set)
-        checkable-fns (set/difference all-fns lifecycle-fns)
-        ;; Find reachable via BFS from endpoints
-        reachable (atom #{})
-        collect-reachable (fn collect [id]
-                            (when-not (@reachable id)
-                              (swap! reachable conj id)
-                              (doseq [dep (ontology/deps-for id)]
-                                (collect dep))))]
-    (doseq [ep endpoints]
-      (collect-reachable ep))
-    (let [unreachable (set/difference checkable-fns @reachable)]
-      (when (seq unreachable)
-        {:invariant :all-fns-reachable
-         :violation :unreachable-functions
-         :functions unreachable
-         :severity :warning
-         :message (str "Functions not reachable from any endpoint: " unreachable
-                       " (mark with :lifecycle/* if intentional)")}))))
-
 (def graph-invariants
   "Graph invariants in check order."
   [invariant-deps-exist
-   invariant-no-circular-deps
-   invariant-all-fns-reachable])
+   invariant-no-circular-deps])
 
 (defn- result-level [result]
   (or (:level result) (:severity result)))
@@ -152,8 +117,3 @@
      :errors-flat errors
      :warnings-flat warnings
      :valid? (empty? errors)}))
-
-(defn check-invariants
-  "Run graph invariants."
-  []
-  (check graph-invariants))

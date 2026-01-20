@@ -16,7 +16,7 @@
    [atlas.registry :as cid]
    [atlas.registry.lookup :as rt]
    [atlas.ontology :as o]
-   [atlas.graph :as graph]
+   [atlas.registry.graph :as graph]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
    [atlas.ontology.interface-endpoint :as ie]

@@ -15,7 +15,9 @@
    - Run invariants like invariant-endpoints-are-api-tier"
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
-            [atlas.invariant :as invariant]))
+            [atlas.ontology :as ontology]
+            [atlas.invariant :as invariant]
+            [clojure.set :as set]))
 
 ;; =============================================================================
 ;; ONTOLOGY DEFINITION
@@ -48,9 +50,39 @@
        :severity :error
        :message (str "Endpoints should be :tier/api: " violations)})))
 
+(defn invariant-all-fns-reachable
+  "Every execution-function should be reachable from some endpoint.
+
+   This invariant expresses that all business logic (execution-functions)
+   must be accessible through the API layer (interface-endpoints).
+   Unreachable functions are dead code.
+
+   Note: This makes explicit that interface-endpoint depends on
+   execution-function in the ontology module hierarchy."
+  []
+  (let [endpoints (entity/all-with-aspect :atlas/interface-endpoint)
+        all-fns (set (entity/all-with-aspect :atlas/execution-function))
+        ;; Find reachable via BFS from endpoints
+        reachable (atom #{})
+        collect-reachable (fn collect [id]
+                            (when-not (@reachable id)
+                              (swap! reachable conj id)
+                              (doseq [dep (ontology/deps-for id)]
+                                (collect dep))))]
+    (doseq [ep endpoints]
+      (collect-reachable ep))
+    (let [unreachable (set/difference all-fns @reachable)]
+      (when (seq unreachable)
+        {:invariant :all-fns-reachable
+         :violation :unreachable-functions
+         :functions unreachable
+         :severity :warning
+         :message (str "Functions not reachable from any endpoint: " unreachable)}))))
+
 (def invariants
   "All invariants specific to interface-endpoint ontology"
-  [invariant-endpoints-are-api-tier])
+  [invariant-endpoints-are-api-tier
+   invariant-all-fns-reachable])
 
 ;; =============================================================================
 ;; LOADING

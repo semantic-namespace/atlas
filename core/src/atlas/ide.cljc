@@ -3,7 +3,7 @@
    Returns EDN that editors can parse and display."
   (:require [atlas.registry :as cid]
             [atlas.registry.lookup :as rt]
-            [atlas.graph :as graph]
+            [atlas.registry.graph :as graph]
             [atlas.invariant :as ax]
             [atlas.docs :as docs]
             [atlas.ontology :as ot]

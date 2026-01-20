@@ -1,8 +1,7 @@
 (ns atlas.invariant
   "Fixed invariants that understand dataflow markers and terminal outputs."
   (:require [atlas.registry :as cid]
-            [atlas.registry.lookup :as rt]
-            [atlas.graph :as graph]
+            [atlas.registry.graph :as graph]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -114,8 +113,13 @@
 
 (def invariant-deps-exist graph/invariant-deps-exist)
 (def invariant-no-circular-deps graph/invariant-no-circular-deps)
-(def invariant-all-fns-reachable graph/invariant-all-fns-reachable)
 (def graph-invariants graph/graph-invariants)
+
+;; NOTE: invariant-all-fns-reachable has been moved to
+;; atlas.ontology.interface-endpoint namespace.
+;; It is registered automatically when the IE ontology is loaded:
+;;   (require '[atlas.ontology.interface-endpoint :as ie])
+;;   (ie/load!)
 
 ;; NOTE: Component invariants have been moved to atlas.ontology.structure-component:
 ;;   - invariant-components-are-foundation
@@ -190,9 +194,7 @@
    invariant-no-circular-deps
    ;; Dataflow
    invariant-context-satisfiable
-   invariant-no-orphan-responses        ; ← uses fixed version
-   ;; Reachability
-   invariant-all-fns-reachable])
+   invariant-no-orphan-responses])
 
 (defn all-invariants
   "All invariants including core and ontology-contributed invariants."

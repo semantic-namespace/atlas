@@ -6,7 +6,7 @@
    This namespace consolidates duplicated query logic from:
    - atlas.registry
    - atlas.semantic-queries
-   - atlas.graph"
+   - atlas.registry.graph"
   (:require [clojure.set :as set]))
 
 ;; =============================================================================
@@ -33,7 +33,7 @@
 
    UNIFIES:
    - atlas.registry/find-by-dev-id
-   - atlas.graph/fetch-by-dev-id"
+   - atlas.registry.graph/fetch-by-dev-id"
   [registry dev-id]
   (when dev-id
     (first (filter (fn [[_ v]] (= (:atlas/dev-id v) dev-id))
@@ -43,7 +43,7 @@
   "Find all dev-ids with given aspect(s). Returns set of dev-ids.
 
    Derived from find-by-aspect for convenience.
-   Replaces atlas.graph/all-with-aspect."
+   Replaces atlas.registry.graph/all-with-aspect."
   [registry aspect]
   (->> (find-by-aspect registry aspect)
        (map (fn [[_ v]] (:atlas/dev-id v)))
@@ -289,7 +289,7 @@
 
    UNIFIES:
    - atlas.semantic-queries/produces
-   - atlas.graph/trace-data-flow (producer side)"
+   - atlas.registry.graph/trace-data-flow (producer side)"
   [registry data-key property-key]
   (->> registry
        (filter (fn [[_ v]]
@@ -303,7 +303,7 @@
 
    UNIFIES:
    - atlas.semantic-queries/consumes
-   - atlas.graph/trace-data-flow (consumer side)"
+   - atlas.registry.graph/trace-data-flow (consumer side)"
   [registry data-key property-key]
   (->> registry
        (filter (fn [[_ v]]
@@ -317,7 +317,7 @@
 
    UNIFIES:
    - atlas.semantic-queries/trace-data-flow
-   - atlas.graph/trace-data-flow"
+   - atlas.registry.graph/trace-data-flow"
   [registry data-key producer-key consumer-key]
   (let [producers (find-producers registry data-key producer-key)
         consumers (find-consumers registry data-key consumer-key)]

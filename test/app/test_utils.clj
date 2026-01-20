@@ -14,7 +14,7 @@
   (:require
    [atlas.registry :as cid]
    [atlas.registry.lookup :as rt]
-   [atlas.graph :as graph]
+   [atlas.registry.graph :as graph]
    [atlas.invariant :as ax]
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]

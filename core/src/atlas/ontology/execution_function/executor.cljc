@@ -12,7 +12,7 @@
      (executor/execute :fn/my-function impl-fn {:input/key \"value\"})"
   (:require [atlas.registry.lookup :as entity]
             [atlas.ontology :as o]
-            [atlas.graph :as graph]
+            [atlas.registry.graph :as graph]
             [atlas.cljc.platform :as platform]
             [clojure.set :as set]))
 
