@@ -5,7 +5,7 @@
             [atlas.ontology :as ontology]
             [app.pet-shop :as pet-shop-app]
             [atlas.registry :as registry]
-;;            [atlas.atlas-ui.server :as ui] only on atlas-ui repl
+            [atlas.atlas-ui.server :as ui]
             ))
 
 
@@ -23,7 +23,7 @@
   (cart-app/init-registry!)
 
   ;; Start Atlas UI
-  (ui/start! registry/registry {:port 8082})
+  (ui/start! registry/registry {:port 8082 :ui-version :v2})
   (ui/stop! 8082)
   (ui/status)
   )

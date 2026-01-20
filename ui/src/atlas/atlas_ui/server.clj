@@ -27,7 +27,7 @@
 
 (defn- app-handler
   "Ring handler that serves static files and the registry API"
-  [registry-atom]
+  [registry-atom ui-root]
   (fn [request]
     (cond
       ;; API endpoint for registry - reuse existing handler
@@ -41,12 +41,12 @@
 
       ;; Serve index.html for root
       (= (:uri request) "/")
-      (response/resource-response "index.html" {:root "public"})
+      (response/resource-response "index.html" {:root ui-root})
 
-      ;; Serve static files from resources/public
+      ;; Serve static files from resources/public or public-v2
       :else
       ((-> (constantly (response/not-found "Not found"))
-           (resource/wrap-resource "public")
+           (resource/wrap-resource ui-root)
            (content-type/wrap-content-type))
        request))))
 
@@ -67,6 +67,7 @@
                     :port (default 8082) - HTTP server port
                     :open-browser? (default true) - Automatically open browser
                     :load-sample? (default false) - Load sample registry
+                    :ui-version (default :v1) - UI version (:v1 or :v2)
 
   Returns:
     Server instance (can be passed to stop!)
@@ -79,17 +80,21 @@
     (start! my-registry {:port 8082})
 
     ;; Load sample data
-    (start! {:load-sample? true})"
+    (start! {:load-sample? true})
+
+    ;; Use v2 UI
+    (start! {:ui-version :v2})"
   ([]
    (start! reg/registry {}))
   ([opts-or-registry]
    (if (map? opts-or-registry)
      (start! reg/registry opts-or-registry)
      (start! opts-or-registry {})))
-  ([registry-atom {:keys [port open-browser? load-sample?]
+  ([registry-atom {:keys [port open-browser? load-sample? ui-version]
                    :or {port 8082
                         open-browser? true
-                        load-sample? false}
+                        load-sample? false
+                        ui-version :v1}
                    :as opts}]
    (when (get @servers port)
      (println (str "⚠️  Atlas UI already running on port " port ". Stopping it first..."))
@@ -101,7 +106,8 @@
      (reset! registry-atom sample/sample-registry)
      (println "✓ Loaded" (count @registry-atom) "entities"))
 
-   (let [server (jetty/run-jetty (app-handler registry-atom)
+   (let [ui-root (if (= ui-version :v2) "public-v2" "public")
+         server (jetty/run-jetty (app-handler registry-atom ui-root)
                                   {:port port
                                    :join? false})]
      (swap! servers assoc port server)
@@ -119,6 +125,7 @@
        (println "│ 🚀 Atlas UI Server Started")
        (println "├─────────────────────────────────────────────────────")
        (println (str "│ 🌐 URL:      " url))
+       (println (str "│ 🎨 UI:       " (name ui-version)))
        (println (str "│ 📊 Registry: " (count @registry-atom) " entities"))
        (println "├─────────────────────────────────────────────────────")
        (println "│ 💡 Tips:")
