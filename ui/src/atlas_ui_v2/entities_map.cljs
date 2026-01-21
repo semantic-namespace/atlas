@@ -1,7 +1,29 @@
 (ns atlas-ui-v2.entities-map
   "Entities Map component - displays type -> dev-id -> identity hierarchy.
 
-   Click on a type or entity to filter the aspects map.")
+   Click on a type or entity to filter the aspects map."
+  (:require [atlas-ui-v2.data :as data]))
+
+(defn sort-dropdown
+  "Sort dropdown component"
+  [label current-value options on-change]
+  [:div {:style {:display "flex"
+                 :align-items "center"
+                 :gap "0.5rem"}}
+   [:label {:style {:font-size "0.75rem"
+                    :color "#999"}} label]
+   [:select {:value (name current-value)
+             :on-change #(on-change (keyword (-> % .-target .-value)))
+             :style {:padding "0.25rem 0.4rem"
+                     :background "#2a2a4a"
+                     :color "#eee"
+                     :border "1px solid #4a4a6a"
+                     :border-radius "3px"
+                     :font-size "0.75rem"
+                     :cursor "pointer"}}
+    (for [[value label-text] options]
+      ^{:key value}
+      [:option {:value (name value)} label-text])]])
 
 (defn identity-preview
   "Render a compact preview of a compound identity"
@@ -58,7 +80,7 @@
 
 (defn type-section
   "Render an entity type with its entities"
-  [entity-type dev-id-map opts]
+  [entity-type dev-id-map sort-items opts]
   (let [{:keys [selected-types highlight-entities filter-mode on-type-click]} opts
         selected? (contains? selected-types entity-type)
         ;; Check if any entity in this type is highlighted
@@ -72,7 +94,9 @@
                                (= filter-mode :hide))
         dimmed-type? (and highlight-entities
                           (not type-has-highlight?)
-                          (= filter-mode :highlight))]
+                          (= filter-mode :highlight))
+        ;; Sort dev-ids according to sort-items setting
+        sorted-entities (data/sort-dev-ids dev-id-map sort-items)]
     (when-not should-hide-type?
       [:div {:style {:margin-bottom "1.5rem"
                      :opacity (if dimmed-type? 0.4 1)
@@ -100,21 +124,50 @@
          (str "(" (count dev-id-map) ")")]]
        ;; Entities list
        [:div {:style {:padding-left "0.5rem"}}
-        (for [[dev-id identity] dev-id-map]
+        (for [[dev-id identity] sorted-entities]
           ^{:key dev-id}
           [entity-row dev-id identity opts])]])))
 
 (defn entities-map-view
   "Main entities map component"
-  [entities-map opts]
-  [:div {:style {:padding "1rem"
-                 :color "#eee"}}
-   [:h2 {:style {:font-size "1.1rem"
-                 :margin-bottom "1rem"
-                 :color "#aaa"}}
-    "Entities by Type"]
-   (if (empty? entities-map)
-     [:div {:style {:color "#666"}} "No entities found"]
-     (for [[entity-type dev-id-map] entities-map]
-       ^{:key entity-type}
-       [type-section entity-type dev-id-map opts]))])
+  [entities-data opts]
+  (let [{:keys [entities-map sort-items]} entities-data
+        {:keys [sort-type on-sort-type on-sort-items]} opts]
+    [:div {:style {:display "flex"
+                   :flex-direction "column"
+                   :height "100%"}}
+     ;; Header with sort controls
+     [:div {:style {:padding "0.75rem 1rem"
+                    :background "#1a1a2e"
+                    :border-bottom "1px solid #333"}}
+      [:h2 {:style {:font-size "1.1rem"
+                    :margin "0 0 0.75rem 0"
+                    :color "#aaa"}}
+       "Entities by Type"]
+      [:div {:style {:display "flex"
+                     :gap "0.75rem"
+                     :flex-wrap "wrap"}}
+       [sort-dropdown "Type"
+        sort-type
+        [[:alpha-asc "A-Z"]
+         [:alpha-desc "Z-A"]
+         [:count-desc "Most Entities"]
+         [:count-asc "Fewest Entities"]]
+        on-sort-type]
+       [sort-dropdown "Items"
+        sort-items
+        [[:alpha-asc "A-Z"]
+         [:alpha-desc "Z-A"]
+         [:aspect-count-desc "Most Aspects"]
+         [:aspect-count-asc "Fewest Aspects"]]
+        on-sort-items]]]
+     ;; Scrollable content
+     [:div {:style {:flex 1
+                    :overflow "auto"
+                    :padding "1rem"
+                    :color "#eee"}}
+      (if (empty? entities-map)
+        [:div {:style {:color "#666"}} "No entities found"]
+        (for [[entity-type dev-id-map] entities-map]
+          ^{:key entity-type}
+          [type-section entity-type dev-id-map sort-items opts]))]]))

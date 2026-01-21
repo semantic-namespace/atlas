@@ -1,7 +1,29 @@
 (ns atlas-ui-v2.aspects-map
   "Aspects Map component - displays namespace -> aspect names hierarchy.
 
-   Click on an aspect to filter the entities map.")
+   Click on an aspect to filter the entities map."
+  (:require [atlas-ui-v2.data :as data]))
+
+(defn sort-dropdown
+  "Sort dropdown component"
+  [label current-value options on-change]
+  [:div {:style {:display "flex"
+                 :align-items "center"
+                 :gap "0.5rem"}}
+   [:label {:style {:font-size "0.75rem"
+                    :color "#999"}} label]
+   [:select {:value (name current-value)
+             :on-change #(on-change (keyword (-> % .-target .-value)))
+             :style {:padding "0.25rem 0.4rem"
+                     :background "#2a2a4a"
+                     :color "#eee"
+                     :border "1px solid #4a4a6a"
+                     :border-radius "3px"
+                     :font-size "0.75rem"
+                     :cursor "pointer"}}
+    (for [[value label-text] options]
+      ^{:key value}
+      [:option {:value (name value)} label-text])]])
 
 (defn aspect-chip
   "Render a single aspect as a clickable chip"
@@ -40,7 +62,7 @@
 
 (defn namespace-section
   "Render a namespace with its aspects"
-  [ns-key aspect-names opts]
+  [ns-key aspect-names aspect-stats-map sort-items opts]
   (let [{:keys [aspects-and aspects-or highlight-aspects filter-mode]} opts
         ;; Check if any aspect in this namespace is selected (AND or OR)
         ns-has-selection? (some (fn [a-name]
@@ -61,7 +83,9 @@
         should-hide-ns? (and (= filter-mode :hide)
                              highlight-aspects
                              (not ns-has-highlight?)
-                             (not ns-has-selection?))]
+                             (not ns-has-selection?))
+        ;; Sort aspect names according to sort-items setting
+        sorted-aspects (data/sort-aspect-names ns-key aspect-names aspect-stats-map sort-items)]
     (when-not should-hide-ns?
       [:div {:style {:margin-bottom "1rem"
                      :opacity (if dimmed-ns? 0.4 1)
@@ -78,21 +102,52 @@
                         :margin-left "0.5rem"}}
          (str "(" (count aspect-names) ")")]]
        [:div {:style {:padding-left "0.5rem"}}
-        (for [aspect-name (sort aspect-names)]
+        (for [aspect-name sorted-aspects]
           ^{:key aspect-name}
           [aspect-chip aspect-name ns-key opts])]])))
 
 (defn aspects-map-view
   "Main aspects map component"
-  [aspects-map opts]
-  [:div {:style {:padding "1rem"
-                 :color "#eee"}}
-   [:h2 {:style {:font-size "1.1rem"
-                 :margin-bottom "1rem"
-                 :color "#aaa"}}
-    "Aspects by Namespace"]
-   (if (empty? aspects-map)
-     [:div {:style {:color "#666"}} "No aspects found"]
-     (for [[ns-key aspect-names] aspects-map]
-       ^{:key ns-key}
-       [namespace-section ns-key aspect-names opts]))])
+  [aspects-data opts]
+  (let [{:keys [aspects-map aspect-stats-map sort-items]} aspects-data
+        {:keys [sort-ns on-sort-ns on-sort-items]} opts]
+    [:div {:style {:display "flex"
+                   :flex-direction "column"
+                   :height "100%"}}
+     ;; Header with sort controls
+     [:div {:style {:padding "0.75rem 1rem"
+                    :background "#1a1a2e"
+                    :border-bottom "1px solid #333"}}
+      [:h2 {:style {:font-size "1.1rem"
+                    :margin "0 0 0.75rem 0"
+                    :color "#aaa"}}
+       "Aspects by Namespace"]
+      [:div {:style {:display "flex"
+                     :gap "0.75rem"
+                     :flex-wrap "wrap"}}
+       [sort-dropdown "Namespace"
+        sort-ns
+        [[:alpha-asc "A-Z"]
+         [:alpha-desc "Z-A"]
+         [:usage-desc "Most Used"]
+         [:usage-asc "Least Used"]
+         [:count-desc "Most Aspects"]
+         [:count-asc "Fewest Aspects"]]
+        on-sort-ns]
+       [sort-dropdown "Items"
+        sort-items
+        [[:alpha-asc "A-Z"]
+         [:alpha-desc "Z-A"]
+         [:usage-desc "Most Used"]
+         [:usage-asc "Least Used"]]
+        on-sort-items]]]
+     ;; Scrollable content
+     [:div {:style {:flex 1
+                    :overflow "auto"
+                    :padding "1rem"
+                    :color "#eee"}}
+      (if (empty? aspects-map)
+        [:div {:style {:color "#666"}} "No aspects found"]
+        (for [[ns-key aspect-names] aspects-map]
+          ^{:key ns-key}
+          [namespace-section ns-key aspect-names aspect-stats-map sort-items opts]))]]))

@@ -1,6 +1,7 @@
 (ns atlas.atlas-ui.server.handler
   "Ring handler to serve Atlas registry (EDN or Transit) for the UI"
   (:require [atlas.registry :as reg]
+            [atlas.ide :as ide]
             [cognitect.transit :as transit])
   (:import (java.io ByteArrayInputStream ByteArrayOutputStream)))
 
@@ -13,9 +14,11 @@
            "Access-Control-Allow-Headers" "Content-Type, Accept"}))
 
 (defn- registry-payload [registry-atom]
-  {:atlas-ui.api.response/registry @registry-atom
-   :timestamp (System/currentTimeMillis)
-   :count (count @registry-atom)})
+  (let [registry @registry-atom]
+    {:atlas-ui.api.response/registry registry
+     :atlas-ui.api.response/aspect-stats (ide/list-aspects registry)
+     :timestamp (System/currentTimeMillis)
+     :count (count registry)}))
 
 (defn- registry-edn-handler
   "Handler that returns the current registry as EDN.

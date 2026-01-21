@@ -140,39 +140,45 @@
                                   (contains? id :atlas/experience-journey) :user-experience
                                   :else :other)}))))
 
-(defn list-aspects []
-  "List all unique aspects used in the registry."
-  (let [core-aspects #{:atlas/execution-function
-                       :atlas/structure-component
-                       :atlas/interface-endpoint
-                       :atlas/schema
-                       :atlas/data-schema
-                       :semantic-namespace.contract/instance}
-        counts (reduce (fn [acc identity]
-                         (reduce (fn [m aspect]
-                                   (if (core-aspects aspect)
-                                     m
-                                     (update m aspect (fnil inc 0))))
-                                 acc
-                                 identity))
-                       {}
-                       (keys @cid/registry))
-        ns-order {"authorization" 0
-                  "capacity" 1
-                  "compliance" 2
-                  "domain" 3
-                  "protocol" 4
-                  "semantic-namespace" 5
-                  "tier" 6
-                  "temporal" 7}]
-    (->> counts
-         (map (fn [[aspect count]]
-                {:aspect/aspect aspect
-                 :aspect/count count}))
-         (sort-by (fn [{:aspect/keys [aspect]}]
-                    (let [ns (namespace aspect)]
-                      [(get ns-order ns 100) ns (name aspect)])))
-         vec)))
+(defn list-aspects
+  "List all unique aspects used in the registry.
+
+   Args:
+     registry - (Optional) Registry map. Defaults to global registry."
+  ([]
+   (list-aspects @cid/registry))
+  ([registry]
+   (let [core-aspects #{:atlas/execution-function
+                        :atlas/structure-component
+                        :atlas/interface-endpoint
+                        :atlas/schema
+                        :atlas/data-schema
+                        :semantic-namespace.contract/instance}
+         counts (reduce (fn [acc identity]
+                          (reduce (fn [m aspect]
+                                    (if (core-aspects aspect)
+                                      m
+                                      (update m aspect (fnil inc 0))))
+                                  acc
+                                  identity))
+                        {}
+                        (keys registry))
+         ns-order {"authorization" 0
+                   "capacity" 1
+                   "compliance" 2
+                   "domain" 3
+                   "protocol" 4
+                   "semantic-namespace" 5
+                   "tier" 6
+                   "temporal" 7}]
+     (->> counts
+          (map (fn [[aspect count]]
+                 {:aspect/aspect aspect
+                  :aspect/count count}))
+          (sort-by (fn [{:aspect/keys [aspect]}]
+                     (let [ns (namespace aspect)]
+                       [(get ns-order ns 100) ns (name aspect)])))
+          vec))))
 
 (defn entities-with-aspect [aspect]
   "Find all entities with given aspect."

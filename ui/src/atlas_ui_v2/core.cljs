@@ -20,6 +20,7 @@
 
 (defonce app-state
   (r/atom {:registry nil
+           :aspect-stats nil          ; Aspect usage stats from backend
            :loading? true
            :error nil
            ;; Selection state for bidirectional filtering (all sets for multi-select)
@@ -28,23 +29,52 @@
            :selected-types #{}        ; Set of selected entity types
            :selected-entities #{}     ; Set of selected dev-ids
            ;; Filter mode
-           :filter-mode :hide})) ; :highlight or :hide
+           :filter-mode :hide         ; :highlight or :hide
+           ;; Sort options
+           :sort-aspects-ns :alpha-asc        ; Namespace level sort
+           :sort-aspects-items :alpha-asc     ; Aspect names sort
+           :sort-entities-type :alpha-asc     ; Entity type level sort
+           :sort-entities-items :alpha-asc})) ; Dev-ids sort
 
 ;; =============================================================================
 ;; Derived Data (computed from registry)
 ;; =============================================================================
 
 (defn aspects-map-data
-  "Build aspects map: namespace -> #{aspect-names}"
-  [registry]
-  (when registry
-    (data/build-aspects-map registry)))
+  "Build and sort aspects map: namespace -> #{aspect-names}"
+  [registry aspect-stats sort-ns sort-items]
+  (when (and registry aspect-stats)
+    (let [aspect-stats-map (data/aspect-stats->map aspect-stats)
+          _ (js/console.log "aspect-stats-map size:" (count aspect-stats-map)
+                           "first 3:" (clj->js (take 3 aspect-stats-map)))
+          aspects-map (data/build-aspects-map registry)
+          sorted-map (data/sort-aspects-map aspects-map aspect-stats-map sort-ns)
+          ;; Convert to vector to ensure order is preserved in React rendering
+          aspects-vec (vec sorted-map)
+          first-3-keys (vec (take 3 (keys sorted-map)))]
+      (js/console.log "aspects-map-data - sort-ns:" (name sort-ns)
+                      "sort-items:" (name sort-items)
+                      "namespaces:" (count sorted-map)
+                      "first 3:" (clj->js first-3-keys))
+      {:aspects-map aspects-vec
+       :aspect-stats-map aspect-stats-map
+       :sort-items sort-items})))
 
 (defn entities-map-data
-  "Build entities map: type -> {dev-id -> identity}"
-  [registry]
+  "Build and sort entities map: type -> {dev-id -> identity}"
+  [registry sort-type sort-items]
   (when registry
-    (data/build-entities-map registry)))
+    (let [entities-map (data/build-entities-map registry)
+          sorted-map (data/sort-entities-map entities-map sort-type)
+          ;; Convert to vector to ensure order is preserved in React rendering
+          entities-vec (vec sorted-map)
+          all-keys (vec (keys sorted-map))]
+      (js/console.log "entities-map-data - sort-type:" (name sort-type)
+                      "sort-items:" (name sort-items)
+                      "types:" (count sorted-map)
+                      "order:" (clj->js all-keys))
+      {:entities-map entities-vec
+       :sort-items sort-items})))
 
 ;; =============================================================================
 ;; Selection Handlers
@@ -105,6 +135,12 @@
   (swap! app-state update :filter-mode
          (fn [mode]
            (if (= mode :highlight) :hide :highlight))))
+
+(defn set-sort!
+  "Set sort option for a specific level"
+  [key value]
+  (js/console.log "Setting sort:" (name key) "->" (name value))
+  (swap! app-state assoc key value))
 
 ;; =============================================================================
 ;; Filter Logic
@@ -235,10 +271,86 @@
     [:h2 "Error loading registry"]
     [:pre (pr-str error)]]])
 
+(defn sort-dropdown
+  "Sort dropdown component"
+  [label current-value options on-change]
+  [:div {:style {:display "flex"
+                 :align-items "center"
+                 :gap "0.5rem"}}
+   [:label {:style {:font-size "0.8rem"
+                    :color "#aaa"}} label]
+   [:select {:value (name current-value)
+             :on-change #(on-change (keyword (-> % .-target .-value)))
+             :style {:padding "0.3rem"
+                     :background "#2a2a4a"
+                     :color "#eee"
+                     :border "1px solid #4a4a6a"
+                     :border-radius "4px"
+                     :font-size "0.8rem"
+                     :cursor "pointer"}}
+    (for [[value label-text] options]
+      ^{:key value}
+      [:option {:value (name value)} label-text])]])
+
+(defn sort-controls []
+  (let [{:keys [sort-aspects-ns sort-aspects-items
+                sort-entities-type sort-entities-items]} @app-state]
+    [:div {:style {:padding "0.5rem 1rem"
+                   :background "#1a1a2e"
+                   :border-bottom "1px solid #333"
+                   :display "flex"
+                   :gap "2rem"
+                   :flex-wrap "wrap"}}
+     [:div {:style {:display "flex"
+                    :gap "1rem"
+                    :align-items "center"}}
+      [:span {:style {:color "#8a8aaa"
+                      :font-size "0.85rem"
+                      :font-weight "bold"}}
+       "Aspects Sort:"]
+      [sort-dropdown "Namespace"
+       sort-aspects-ns
+       [[:alpha-asc "A-Z"]
+        [:alpha-desc "Z-A"]
+        [:usage-desc "Most Used"]
+        [:usage-asc "Least Used"]
+        [:count-desc "Most Aspects"]
+        [:count-asc "Fewest Aspects"]]
+       #(set-sort! :sort-aspects-ns %)]
+      [sort-dropdown "Items"
+       sort-aspects-items
+       [[:alpha-asc "A-Z"]
+        [:alpha-desc "Z-A"]
+        [:usage-desc "Most Used"]
+        [:usage-asc "Least Used"]]
+       #(set-sort! :sort-aspects-items %)]]
+     [:div {:style {:display "flex"
+                    :gap "1rem"
+                    :align-items "center"}}
+      [:span {:style {:color "#8a8aaa"
+                      :font-size "0.85rem"
+                      :font-weight "bold"}}
+       "Entities Sort:"]
+      [sort-dropdown "Type"
+       sort-entities-type
+       [[:alpha-asc "A-Z"]
+        [:alpha-desc "Z-A"]
+        [:count-desc "Most Entities"]
+        [:count-asc "Fewest Entities"]]
+       #(set-sort! :sort-entities-type %)]
+      [sort-dropdown "Items"
+       sort-entities-items
+       [[:alpha-asc "A-Z"]
+        [:alpha-desc "Z-A"]
+        [:aspect-count-desc "Most Aspects"]
+        [:aspect-count-asc "Fewest Aspects"]]
+       #(set-sort! :sort-entities-items %)]]]))
+
 (defn main-view []
-  (let [{:keys [registry aspects-and aspects-or selected-types selected-entities filter-mode]} @app-state
-        aspects-data (aspects-map-data registry)
-        entities-data (entities-map-data registry)
+  (let [{:keys [registry aspect-stats aspects-and aspects-or selected-types selected-entities filter-mode
+                sort-aspects-ns sort-aspects-items sort-entities-type sort-entities-items]} @app-state
+        aspects-data (aspects-map-data registry aspect-stats sort-aspects-ns sort-aspects-items)
+        entities-data (entities-map-data registry sort-entities-type sort-entities-items)
         ;; Compute what to highlight/hide based on selections
         ;; Aspects -> highlight matching entities
         highlight-entities (when (or (seq aspects-and) (seq aspects-or))
@@ -267,7 +379,11 @@
          :aspects-or aspects-or
          :highlight-aspects highlight-aspects
          :filter-mode filter-mode
-         :on-click cycle-aspect!}]]
+         :on-click cycle-aspect!
+         :sort-ns sort-aspects-ns
+         :sort-items sort-aspects-items
+         :on-sort-ns #(set-sort! :sort-aspects-ns %)
+         :on-sort-items #(set-sort! :sort-aspects-items %)}]]
       ;; Entities Map (right panel)
       [:div {:style {:flex 1
                      :overflow "auto"}}
@@ -278,7 +394,11 @@
          :highlight-entities highlight-entities
          :filter-mode filter-mode
          :on-type-click toggle-type!
-         :on-entity-click toggle-entity!}]]]]))
+         :on-entity-click toggle-entity!
+         :sort-type sort-entities-type
+         :sort-items sort-entities-items
+         :on-sort-type #(set-sort! :sort-entities-type %)
+         :on-sort-items #(set-sort! :sort-entities-items %)}]]]]))
 
 (defn app []
   (let [{:keys [loading? error registry]} @app-state]
@@ -293,10 +413,15 @@
 ;; =============================================================================
 
 (defn on-registry-loaded [data]
-  (let [registry (or (:atlas-ui.api.response/registry data)
-                     data)]
+  (let [registry (or (:atlas-ui.api.response/registry data) data)
+        aspect-stats (or (:atlas-ui.api.response/aspect-stats data) [])]
+    (js/console.log "Registry loaded - entities:" (count registry)
+                    "aspect-stats:" (count aspect-stats))
+    (when (> (count aspect-stats) 0)
+      (js/console.log "First aspect-stat:" (first aspect-stats)))
     (swap! app-state assoc
            :registry registry
+           :aspect-stats aspect-stats
            :loading? false
            :error nil)))
 

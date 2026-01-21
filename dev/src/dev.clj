@@ -20,7 +20,8 @@
 ;;  (ontology/register-entity-types!)
   
   ;; Initialize example calendar-availability registry
-  (cart-app/init-registry!)
+;;  (cart-app/init-registry!)
+  (calendar-app/init-registry!)
 
   ;; Start Atlas UI
   (ui/start! registry/registry {:port 8082 :ui-version :v2})
