@@ -4,6 +4,7 @@
             [atlas.invariant.datalog :as invariant.datalog]
             [atlas.datalog :as datalog]
             [atlas.cljc.platform :as platform]
+            [atlas.registry.lookup :as entity]
             [datascript.core :as d]))
 
 ;; =============================================================================
@@ -116,11 +117,16 @@
   (compiled-fn entity-id))
 
 (defn check-invariant-datalog
-  "Check single invariant using Datalog backend."
+  "Check single invariant using Datalog backend.
+
+   Filters out ontology meta-entities (marked with :atlas/ontology) as they
+   are not business logic."
   [{:keys [invariant/id invariant/level invariant/doc compiled/when compiled/assert]} db]
-  (let [all-entities (d/q '[:find [?dev-id ...]
-                            :where [?e :atlas/dev-id ?dev-id]]
-                          db)
+  (let [;; Get all entities but exclude ontology meta-entities
+        all-entities (->> (d/q '[:find [?dev-id ...]
+                                 :where [?e :atlas/dev-id ?dev-id]]
+                               db)
+                          (remove #(entity/has-aspect? % :atlas/ontology)))
         message doc
         violations (for [entity-id all-entities
                          :when (eval-predicate-datalog when entity-id)

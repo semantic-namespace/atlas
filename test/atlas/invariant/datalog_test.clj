@@ -6,13 +6,26 @@
    [atlas.invariant.dsl.datalog :as invariant.dsl.datalog]
    [atlas.invariant.dsl.operators :as dsl.operators]
    [atlas.invariant.unified :as invariant.unified]
-   [atlas.registry :as registry]))
+   [atlas.registry :as registry]
+   [atlas.ontology.execution-function :as ef]
+   [atlas.ontology.interface-endpoint :as ie]
+   [atlas.ontology.interface-protocol :as ip]
+   [datascript.core :as d]))
 
 (use-fixtures :each
   (fn [f]
     (reset! registry/registry {})
+    (graph.datalog/reset-extensions!)
+    ;; Load ontologies for each test
+    (ef/reset-loaded-state!)
+    (ie/reset-loaded-state!)
+    (ip/reset-loaded-state!)
+    (ef/load!)
+    (ie/load!)
+    (ip/load!)
     (f)
-    (reset! registry/registry {})))
+    (reset! registry/registry {})
+    (graph.datalog/reset-extensions!)))
 
 ;; =============================================================================
 ;; TEST DATA FIXTURES
@@ -148,6 +161,7 @@
    #{ :tier/api}
    {:atlas/dev-id :endpoint/auth
     :interface-endpoint/context [:user/credentials]
+    :interface-endpoint/response [:auth/token]
     :execution-function/deps #{:fn/oauth-handler}})
 
   (registry/register!
@@ -575,3 +589,116 @@
              (count (:violations fn-result))))
       (is (= (set (map :entity (:violations dsl-result)))
              (set (map :entity (:violations fn-result))))))))
+
+;; =============================================================================
+;; EXTENSIBLE DATALOG TESTS
+;; =============================================================================
+
+(deftest extensible-datalog-integration
+  (testing "ontologies register their fact extractors"
+    (is (>= (count @graph.datalog/fact-extractors) 3)
+        "Should have at least 3 extractors (ef, ie, ip)"))
+
+  (testing "ontologies register their schemas"
+    (let [schema (graph.datalog/build-schema)]
+      (is (contains? schema :entity/depends) "execution-function schema")
+      (is (contains? schema :entity/consumes) "execution-function schema")
+      (is (contains? schema :entity/produces) "execution-function schema")
+      (is (contains? schema :endpoint-context) "interface-endpoint schema")
+      (is (contains? schema :endpoint-response) "interface-endpoint schema")
+      (is (contains? schema :protocol/function) "interface-protocol schema")))
+
+  (testing "core schema is present"
+    (let [schema (graph.datalog/build-schema)]
+      (is (contains? schema :atlas/dev-id) "core schema")
+      (is (contains? schema :entity/aspect) "core schema")
+      (is (contains? schema :dataflow/external-input) "core dataflow markers")
+      (is (contains? schema :dataflow/display-output) "core dataflow markers"))))
+
+(deftest extensible-datalog-fact-extraction
+  (seed-oauth-registry!)
+
+  (testing "execution-function facts are extracted"
+    (let [facts (graph.datalog/registry-facts)
+          depends-facts (filter #(= :entity/depends (nth % 2)) facts)
+          consumes-facts (filter #(= :entity/consumes (nth % 2)) facts)
+          produces-facts (filter #(= :entity/produces (nth % 2)) facts)]
+      (is (pos? (count depends-facts)) "Should extract dependency facts")
+      (is (pos? (count consumes-facts)) "Should extract context facts")
+      (is (pos? (count produces-facts)) "Should extract response facts")))
+
+  (testing "interface-endpoint facts are extracted"
+    (let [facts (graph.datalog/registry-facts)
+          endpoint-context-facts (filter #(= :endpoint-context (nth % 2)) facts)
+          endpoint-response-facts (filter #(= :endpoint-response (nth % 2)) facts)]
+      (is (pos? (count endpoint-context-facts)) "Should extract endpoint context facts")
+      (is (pos? (count endpoint-response-facts)) "Should extract endpoint response facts")))
+
+  (testing "core aspects are extracted"
+    (let [facts (graph.datalog/registry-facts)
+          aspect-facts (filter #(= :entity/aspect (nth % 2)) facts)]
+      (is (pos? (count aspect-facts)) "Should extract aspect facts"))))
+
+(deftest extensible-datalog-queries-work
+  (seed-oauth-registry!)
+  (let [db (graph.datalog/create-db)]
+    (testing "can query dependencies extracted by ontology"
+      (let [deps (graph.datalog/query-dependencies db :fn/oauth-handler)]
+        (is (= #{:component/oauth} (set deps)))))
+
+    (testing "can query context extracted by ontology"
+      (let [ctx (graph.datalog/query-consumes db :fn/oauth-handler)]
+        (is (= #{:user/credentials} (set ctx)))))
+
+    (testing "can query response extracted by ontology"
+      (let [resp (graph.datalog/query-produces db :fn/oauth-handler)]
+        (is (= #{:auth/token} (set resp)))))
+
+    (testing "can query endpoint context"
+      (let [endpoint-ctx (graph.datalog/query-endpoint-inputs db)]
+        (is (contains? (set endpoint-ctx) :user/credentials))))))
+
+(deftest custom-ontology-extensibility
+  (testing "custom ontology can register extractor"
+    ;; Reset to clean state
+    (graph.datalog/reset-extensions!)
+    (ef/reset-loaded-state!)
+    (ie/reset-loaded-state!)
+    (ip/reset-loaded-state!)
+    (ef/load!)
+    (ie/load!)
+    (ip/load!)
+
+    (let [initial-count (count @graph.datalog/fact-extractors)]
+      ;; Register a custom extractor
+      (graph.datalog/register-fact-extractor!
+       (fn [compound-id props]
+         (when (contains? compound-id :test/custom-entity)
+           (let [dev-id (:atlas/dev-id props)]
+             (when-let [owner (:custom/owner props)]
+               [[:db/add dev-id :custom/owner owner]])))))
+
+      ;; Register custom schema
+      (graph.datalog/register-schema! {:custom/owner {}})
+
+      (is (= (inc initial-count) (count @graph.datalog/fact-extractors))
+          "Extractor should be registered")
+
+      (is (contains? (graph.datalog/build-schema) :custom/owner)
+          "Custom schema should be included")
+
+      ;; Register entity with custom property
+      (registry/register!
+       :entity/custom
+       :test/custom-entity
+       #{:domain/test}
+       {:custom/owner :team/test})
+
+      ;; Verify facts are extracted
+      (let [db (graph.datalog/create-db)
+            result (d/q '[:find ?owner
+                          :where
+                          [?e :atlas/dev-id :entity/custom]
+                          [?e :custom/owner ?owner]]
+                        db)]
+        (is (= #{[:team/test]} result) "Custom property should be queryable")))))

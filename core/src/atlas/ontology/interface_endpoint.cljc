@@ -17,6 +17,7 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.invariant :as invariant]
+            [atlas.datalog :as datalog]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -32,6 +33,64 @@
    :dataflow/context-key :interface-endpoint/context
    :dataflow/response-key :interface-endpoint/response
    :dataflow/deps-key :interface-endpoint/deps})
+
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
+
+(defn extract-facts
+  "Extract Datascript facts from interface-endpoint properties.
+   Called by atlas.datalog when building database.
+
+   For backward compatibility, also accepts execution-function property names
+   (:execution-function/context, :execution-function/response, :execution-function/deps)."
+  [compound-id props]
+  (when (contains? compound-id :atlas/interface-endpoint)
+    (let [dev-id (:atlas/dev-id props)
+          ;; Accept both interface-endpoint and execution-function property names
+          ;; for backward compatibility
+          context-keys (or (:interface-endpoint/context props)
+                           (:execution-function/context props))
+          response-keys (or (:interface-endpoint/response props)
+                            (:execution-function/response props))
+          deps (or (:interface-endpoint/deps props)
+                   (:execution-function/deps props))
+          facts []]
+      (cond-> facts
+        ;; Context (consumed keys) - generic
+        context-keys
+        (concat (map (fn [ctx]
+                       [:db/add dev-id :entity/consumes ctx])
+                     context-keys))
+
+        ;; Response (produced keys) - generic
+        response-keys
+        (concat (map (fn [resp]
+                       [:db/add dev-id :entity/produces resp])
+                     response-keys))
+
+        ;; Endpoint-specific context (for invariant checking)
+        context-keys
+        (concat (map (fn [ctx]
+                       [:db/add dev-id :endpoint-context ctx])
+                     context-keys))
+
+        ;; Endpoint-specific response (for invariant checking)
+        response-keys
+        (concat (map (fn [resp]
+                       [:db/add dev-id :endpoint-response resp])
+                     response-keys))
+
+        ;; Dependencies (endpoints can also have deps)
+        deps
+        (concat (map (fn [dep]
+                       [:db/add dev-id :entity/depends dep])
+                     deps))))))
+
+(def datalog-schema
+  "Datascript schema for interface-endpoint properties."
+  {:endpoint-context {:db/cardinality :db.cardinality/many}
+   :endpoint-response {:db/cardinality :db.cardinality/many}})
 
 ;; =============================================================================
 ;; INVARIANTS - Interface-endpoint specific rules
@@ -58,10 +117,16 @@
    Unreachable functions are dead code.
 
    Note: This makes explicit that interface-endpoint depends on
-   execution-function in the ontology module hierarchy."
+   execution-function in the ontology module hierarchy.
+
+   Filters out ontology meta-entities (marked with :atlas/ontology) as they
+   are not business logic."
   []
   (let [endpoints (entity/all-with-aspect :atlas/interface-endpoint)
-        all-fns (set (entity/all-with-aspect :atlas/execution-function))
+        ;; Get all execution-functions but exclude ontology meta-entities
+        all-fns (->> (entity/all-with-aspect :atlas/execution-function)
+                     (remove #(entity/has-aspect? % :atlas/ontology))
+                     set)
         ;; Find reachable via BFS from endpoints
         reachable (atom #{})
         collect-reachable (fn collect [id]
@@ -103,6 +168,12 @@
   (doseq [inv invariants]
     (invariant/register-ontology-invariant! inv)))
 
+(defn- register-datalog!
+  "Register datalog extensions for interface-endpoint properties."
+  []
+  (datalog/register-fact-extractor! extract-facts)
+  (datalog/register-schema! datalog-schema))
+
 (defonce ^:private loaded? (atom false))
 
 (defn load!
@@ -118,6 +189,7 @@
   (when-not @loaded?
     (register-ontology!)
     (register-invariants!)
+    (register-datalog!)
     (reset! loaded? true))
   :loaded)
 

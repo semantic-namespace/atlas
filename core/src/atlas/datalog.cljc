@@ -1,78 +1,112 @@
 (ns atlas.datalog
   "Datascript/Datalog backend for invariant checking."
   (:require [datascript.core :as d]
-            [atlas.registry :as registry]))
+            [atlas.registry :as registry]
+            [atlas.registry.lookup :as entity]))
+
+;; =============================================================================
+;; EXTENSION REGISTRY
+;; =============================================================================
+
+(defonce fact-extractors
+  (atom []))
+
+(defonce schema-contributions
+  (atom {}))
+
+(defn register-fact-extractor!
+  "Register a fact extractor function for custom properties.
+
+   extractor-fn: (fn [compound-id props] => [[op dev-id attr value] ...])
+
+   The extractor should return a sequence of Datascript transaction ops.
+   Return empty collection if the entity doesn't apply to this extractor."
+  [extractor-fn]
+  (swap! fact-extractors conj extractor-fn))
+
+(defn register-schema!
+  "Register schema attributes for custom properties.
+
+   schema-map: Datascript schema map
+
+   Example:
+   {:my-ontology/property {:db/cardinality :db.cardinality/many}}"
+  [schema-map]
+  (swap! schema-contributions merge schema-map))
+
+(defn reset-extensions!
+  "Reset all extensions (useful for testing)."
+  []
+  (reset! fact-extractors [])
+  (reset! schema-contributions {}))
 
 ;; =============================================================================
 ;; FACT GENERATION
 ;; =============================================================================
 
-(defn registry-facts
-  "Convert registry into Datascript facts.
-   Returns vector of facts: [entity-id attribute value]"
+(defn core-registry-facts
+  "Extract core Atlas facts (always included).
+   These are universal facts that apply to all entities."
   []
   (let [facts (atom [])]
     (doseq [[compound-id props] @registry/registry
             :let [dev-id (:atlas/dev-id props)]]
-      ;; Entity existence
       (when dev-id
+        ;; Entity existence
         (swap! facts conj [:db/add dev-id :atlas/dev-id dev-id])
 
-        ;; Aspects (each aspect becomes a fact)
+        ;; Aspects (universal - all entities have aspects)
         (doseq [aspect compound-id]
           (swap! facts conj [:db/add dev-id :entity/aspect aspect]))
 
-        ;; Dependencies
-        (doseq [dep (:execution-function/deps props)]
-          (swap! facts conj [:db/add dev-id :entity/depends dep]))
-
-        ;; Context (consumed keys)
-        (doseq [ctx (or (:interface-endpoint/context props)
-                        (:execution-function/context props))]
-          (swap! facts conj [:db/add dev-id :entity/consumes ctx]))
-
-        ;; Response (produced keys)
-        (doseq [resp (or (:interface-endpoint/response props)
-                         (:execution-function/response props))]
-          (swap! facts conj [:db/add dev-id :entity/produces resp]))
-
-        ;; Endpoint context (special case)
-        (when (contains? compound-id :atlas/interface-endpoint)
-          (doseq [ctx (:interface-endpoint/context props)]
-            (swap! facts conj [:db/add dev-id :endpoint-context ctx]))
-          (doseq [resp (:interface-endpoint/response props)]
-            (swap! facts conj [:db/add dev-id :endpoint-response resp])))
-
-        ;; Dataflow terminal markers
+        ;; Dataflow terminal markers (core markers)
         (when (contains? compound-id :dataflow/external-input)
           (swap! facts conj [:db/add dev-id :dataflow/external-input dev-id]))
         (when (contains? compound-id :dataflow/display-output)
-          (swap! facts conj [:db/add dev-id :dataflow/display-output dev-id]))
+          (swap! facts conj [:db/add dev-id :dataflow/display-output dev-id]))))
+    @facts))
 
-        ;; Protocol functions (for protocol entities)
-        (when (contains? compound-id :atlas/interface-protocol)
-          (doseq [protocol-fn (:interface-protocol/functions props)]
-            (swap! facts conj [:db/add dev-id :protocol/function protocol-fn])))))
-    @facts)
+(defn custom-registry-facts
+  "Extract facts using registered extractors.
+   Calls all registered fact extractors and collects their results."
+  []
+  (let [facts (atom [])]
+    (doseq [[compound-id props] @registry/registry
+            extractor @fact-extractors]
+      (when-let [extracted (seq (extractor compound-id props))]
+        (swap! facts concat extracted)))
+    @facts))
 
-  )
+(defn registry-facts
+  "Convert registry into Datascript facts (core + custom).
+   Returns vector of facts: [:db/add entity-id attribute value]"
+  []
+  (concat (core-registry-facts)
+          (custom-registry-facts)))
+
+(defn core-schema
+  "Core Atlas schema (always included).
+   These attributes are fundamental to all Atlas entities."
+  []
+  {:atlas/dev-id {:db/unique :db.unique/identity}
+   :entity/aspect {:db/cardinality :db.cardinality/many}
+   ;; Dataflow markers (core markers for terminal nodes)
+   :dataflow/external-input {:db/cardinality :db.cardinality/many}
+   :dataflow/display-output {:db/cardinality :db.cardinality/many}})
+
+(defn build-schema
+  "Build complete schema (core + contributions from ontologies)."
+  []
+  (merge (core-schema)
+         @schema-contributions))
 
 (defn create-db
-  "Create Datascript database with schema and facts."
+  "Create Datascript database with extensible schema and facts."
   []
-  (let [schema {:atlas/dev-id {:db/unique :db.unique/identity}
-                :entity/aspect {:db/cardinality :db.cardinality/many}
-                :entity/depends {:db/cardinality :db.cardinality/many}
-                :entity/consumes {:db/cardinality :db.cardinality/many}
-                :entity/produces {:db/cardinality :db.cardinality/many}
-                :endpoint-context {:db/cardinality :db.cardinality/many}
-                :endpoint-response {:db/cardinality :db.cardinality/many}
-                :dataflow/external-input {:db/cardinality :db.cardinality/many}
-                :dataflow/display-output {:db/cardinality :db.cardinality/many}
-                :protocol/function {:db/cardinality :db.cardinality/many}}
+  (let [schema (build-schema)
         conn (d/create-conn schema)
         facts (registry-facts)]
-    ;; First pass: create all entities with their :dev/id
+    ;; First pass: create all entities with their :atlas/dev-id
     (let [dev-ids (distinct (map #(nth % 1) facts))]
       (d/transact! conn (mapv (fn [dev-id] {:atlas/dev-id dev-id}) dev-ids)))
     ;; Second pass: add all attributes using lookup refs
@@ -241,10 +275,16 @@
       (some #(has-cycle? % #{} []) all-entities))))
 
 (defn query-unreachable-functions
-  "Find functions not reachable from any endpoint."
+  "Find functions not reachable from any endpoint.
+
+   Filters out ontology meta-entities (marked with :atlas/ontology) as they
+   are not business logic."
   [db]
   (let [endpoints (query-entities-with-aspect db :atlas/interface-endpoint)
-        all-fns (set (query-entities-with-aspect db :atlas/execution-function))
+        ;; Get all execution-functions but exclude ontology meta-entities
+        all-fns (->> (query-entities-with-aspect db :atlas/execution-function)
+                     (remove #(entity/has-aspect? % :atlas/ontology))
+                     set)
         reachable (atom #{})
         collect-reachable (fn collect [id]
                             (when-not (@reachable id)
@@ -461,11 +501,21 @@
                   where-clauses))))
 
 (defn run-logic-query
-  "Helper that compiles and runs a DSL query against the live registry."
+  "Helper that compiles and runs a DSL query against the live registry.
+
+   Automatically filters out ontology meta-entities (marked with :atlas/ontology)
+   from results, as most business logic queries should only operate on application
+   entities."
   [dsl]
   (let [query (compile-logic-query dsl)
-        db (create-db)]
-    (d/q query db)))
+        db (create-db)
+        results (d/q query db)]
+    ;; Filter out ontology meta-entities from results
+    (if (and (sequential? results) (every? keyword? results))
+      ;; Vector of keywords - filter ontologies
+      (vec (remove #(entity/has-aspect? % :atlas/ontology) results))
+      ;; Other result format - return as is
+      results)))
 
 
 

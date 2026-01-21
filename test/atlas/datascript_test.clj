@@ -1,13 +1,25 @@
 (ns atlas.datascript-test
   (:require [clojure.test :refer [deftest is use-fixtures testing]]
             [atlas.registry :as cid]
-            [atlas.datalog :as sut]))
+            [atlas.datalog :as sut]
+            [atlas.ontology.execution-function :as ef]
+            [atlas.ontology.interface-endpoint :as ie]
+            [atlas.ontology.interface-protocol :as ip]))
 
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
+    (sut/reset-extensions!)
+    ;; Load ontologies
+    (ef/reset-loaded-state!)
+    (ie/reset-loaded-state!)
+    (ip/reset-loaded-state!)
+    (ef/load!)
+    (ie/load!)
+    (ip/load!)
     (f)
-    (reset! cid/registry {})))
+    (reset! cid/registry {})
+    (sut/reset-extensions!)))
 
 (defn- seed-registry! []
   ;; Endpoint exposing one context key

@@ -18,7 +18,8 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.query :as query]
-            [atlas.invariant :as invariant]))
+            [atlas.invariant :as invariant]
+            [atlas.datalog :as datalog]))
 
 ;; =============================================================================
 ;; ONTOLOGY DEFINITION
@@ -78,6 +79,52 @@
     auth-required? (conj :authorization/required)
     rate-limited? (conj :capacity/rate-limited)
     pii? (conj :compliance/pii :compliance/audited)))
+
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
+
+(defn extract-facts
+  "Extract Datascript facts from execution-function properties.
+   Called by atlas.datalog when building database.
+
+   For backward compatibility, also accepts interface-endpoint property names
+   (:interface-endpoint/context, :interface-endpoint/response) on execution-functions."
+  [compound-id props]
+  (when (contains? compound-id :atlas/execution-function)
+    (let [dev-id (:atlas/dev-id props)
+          ;; Accept both execution-function and interface-endpoint property names
+          ;; for backward compatibility
+          context-keys (or (:execution-function/context props)
+                           (:interface-endpoint/context props))
+          response-keys (or (:execution-function/response props)
+                            (:interface-endpoint/response props))
+          deps (:execution-function/deps props)
+          facts []]
+      (cond-> facts
+        ;; Dependencies
+        deps
+        (concat (map (fn [dep]
+                       [:db/add dev-id :entity/depends dep])
+                     deps))
+
+        ;; Context (consumed keys)
+        context-keys
+        (concat (map (fn [ctx]
+                       [:db/add dev-id :entity/consumes ctx])
+                     context-keys))
+
+        ;; Response (produced keys)
+        response-keys
+        (concat (map (fn [resp]
+                       [:db/add dev-id :entity/produces resp])
+                     response-keys))))))
+
+(def datalog-schema
+  "Datascript schema for execution-function properties."
+  {:entity/depends {:db/cardinality :db.cardinality/many}
+   :entity/consumes {:db/cardinality :db.cardinality/many}
+   :entity/produces {:db/cardinality :db.cardinality/many}})
 
 ;; =============================================================================
 ;; INVARIANTS - Execution-function specific rules
@@ -168,6 +215,12 @@
   (doseq [inv invariants]
     (invariant/register-ontology-invariant! inv)))
 
+(defn- register-datalog!
+  "Register datalog extensions for execution-function properties."
+  []
+  (datalog/register-fact-extractor! extract-facts)
+  (datalog/register-schema! datalog-schema))
+
 (defonce ^:private loaded? (atom false))
 
 (defn load!
@@ -184,6 +237,7 @@
   (when-not @loaded?
     (register-ontology!)
     (register-invariants!)
+    (register-datalog!)
     (reset! loaded? true))
   :loaded)
 
