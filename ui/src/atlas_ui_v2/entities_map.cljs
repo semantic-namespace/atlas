@@ -27,7 +27,7 @@
 
 (defn identity-aspects
   "Render the sorted compound identity aspects (excluding atlas entity type)"
-  [identity]
+  [identity text-color]
   (let [;; Filter out the atlas entity type and sort the remaining aspects
         aspects (->> identity
                      (filter keyword?)
@@ -35,7 +35,7 @@
                      sort
                      vec)]
     [:span {:style {:font-size "0.7rem"
-                    :color "#666"
+                    :color text-color
                     :font-family "monospace"}}
      (str aspects)]))
 
@@ -49,7 +49,13 @@
                           (= filter-mode :hide))
         dimmed? (and highlight-entities
                      (not highlighted?)
-                     (= filter-mode :highlight))]
+                     (= filter-mode :highlight))
+        ;; Determine text color for compound identity based on background
+        identity-text-color (cond
+                              selected? "#cce5ff"      ; Light blue for selected (blue bg)
+                              highlighted? "#a8e6c1"   ; Light green for highlighted (green bg)
+                              dimmed? "#444"           ; Dark for dimmed
+                              :else "#888")]           ; Medium grey for default
     (when-not should-hide?
       [:div {:on-click #(on-entity-click dev-id)
              :style {:padding "0.3rem 0.5rem"
@@ -74,7 +80,7 @@
                      :align-items "center"}}
        [:span {:style {:font-size "0.85rem"}}
         (str dev-id)]
-       [identity-aspects identity]])))
+       [identity-aspects identity identity-text-color]])))
 
 (defn type-section
   "Render an entity type with its entities"
