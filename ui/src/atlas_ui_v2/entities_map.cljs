@@ -25,21 +25,19 @@
       ^{:key value}
       [:option {:value (name value)} label-text])]])
 
-(defn identity-preview
-  "Render a compact preview of a compound identity"
+(defn identity-aspects
+  "Render the sorted compound identity aspects (excluding atlas entity type)"
   [identity]
-  (let [;; Group aspects by namespace for compact display
-        by-ns (->> identity
-                   (filter keyword?)
-                   (group-by namespace))]
+  (let [;; Filter out the atlas entity type and sort the remaining aspects
+        aspects (->> identity
+                     (filter keyword?)
+                     (remove #(= "atlas" (namespace %)))
+                     sort
+                     vec)]
     [:span {:style {:font-size "0.7rem"
-                    :color "#666"}}
-     (for [[ns-name aspects] (take 3 (sort by-ns))]
-       ^{:key ns-name}
-       [:span {:style {:margin-right "0.3rem"}}
-        (str ns-name ":" (count aspects))])
-     (when (> (count by-ns) 3)
-       [:span "..."])]))
+                    :color "#666"
+                    :font-family "monospace"}}
+     (str aspects)]))
 
 (defn entity-row
   "Render a single entity as a clickable row"
@@ -76,7 +74,7 @@
                      :align-items "center"}}
        [:span {:style {:font-size "0.85rem"}}
         (str dev-id)]
-       [identity-preview identity]])))
+       [identity-aspects identity]])))
 
 (defn type-section
   "Render an entity type with its entities"

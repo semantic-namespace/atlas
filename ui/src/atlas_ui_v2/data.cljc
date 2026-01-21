@@ -80,6 +80,16 @@
 ;; STATS
 ;; =============================================================================
 
+(defn count-entities-by-aspect
+  "Count how many entities have each aspect.
+   Returns map of {aspect-keyword -> count}"
+  [registry]
+  (->> registry
+       keys  ; Get all compound identities
+       (mapcat identity)  ; Flatten to individual aspects
+       (filter keyword?)  ; Only keywords
+       frequencies))  ; Count occurrences
+
 (defn stats
   "Compute statistics about the registry"
   [registry]

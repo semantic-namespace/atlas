@@ -27,14 +27,15 @@
 
 (defn aspect-chip
   "Render a single aspect as a clickable chip"
-  [aspect-name ns-key {:keys [aspects-and aspects-or highlight-aspects filter-mode on-click]}]
+  [aspect-name ns-key {:keys [aspects-and aspects-or highlight-aspects filter-mode on-click entity-counts]}]
   (let [full-aspect (keyword (name ns-key) (name aspect-name))
         in-and? (contains? aspects-and full-aspect)
         in-or? (contains? aspects-or full-aspect)
         highlighted? (and highlight-aspects (contains? highlight-aspects full-aspect))
         dimmed? (and highlight-aspects
                      (not highlighted?)
-                     (= filter-mode :highlight))]
+                     (= filter-mode :highlight))
+        entity-count (get entity-counts full-aspect 0)]
     [:span {:on-click #(on-click full-aspect)
             :style {:display "inline-block"
                     :padding "0.25rem 0.5rem"
@@ -58,11 +59,12 @@
                               in-or? "1px solid #6aff9a"
                               :else "1px solid #3a3a5a")
                     :transition "all 0.2s ease"}}
-     (name aspect-name)]))
+     (str (name aspect-name) " (" entity-count ")")]))
+
 
 (defn namespace-section
   "Render a namespace with its aspects"
-  [ns-key aspect-names aspect-stats-map sort-items opts]
+  [ns-key aspect-names aspect-stats-map entity-counts sort-items opts]
   (let [{:keys [aspects-and aspects-or highlight-aspects filter-mode]} opts
         ;; Check if any aspect in this namespace is selected (AND or OR)
         ns-has-selection? (some (fn [a-name]
@@ -104,12 +106,12 @@
        [:div {:style {:padding-left "0.5rem"}}
         (for [aspect-name sorted-aspects]
           ^{:key aspect-name}
-          [aspect-chip aspect-name ns-key opts])]])))
+          [aspect-chip aspect-name ns-key (assoc opts :entity-counts entity-counts)])]])))
 
 (defn aspects-map-view
   "Main aspects map component"
   [aspects-data opts]
-  (let [{:keys [aspects-map aspect-stats-map sort-items]} aspects-data
+  (let [{:keys [aspects-map aspect-stats-map entity-counts sort-items]} aspects-data
         {:keys [sort-ns on-sort-ns on-sort-items]} opts]
     [:div {:style {:display "flex"
                    :flex-direction "column"
@@ -150,4 +152,4 @@
         [:div {:style {:color "#666"}} "No aspects found"]
         (for [[ns-key aspect-names] aspects-map]
           ^{:key ns-key}
-          [namespace-section ns-key aspect-names aspect-stats-map sort-items opts]))]]))
+          [namespace-section ns-key aspect-names aspect-stats-map entity-counts sort-items opts]))]]))

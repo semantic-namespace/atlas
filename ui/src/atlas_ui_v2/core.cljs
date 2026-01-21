@@ -51,13 +51,16 @@
           sorted-map (data/sort-aspects-map aspects-map aspect-stats-map sort-ns)
           ;; Convert to vector to ensure order is preserved in React rendering
           aspects-vec (vec sorted-map)
-          first-3-keys (vec (take 3 (keys sorted-map)))]
+          first-3-keys (vec (take 3 (keys sorted-map)))
+          ;; Count entities per aspect
+          entity-counts (data/count-entities-by-aspect registry)]
       (js/console.log "aspects-map-data - sort-ns:" (name sort-ns)
                       "sort-items:" (name sort-items)
                       "namespaces:" (count sorted-map)
                       "first 3:" (clj->js first-3-keys))
       {:aspects-map aspects-vec
        :aspect-stats-map aspect-stats-map
+       :entity-counts entity-counts
        :sort-items sort-items})))
 
 (defn entities-map-data
