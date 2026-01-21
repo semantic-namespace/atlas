@@ -41,8 +41,9 @@
 
 (defn entity-row
   "Render a single entity as a clickable row"
-  [dev-id identity {:keys [selected-entities highlight-entities filter-mode on-entity-click]}]
+  [dev-id identity {:keys [selected-entities selected-entities-not highlight-entities filter-mode on-entity-click]}]
   (let [selected? (contains? selected-entities dev-id)
+        not-selected? (contains? selected-entities-not dev-id)
         highlighted? (and highlight-entities (contains? highlight-entities dev-id))
         should-hide? (and highlight-entities
                           (not highlighted?)
@@ -53,6 +54,7 @@
         ;; Determine text color for compound identity based on background
         identity-text-color (cond
                               selected? "#cce5ff"      ; Light blue for selected (blue bg)
+                              not-selected? "#ffcccc"  ; Light red for NOT selected (red bg)
                               highlighted? "#a8e6c1"   ; Light green for highlighted (green bg)
                               dimmed? "#444"           ; Dark for dimmed
                               :else "#888")]           ; Medium grey for default
@@ -64,16 +66,19 @@
                      :cursor "pointer"
                      :background (cond
                                    selected? "#4a9eff"
+                                   not-selected? "#ef4a4a"
                                    highlighted? "#3a7a5a"
                                    :else "transparent")
                      :color (cond
                               selected? "#fff"
+                              not-selected? "#fff"
                               dimmed? "#444"
                               :else "#bbb")
                      :opacity (if dimmed? 0.4 1)
-                     :border-left (if selected?
-                                    "3px solid #6ab4ff"
-                                    "3px solid transparent")
+                     :border-left (cond
+                                    selected? "3px solid #6ab4ff"
+                                    not-selected? "3px solid #ff6a6a"
+                                    :else "3px solid transparent")
                      :transition "all 0.2s ease"
                      :display "flex"
                      :justify-content "space-between"

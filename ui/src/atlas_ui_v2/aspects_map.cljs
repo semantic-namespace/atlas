@@ -27,10 +27,11 @@
 
 (defn aspect-chip
   "Render a single aspect as a clickable chip"
-  [aspect-name ns-key {:keys [aspects-and aspects-or highlight-aspects filter-mode on-click entity-counts]}]
+  [aspect-name ns-key {:keys [aspects-and aspects-or aspects-not highlight-aspects filter-mode on-click entity-counts]}]
   (let [full-aspect (keyword (name ns-key) (name aspect-name))
         in-and? (contains? aspects-and full-aspect)
         in-or? (contains? aspects-or full-aspect)
+        in-not? (contains? aspects-not full-aspect)
         highlighted? (and highlight-aspects (contains? highlight-aspects full-aspect))
         dimmed? (and highlight-aspects
                      (not highlighted?)
@@ -46,17 +47,20 @@
                     :background (cond
                                   in-and? "#4a9eff"      ; Blue for AND
                                   in-or? "#4aef7a"       ; Green for OR
+                                  in-not? "#ef4a4a"      ; Red for NOT
                                   highlighted? "#3a7a5a"
                                   :else "#2a2a4a")
                     :color (cond
                              in-and? "#fff"
                              in-or? "#000"
+                             in-not? "#fff"
                              dimmed? "#555"
                              :else "#ccc")
                     :opacity (if dimmed? 0.4 1)
                     :border (cond
                               in-and? "1px solid #6ab4ff"
                               in-or? "1px solid #6aff9a"
+                              in-not? "1px solid #ff6a6a"
                               :else "1px solid #3a3a5a")
                     :transition "all 0.2s ease"}}
      (str (name aspect-name) " (" entity-count ")")]))
@@ -65,12 +69,13 @@
 (defn namespace-section
   "Render a namespace with its aspects"
   [ns-key aspect-names aspect-stats-map entity-counts sort-items opts]
-  (let [{:keys [aspects-and aspects-or highlight-aspects filter-mode]} opts
-        ;; Check if any aspect in this namespace is selected (AND or OR)
+  (let [{:keys [aspects-and aspects-or aspects-not highlight-aspects filter-mode]} opts
+        ;; Check if any aspect in this namespace is selected (AND, OR, or NOT)
         ns-has-selection? (some (fn [a-name]
                                   (let [full-aspect (keyword (name ns-key) (name a-name))]
                                     (or (contains? aspects-and full-aspect)
-                                        (contains? aspects-or full-aspect))))
+                                        (contains? aspects-or full-aspect)
+                                        (contains? aspects-not full-aspect))))
                                 aspect-names)
         ;; Check if any aspect in this namespace is highlighted
         ns-has-highlight? (and highlight-aspects

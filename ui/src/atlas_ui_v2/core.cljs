@@ -26,8 +26,10 @@
            ;; Selection state for bidirectional filtering (all sets for multi-select)
            :aspects-and #{}           ; Aspects in AND mode (blue) - must have ALL
            :aspects-or #{}            ; Aspects in OR mode (green) - must have ANY
+           :aspects-not #{}           ; Aspects in NOT mode (red) - must NOT have
            :selected-types #{}        ; Set of selected entity types
-           :selected-entities #{}     ; Set of selected dev-ids
+           :selected-entities #{}     ; Set of selected dev-ids (positive selection)
+           :selected-entities-not #{} ; Set of excluded dev-ids (negative selection)
            ;; Filter mode
            :filter-mode :hide         ; :highlight or :hide
            ;; Sort options
@@ -84,15 +86,16 @@
 ;; =============================================================================
 
 (defn cycle-aspect!
-  "Cycle aspect through: not selected → AND (blue) → OR (green) → not selected"
+  "Cycle aspect through: not selected → AND (blue) → OR (green) → NOT (red) → not selected"
   [aspect]
   (swap! app-state
          (fn [state]
            (let [in-and? (contains? (:aspects-and state) aspect)
-                 in-or? (contains? (:aspects-or state) aspect)]
+                 in-or? (contains? (:aspects-or state) aspect)
+                 in-not? (contains? (:aspects-not state) aspect)]
              (cond
                ;; Not selected → AND
-               (and (not in-and?) (not in-or?))
+               (and (not in-and?) (not in-or?) (not in-not?))
                (update state :aspects-and conj aspect)
 
                ;; AND → OR
@@ -101,9 +104,15 @@
                    (update :aspects-and disj aspect)
                    (update :aspects-or conj aspect))
 
-               ;; OR → Not selected
+               ;; OR → NOT
                in-or?
-               (update state :aspects-or disj aspect))))))
+               (-> state
+                   (update :aspects-or disj aspect)
+                   (update :aspects-not conj aspect))
+
+               ;; NOT → Not selected
+               in-not?
+               (update state :aspects-not disj aspect))))))
 
 (defn toggle-type!
   "Toggle selection of an entity type"
@@ -115,13 +124,26 @@
              (conj selected entity-type)))))
 
 (defn toggle-entity!
-  "Toggle selection of a specific entity by dev-id"
+  "Cycle entity through: not selected → selected (blue) → NOT (red) → not selected"
   [dev-id]
-  (swap! app-state update :selected-entities
-         (fn [selected]
-           (if (contains? selected dev-id)
-             (disj selected dev-id)
-             (conj selected dev-id)))))
+  (swap! app-state
+         (fn [state]
+           (let [selected? (contains? (:selected-entities state) dev-id)
+                 not-selected? (contains? (:selected-entities-not state) dev-id)]
+             (cond
+               ;; Not selected → Selected
+               (and (not selected?) (not not-selected?))
+               (update state :selected-entities conj dev-id)
+
+               ;; Selected → NOT
+               selected?
+               (-> state
+                   (update :selected-entities disj dev-id)
+                   (update :selected-entities-not conj dev-id))
+
+               ;; NOT → Not selected
+               not-selected?
+               (update state :selected-entities-not disj dev-id))))))
 
 (defn clear-selection!
   "Clear all selections"
@@ -129,8 +151,10 @@
   (swap! app-state assoc
          :aspects-and #{}
          :aspects-or #{}
+         :aspects-not #{}
          :selected-types #{}
-         :selected-entities #{}))
+         :selected-entities #{}
+         :selected-entities-not #{}))
 
 (defn toggle-filter-mode!
   "Toggle between highlight and hide modes"
@@ -150,18 +174,27 @@
 ;; =============================================================================
 
 (defn entities-matching-aspects
-  "Find all dev-ids matching the AND/OR aspect criteria.
+  "Find all dev-ids matching the AND/OR/NOT aspect criteria.
    - Entity matches if it has ALL aspects from aspects-and
-   - OR entity matches if it has ANY aspect from aspects-or"
-  [registry aspects-and aspects-or]
-  (when (or (seq aspects-and) (seq aspects-or))
+   - OR entity matches if it has ANY aspect from aspects-or
+   - Entity is excluded if it has ANY aspect from aspects-not
+   - If only NOT is specified, show all entities except those with NOT aspects"
+  [registry aspects-and aspects-or aspects-not]
+  (when (or (seq aspects-and) (seq aspects-or) (seq aspects-not))
     (->> registry
          (filter (fn [[identity _props]]
                    (let [matches-and? (and (seq aspects-and)
                                            (every? #(contains? identity %) aspects-and))
                          matches-or? (and (seq aspects-or)
-                                          (some #(contains? identity %) aspects-or))]
-                     (or matches-and? matches-or?))))
+                                          (some #(contains? identity %) aspects-or))
+                         matches-not? (and (seq aspects-not)
+                                           (some #(contains? identity %) aspects-not))
+                         has-positive-criteria? (or (seq aspects-and) (seq aspects-or))
+                         ;; Include if matches positive criteria (AND/OR), or if no positive criteria exist
+                         base-match? (if has-positive-criteria?
+                                       (or matches-and? matches-or?)
+                                       true)]  ; If only NOT criteria, match all by default
+                     (and base-match? (not matches-not?)))))
          (map (fn [[_identity props]] (:atlas/dev-id props)))
          (filter some?)
          set)))
@@ -176,13 +209,35 @@
        first)) ; compound identity
 
 (defn aspects-for-entities
-  "Get union of all aspects for multiple dev-ids"
-  [registry dev-ids]
-  (when (seq dev-ids)
-    (->> dev-ids
-         (map #(aspects-for-entity registry %))
-         (filter some?)
-         (apply set/union))))
+  "Get union of all aspects for multiple dev-ids, excluding aspects from not-dev-ids.
+   - If only positive dev-ids: return their aspects
+   - If only negative dev-ids: return all aspects EXCEPT theirs
+   - If both: return positive aspects minus negative aspects"
+  [registry dev-ids not-dev-ids]
+  (let [has-positive? (seq dev-ids)
+        has-negative? (seq not-dev-ids)]
+    (when (or has-positive? has-negative?)
+      (let [negative-aspects (when has-negative?
+                               (->> not-dev-ids
+                                    (map #(aspects-for-entity registry %))
+                                    (filter some?)
+                                    (apply set/union)))]
+        (if has-positive?
+          ;; Has positive selection: show positive aspects minus negative
+          (let [positive-aspects (->> dev-ids
+                                      (map #(aspects-for-entity registry %))
+                                      (filter some?)
+                                      (apply set/union))]
+            (if negative-aspects
+              (set/difference positive-aspects negative-aspects)
+              positive-aspects))
+          ;; Only negative selection: show all aspects except negative
+          (let [all-aspects (->> registry
+                                 keys
+                                 (mapcat identity)
+                                 (filter keyword?)
+                                 set)]
+            (set/difference all-aspects negative-aspects)))))))
 
 (defn aspects-for-type
   "Get all aspects used by entities of a type"
@@ -236,8 +291,9 @@
        "Mode: Hide")]]])
 
 (defn selection-info []
-  (let [{:keys [aspects-and aspects-or selected-types selected-entities]} @app-state]
-    (when (or (seq aspects-and) (seq aspects-or) (seq selected-types) (seq selected-entities))
+  (let [{:keys [aspects-and aspects-or aspects-not selected-types selected-entities selected-entities-not]} @app-state]
+    (when (or (seq aspects-and) (seq aspects-or) (seq aspects-not)
+              (seq selected-types) (seq selected-entities) (seq selected-entities-not))
       [:div {:style {:padding "0.5rem 1rem"
                      :background "#2a2a4e"
                      :color "#aaa"
@@ -249,10 +305,14 @@
          [:span {:style {:color "#4a9eff"}} "AND: " (count aspects-and)])
        (when (seq aspects-or)
          [:span {:style {:color "#4aef7a"}} "OR: " (count aspects-or)])
+       (when (seq aspects-not)
+         [:span {:style {:color "#ef4a4a"}} "NOT: " (count aspects-not)])
        (when (seq selected-types)
          [:span "Types: " (count selected-types)])
        (when (seq selected-entities)
-         [:span "Entities: " (count selected-entities)])])))
+         [:span {:style {:color "#4a9eff"}} "Entities: " (count selected-entities)])
+       (when (seq selected-entities-not)
+         [:span {:style {:color "#ef4a4a"}} "Entities NOT: " (count selected-entities-not)])])))
 
 (defn loading-view []
   [:div {:style {:display "flex"
@@ -350,17 +410,18 @@
        #(set-sort! :sort-entities-items %)]]]))
 
 (defn main-view []
-  (let [{:keys [registry aspect-stats aspects-and aspects-or selected-types selected-entities filter-mode
+  (let [{:keys [registry aspect-stats aspects-and aspects-or aspects-not selected-types selected-entities selected-entities-not filter-mode
                 sort-aspects-ns sort-aspects-items sort-entities-type sort-entities-items]} @app-state
         aspects-data (aspects-map-data registry aspect-stats sort-aspects-ns sort-aspects-items)
         entities-data (entities-map-data registry sort-entities-type sort-entities-items)
         ;; Compute what to highlight/hide based on selections
         ;; Aspects -> highlight matching entities
-        highlight-entities (when (or (seq aspects-and) (seq aspects-or))
-                             (entities-matching-aspects registry aspects-and aspects-or))
+        highlight-entities (when (or (seq aspects-and) (seq aspects-or) (seq aspects-not))
+                             (entities-matching-aspects registry aspects-and aspects-or aspects-not))
         ;; Entities/Types -> highlight their aspects
         highlight-aspects (cond
-                            (seq selected-entities) (aspects-for-entities registry selected-entities)
+                            (or (seq selected-entities) (seq selected-entities-not))
+                            (aspects-for-entities registry selected-entities selected-entities-not)
                             (seq selected-types) (aspects-for-types registry selected-types)
                             :else nil)]
     [:div {:style {:display "flex"
@@ -380,6 +441,7 @@
         aspects-data
         {:aspects-and aspects-and
          :aspects-or aspects-or
+         :aspects-not aspects-not
          :highlight-aspects highlight-aspects
          :filter-mode filter-mode
          :on-click cycle-aspect!
@@ -394,6 +456,7 @@
         entities-data
         {:selected-types selected-types
          :selected-entities selected-entities
+         :selected-entities-not selected-entities-not
          :highlight-entities highlight-entities
          :filter-mode filter-mode
          :on-type-click toggle-type!
