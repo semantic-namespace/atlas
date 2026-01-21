@@ -175,7 +175,7 @@ Atlas enforces tier boundaries (services can't skip to foundation, etc.).
 
 ## Tooling
 
-### Visual Explorer (PoC)
+### POC Visual Explorer v-1
 
 ![Atlas UI graph visualization](https://github.com/user-attachments/assets/7b0259bd-d272-4b20-a834-16357c708583)
 
@@ -183,10 +183,21 @@ Interactive graph visualization for exploring semantic registries:
 
 ```clojure
 (require '[atlas.atlas-ui.server :as ui])
-(ui/start!)  ; Opens browser at http://localhost:8082
+(ui/start! registry/registry {:port 8082 :ui-version :v1}) ; Opens browser at http://localhost:8082
 ```
 
 Features: multi-aspect query builder, lens system for filtering, dependency tracing, shareable URLs.
+
+### POC Visual Explorer v-2
+
+![Atlas UI aspects & entities](https://github.com/user-attachments/assets/750cb572-9ee5-4b13-a295-4a4496cd8f9f)
+
+Interactive visualization for exploring semantic registries using 2 divs, aspects by aspects groups and entities by entities-types:
+
+```clojure
+(require '[atlas.atlas-ui.server :as ui])
+(ui/start! registry/registry {:port 8082 :ui-version :v2}) ; Opens browser at http://localhost:8082
+```
 
 ### Emacs Integration (PoC)
 
@@ -195,8 +206,9 @@ Features: multi-aspect query builder, lens system for filtering, dependency trac
 Explore registries directly from your editor via CIDER:
 
 ```elisp
-(require 'semantic-ns)
-M-x semantic-ns  ; Opens transient menu
+  (add-to-list 'load-path "..../semantic-namespace/atlas/emacs")
+  (require 'atlas)
+M-x atlas  ; Opens transient menu
 ```
 
 Features: entity browsing, data flow tracing, invariant checking, completion.
