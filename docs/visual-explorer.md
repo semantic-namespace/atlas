@@ -4,6 +4,8 @@
 >
 > The visual explorer is an experimental tool for browsing semantic registries. It's useful for understanding and exploring your architecture, but is not production-ready.
 
+> **Note:** The UI automatically detects the current browser's hostname and uses it for API requests. This means you can access the UI from any machine (localhost, IP address, hostname) and the API calls will use the same host.
+
 ## Screenshots
 
 ![Atlas UI graph view](TODO_UI_IMAGE_1_URL)
@@ -17,7 +19,12 @@
 
 ## Overview
 
-Atlas UI provides an interactive graph visualization of your semantic registry. It renders entities and aspects as nodes, with edges showing relationships (membership and dependencies).
+Atlas UI provides interactive visualization of your semantic registry in two versions:
+
+- **v1**: Graph visualization with Cytoscape.js, multi-aspect queries, lens filtering
+- **v2**: Dual-map view showing aspects (by namespace groups) and entities (by type)
+
+Both versions let you explore entities, filter by aspects, trace dependencies, and understand architectural relationships. Choose the one that fits your mental model.
 
 ## Quick Start
 
@@ -27,20 +34,25 @@ Atlas UI provides an interactive graph visualization of your semantic registry. 
 ;; Start with global registry (opens browser automatically)
 (ui/start!)
 
-;; Or with custom registry and options
-(ui/start! my-registry {:port 8082 :open-browser? true})
+;; Or specify version and options
+(ui/start! {:ui-version :v2 :port 8082 :open-browser? true})
 
 ;; Load sample data for exploration
 (ui/start! {:load-sample? true})
 
-;; Check status
+;; Check status of all running servers
 (ui/status)
 
-;; Stop
+;; Stop a server
 (ui/stop! 8082)
+
+;; Restart (useful after registry changes)
+(ui/restart! {:ui-version :v2})
 ```
 
-The UI opens at `http://localhost:8082` by default.
+Default: v1 on `http://localhost:8082`
+
+**Note:** The UI automatically detects the browser's hostname (localhost, 10.147.17.100, etc.) and uses it for API requests. No additional configuration needed for remote access.
 
 ## Features
 
@@ -192,23 +204,53 @@ Presets are stored in browser memory (not persisted across sessions in this PoC)
 
 The UI fetches the registry on load and whenever you click "Refresh". Changes to the registry atom trigger a console message prompting browser refresh.
 
-## Development
+## Development & Versions
 
-To modify the UI:
+The Atlas UI has two versions available:
 
+### Version 1 (Graph View)
+Graph visualization with multi-aspect query builder and lens system.
+
+**Development:**
 ```bash
-# Start shadow-cljs watcher
+cd ui
 npx shadow-cljs watch atlas-ui
-
-# UI will hot-reload at http://localhost:3000
+# Hot-reload at http://localhost:8081
 ```
 
-Source files are in `src/atlas_ui/`:
+**From REPL:**
+```clojure
+(require '[atlas.atlas-ui.server :as ui])
+(ui/start! {:ui-version :v1})  ; Default port 8082
+```
+
+Source files: `src/atlas_ui/`:
 - `core.cljs` - Main app, state management
 - `graph.cljs` - Cytoscape.js graph rendering
 - `lenses.cljs` - Lens filtering logic
 - `sidebar.cljs` - Entity detail panel
 - `selection_controls.cljs` - Query mode controls
+
+### Version 2 (Dual Map View)
+Aspect-centric and entity-centric dual map visualization.
+
+**Development:**
+```bash
+cd ui
+npx shadow-cljs watch atlas-ui-v2
+# Hot-reload at http://localhost:8083
+```
+
+**From REPL:**
+```clojure
+(require '[atlas.atlas-ui.server :as ui])
+(ui/start! {:ui-version :v2})  ; Default port 8082
+```
+
+Source files: `src/atlas_ui_v2/`:
+- `core.cljs` - App state and component tree
+- `api.cljs` - Registry fetching
+- Aspect map and entity map views
 
 ## Limitations
 
@@ -245,23 +287,58 @@ Response:
    :load-sample? false})   ; Load sample registry (default false)
 ```
 
+## Port Configuration
+
+### Shadow-cljs Development Servers
+
+The shadow-cljs configuration serves both versions:
+
+```clojure
+:dev-http {8081 "resources/public"      ; v1 on port 8081
+           8083 "resources/public-v2"}  ; v2 on port 8083
+```
+
+**Access:**
+- v1: `http://localhost:8081` (or `http://10.147.17.100:8081`)
+- v2: `http://localhost:8083` (or `http://10.147.17.100:8083`)
+
+### Backend API Server
+
+The Atlas UI backend server (REPL) defaults to **port 8082**. When using shadow-cljs watch on a different machine:
+
+```
+Browser URL: http://10.147.17.100:8081/?port=8082
+                  ↓
+  Requests API from: http://10.147.17.100:8082/api/atlas/registry
+```
+
+The UI automatically uses the current browser's hostname, so requests work from any IP/hostname.
+
 ## Troubleshooting
 
 ### "Loading registry..." stuck
-- Check that your REPL is running
+- Check that your REPL is running: `(atlas.atlas-ui.server/status)`
 - Verify registry has entities: `(count @atlas.registry/registry)`
-- Check browser console for errors
+- Check browser console (F12) for network errors
+- If using `?port=XXXX`, ensure that port's server is actually running
 
 ### Graph is empty
 - Initialize entity types: `(ont/register-entity-types!)`
 - Register some entities
-- Click "Refresh"
+- Click "Refresh" button in UI
 
-### UI won't start
+### UI won't start (REPL server)
 - Check if port is in use: `(ui/status)`
-- Try a different port: `(ui/start! {:port 8083})`
+- Try a different port: `(ui/start! {:port 8085})`
 
 ### Slow/unresponsive
 - Use lenses to filter to smaller subsets
 - Hide unmatched nodes when querying
 - Reduce registry size for exploration
+
+### Wrong version loads on shadow-cljs watch
+- Ensure you're accessing the correct port:
+  - v1 on **8081**: `npx shadow-cljs watch atlas-ui`
+  - v2 on **8083**: `npx shadow-cljs watch atlas-ui-v2`
+- Ports may shift if others are in use
+- Check shadow-cljs output for actual HTTP server port

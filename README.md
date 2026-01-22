@@ -175,29 +175,35 @@ Atlas enforces tier boundaries (services can't skip to foundation, etc.).
 
 ## Tooling
 
-### POC Visual Explorer v-1
+### POC Visual Explorer
 
-![Atlas UI graph visualization](https://github.com/user-attachments/assets/7b0259bd-d272-4b20-a834-16357c708583)
+Two interactive visualization modes for exploring semantic registries. Start from REPL or use shadow-cljs for development:
 
-Interactive graph visualization for exploring semantic registries:
-
+**From REPL:**
 ```clojure
 (require '[atlas.atlas-ui.server :as ui])
-(ui/start! registry/registry {:port 8082 :ui-version :v1}) ; Opens browser at http://localhost:8082
+
+;; Version 1: Graph view (multi-aspect queries, lenses)
+(ui/start! {:ui-version :v1})  ; Opens http://localhost:8082
+
+;; Version 2: Dual map view (aspects + entities)
+(ui/start! {:ui-version :v2})  ; Opens http://localhost:8082
 ```
 
-Features: multi-aspect query builder, lens system for filtering, dependency tracing, shareable URLs.
+**Development with shadow-cljs:**
+```bash
+cd ui
 
-### POC Visual Explorer v-2
+# Version 1 (port 8081)
+npx shadow-cljs watch atlas-ui
 
-![Atlas UI aspects & entities](https://github.com/user-attachments/assets/750cb572-9ee5-4b13-a295-4a4496cd8f9f)
-
-Interactive visualization for exploring semantic registries using 2 divs, aspects by aspects groups and entities by entities-types:
-
-```clojure
-(require '[atlas.atlas-ui.server :as ui])
-(ui/start! registry/registry {:port 8082 :ui-version :v2}) ; Opens browser at http://localhost:8082
+# Version 2 (port 8083)
+npx shadow-cljs watch atlas-ui-v2
 ```
+
+Features: interactive querying, lens-based filtering, dependency analysis, shareable URLs.
+
+See [Visual Explorer docs](docs/visual-explorer.md) for full documentation and development setup.
 
 ### Emacs Integration (PoC)
 
@@ -231,15 +237,37 @@ See `test/app/` for complete examples:
 
 ## Development
 
+### Core Library
+
 ```bash
-# Start REPL
-clojure -M:repl
+# Start REPL with everything loaded
+clojure -M:dev
 
 # Run tests
 clojure -M:test
 
 # Build JAR
 clojure -T:build jar
+```
+
+### Visual Explorer UI
+
+See [Visual Explorer docs](docs/visual-explorer.md) for full setup. Quick start:
+
+```bash
+cd ui
+
+# Install dependencies (first time only)
+npm install
+
+# Development with hot-reload
+npx shadow-cljs watch atlas-ui    # v1 on port 8081
+# or
+npx shadow-cljs watch atlas-ui-v2  # v2 on port 8083
+
+# Compile for production
+npx shadow-cljs release atlas-ui
+npx shadow-cljs release atlas-ui-v2
 ```
 
 ## License

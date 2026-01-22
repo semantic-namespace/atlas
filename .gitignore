@@ -35,6 +35,8 @@ package-lock.json
 .shadow-cljs/
 ui/resources/public/js/
 ui/resources/public-v2/js/
+ui/resources/public/atlas-ui/js/
+ui/resources/public-v2/atlas-ui/js/
 
 # Other
 /.clojure-mcp/

@@ -13,25 +13,21 @@
  :builds
  {:atlas-ui
   {:target :browser
-   :output-dir "resources/public/js"
-   :asset-path "/js"
+   :output-dir "resources/public/atlas-ui/js"
+   :asset-path "/atlas-ui/js"
    :modules {:main {:init-fn atlas-ui.core/init}}
 
    :devtools
-   {:after-load atlas-ui.core/mount-root
-    :http-root "resources/public"
-    :http-port 8081}}
+   {:after-load atlas-ui.core/mount-root}}
 
   :atlas-ui-v2
   {:target :browser
-   :output-dir "resources/public-v2/js"
-   :asset-path "/js"
+   :output-dir "resources/public-v2/atlas-ui/js"
+   :asset-path "/atlas-ui/js"
    :modules {:main {:init-fn atlas-ui-v2.core/init}}
 
    :devtools
-   {:after-load atlas-ui-v2.core/mount-root
-    :http-root "resources/public-v2"
-    :http-port 8083}}
+   {:after-load atlas-ui-v2.core/mount-root}}
 
   :test
   {:target :node-test

@@ -4,8 +4,13 @@
             [cognitect.transit :as transit]))
 
 (defn api-url []
-  (let [host (.-hostname js/location)]
-    (str "http://" host ":8082/api/atlas/registry")))
+  (let [search-params (js/URLSearchParams. (.-search js/location))
+        port (.get search-params "port")]
+    (if port
+      ;; Development: ?port=8082 specified in URL - use current hostname
+      (str (.-protocol js/location) "//" (.-hostname js/location) ":" port "/api/atlas/registry")
+      ;; Production: use relative URL (same host/port as page)
+      "/api/atlas/registry")))
 
 (defn decode-transit [s]
   (let [reader (transit/reader :json)]
