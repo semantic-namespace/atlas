@@ -226,7 +226,9 @@ Returns nil on error with message to user."
   (unless (cider-connected-p)
     (user-error "CIDER not connected. Run cider-jack-in first"))
   (let* ((qualified-form (atlas--qualify-ide-form form))
-         (code (format "(do (require '[%s]) (binding [*print-namespace-maps* false] %s))"
+         (code (format "(do 
+(set! *print-namespace-maps* false)
+(require '[%s]) %s)"
                        atlas-ide-ns qualified-form))
          (result (cider-nrepl-sync-request:eval code)))
     (when atlas-debug

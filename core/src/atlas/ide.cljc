@@ -14,10 +14,6 @@
 ;; =============================================================================
 ;; HELPERS
 ;; =============================================================================
-#?(:clj (do (alter-var-root #'*print-namespace-maps* (constantly false))
-            (set! *print-namespace-maps* false)))
-
-
 
 (defn- ensure-keyword 
   "Convert string to keyword, or return as-is if already a keyword."
