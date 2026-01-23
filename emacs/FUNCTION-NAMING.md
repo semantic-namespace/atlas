@@ -1,6 +1,8 @@
 # Atlas Emacs Function Naming Reference
 
-This document lists all interactive functions with their proper module-specific prefixes.
+This document lists all interactive Emacs functions with their proper module-specific prefixes.
+
+> **Note:** These Emacs functions provide editor-based exploration. For browser-based visual exploration, see the [Visual Explorer docs](../docs/visual-explorer.md).
 
 ## Naming Convention
 
@@ -105,7 +107,33 @@ All functions follow the pattern: `atlas-<module>-<function-name>`
 
 ## Main Entry Points
 
-- `atlas` - Main transient menu (bound to M-F)
+- `atlas` - Main transient menu (bound to M-F by default)
 - `atlas-advanced` - Advanced features transient menu
-- `atlas-explorer` - Explorer v2 transient menu
+- `atlas-explorer` - Explorer transient menu for aspect-based filtering
+
+## Integration with Visual Explorer
+
+These Emacs functions work alongside the browser-based Visual Explorer:
+
+**Start Visual Explorer from REPL:**
+```clojure
+(require '[atlas.atlas-ui.server :as ui])
+(ui/start! {:ui-version :v1})  ; Graph view
+(ui/start! {:ui-version :v2})  ; Dual map view
+```
+
+**Complementary workflows:**
+
+| Task | Use Emacs | Use Visual Explorer |
+|------|-----------|-------------------|
+| Quick entity lookup | ✓ | - |
+| Detailed entity info | ✓ | - |
+| Graph visualization | - | ✓ |
+| Multi-aspect queries | - | ✓ |
+| Data flow tracing | ✓ | - |
+| Impact analysis | ✓ | ✓ |
+| Share architecture view | - | ✓ |
+| Code integration | ✓ | - |
+
+**Optimal workflow:** Open both simultaneously - Visual Explorer in browser for high-level exploration, Emacs for detailed investigation.
 

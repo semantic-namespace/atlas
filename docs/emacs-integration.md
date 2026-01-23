@@ -2,7 +2,7 @@
 
 > **Status: Proof of Concept**
 
-Atlas provides Emacs integration via `semantic-ns.el`, a transient-based interface for exploring semantic registries directly from your editor.
+Atlas provides Emacs integration via CIDER, a transient-based interface for exploring semantic registries directly from your editor. Combined with the visual explorer UI, you get both code-editor and browser-based exploration.
 
 ## Screenshots
 
@@ -24,21 +24,66 @@ Atlas provides Emacs integration via `semantic-ns.el`, a transient-based interfa
 
 ## Installation
 
-1. Copy `emacs/semantic-ns-v2.el` to your Emacs load path
-2. Add to your config:
+1. Copy the `emacs/` directory to your Emacs load path:
+
+```bash
+git clone https://github.com/semantic-namespace/atlas.git
+# Then add to your Emacs config:
+```
+
+2. Add to your Emacs config (`~/.emacs.d/init.el`):
 
 ```elisp
-(require 'semantic-ns)
+(add-to-list 'load-path "/path/to/atlas/emacs")
+(require 'atlas)
 
-;; Optional: bind to a key
-(global-set-key (kbd "M-F") 'semantic-ns)
+;; Optional: bind main menu to a key
+(global-set-key (kbd "M-F") 'atlas)
+```
+
+3. Ensure CIDER is installed:
+```elisp
+(use-package cider :ensure t)
+(use-package transient :ensure t)
+```
+
+## Setup in CIDER
+
+Before using Emacs exploration, start your Clojure REPL and initialize the registry:
+
+```clojure
+;; Start REPL with cider-jack-in
+;; Then initialize your application
+(require '[app.my-app])
+(app/init-registry!)
+
+;; Or load sample data
+(require '[atlas.atlas-ui.sample-registry :as sample])
+(reset! atlas.registry/registry sample/sample-registry)
 ```
 
 ## Quick Start
 
-1. Start your Clojure REPL with `cider-jack-in`
-2. Initialize your registry (e.g., `(require '[app.my-app]) (app/init-registry!)`)
-3. Press `M-x semantic-ns` (or your keybinding) to open the menu
+### Editor-based exploration (Emacs)
+1. Start your Clojure REPL with `M-x cider-jack-in`
+2. Initialize your registry: `(require '[app.my-app]) (app/init-registry!)`
+3. Press `M-F` (or `M-x atlas`) to open the menu
+
+### Browser-based exploration (Visual Explorer)
+Optionally open the visual explorer alongside:
+```clojure
+(require '[atlas.atlas-ui.server :as ui])
+
+;; Start v1 (graph view)
+(ui/start! {:ui-version :v1})
+
+;; Or v2 (dual map view)
+(ui/start! {:ui-version :v2})
+```
+
+Then explore in your browser while using Emacs for detailed information.
+
+Both provide complementary views of your registry.
 
 ## Main Menu
 
@@ -142,22 +187,61 @@ In result buffers:
 | `?` | Show menu |
 | `q` | Quit window |
 
+## Emacs vs Visual Explorer
+
+Use **Emacs** when you want:
+- Quick lookup without leaving your editor
+- Detailed entity information (aspects, data flow, dependencies)
+- Smart completion for entities, aspects, and data keys
+- Deep analysis (impact of changes, PII surface, etc.)
+- Integration with your code (jump-to-definition)
+
+Use **Visual Explorer** when you want:
+- Graph visualization of relationships
+- Multi-aspect query builder
+- Lens-based filtering
+- High-level architecture overview
+- Shareable views for team discussion
+
+**Optimal workflow:** Use both simultaneously:
+- Visual Explorer in browser for exploration and design discussions
+- Emacs for detailed investigation and understanding
+- Both auto-detect hostname for seamless remote access
+
 ## How It Works
 
-The Emacs integration communicates with your running Clojure REPL via CIDER. It calls functions in `atlas.ide` namespace, which provides a clean API returning EDN that Emacs can parse and display.
+The Emacs integration communicates with your running Clojure REPL via CIDER. It calls functions in the `atlas.ide` namespace, which provides a clean API returning EDN that Emacs can parse and display. The Visual Explorer is a separate browser-based UI that calls the HTTP API.
 
 ```
-┌─────────────┐     CIDER/nREPL     ┌─────────────┐
-│   Emacs     │ ←─────────────────→ │   Clojure   │
-│ semantic-ns │                     │  atlas.ide  │
-└─────────────┘                     └─────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     Clojure REPL                             │
+│                  (cider-jack-in)                             │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │  atlas.registry (global atom with all entities)        │ │
+│  └────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+       ↑              ↑                          ↑
+       │ CIDER/nREPL  │ HTTP API                │
+       │ (atlas.ide)  │ (atlas.atlas-ui.server) │
+       │              │                          │
+   ┌───────────┐  ┌──────────────┐         ┌──────────────┐
+   │   Emacs   │  │ Visual       │         │ shadow-cljs  │
+   │  (Atlas)  │  │ Explorer     │         │ dev watch    │
+   │           │  │ (Browser)    │         │              │
+   └───────────┘  └──────────────┘         └──────────────┘
 ```
 
-The `atlas.ide` namespace:
-- Returns EDN structures that Emacs can parse
+The `atlas.ide` namespace provides:
+- EDN structures that Emacs can parse
 - Caches reverse dependencies for fast lookups
 - Indexes data keys for producer/consumer queries
-- Provides completion candidates for entity, aspect, and data-key inputs
+- Completion candidates for entity, aspect, and data-key inputs
+
+The Visual Explorer server provides:
+- HTTP `/api/atlas/registry` endpoint
+- Static file serving for compiled UI (v1 and v2)
+- Registry watching for manual refresh prompts
 
 ## Completion
 
@@ -182,11 +266,35 @@ Make sure you've initialized your registry:
 ;; Then register your entities...
 ```
 
-### Stale data
+### Stale data in Emacs
 Press `G` (refresh cache) in the menu, or `g` in a result buffer.
 
+### Visual Explorer shows "Loading registry..."
+- Ensure the REPL server is running: `(atlas.atlas-ui.server/status)`
+- Check the browser console (F12) for network errors
+- If using `?port=8082`, verify that port's server is running
+- The UI auto-detects hostname, but network connectivity issues can occur
+
+### Emacs completion not working
+Run `G` (refresh cache) to rebuild the index.
+
 ### Debug mode
-Press `!` to toggle debug messages, which show raw EDN responses.
+Press `!` to toggle debug messages in Emacs (shows raw EDN responses).
+For Visual Explorer, check the browser console (F12) for API responses.
+
+## Remote Access
+
+Both Emacs integration and Visual Explorer support remote development:
+
+**Emacs Integration:**
+- Emacs connects directly to CIDER via nREPL
+- Works locally via `cider-jack-in` or `cider-connect` to remote nREPL
+- No special configuration needed
+
+**Visual Explorer:**
+- Automatically detects the browser's hostname/IP
+- When accessing `http://10.147.17.100:8081/?port=8082`, API calls go to `http://10.147.17.100:8082/api/atlas/registry`
+- Works over any network (localhost, LAN, VPN, etc.)
 
 ## Customization
 
@@ -198,9 +306,44 @@ Press `!` to toggle debug messages, which show raw EDN responses.
 (setq semantic-ns-ide-ns "my.custom.ide")
 ```
 
+## Running Emacs + Visual Explorer Together
+
+For optimal development workflow, run both tools simultaneously:
+
+**Terminal 1 - CIDER REPL:**
+```bash
+cd /path/to/atlas
+clojure -M:dev
+```
+
+**Emacs:**
+```elisp
+M-x cider-jack-in
+;; Then initialize registry
+;; Then press M-F to open atlas menu
+```
+
+**Terminal 2 - Shadow-cljs (optional, for UI development):**
+```bash
+cd ui
+npx shadow-cljs watch atlas-ui    # or atlas-ui-v2 for v2
+```
+
+**Browser - Visual Explorer:**
+- After REPL starts, run: `(ui/start! {:ui-version :v2})`
+- Opens at `http://localhost:8082` automatically
+
+This gives you:
+- CIDER REPL for code execution and testing
+- Emacs for detailed entity inspection and analysis
+- Visual Explorer for graph visualization and team discussion
+- shadow-cljs watch (optional) for UI development with hot-reload
+
 ## Limitations (PoC)
 
-- Requires active CIDER connection
-- No real-time updates (manual refresh needed)
-- Jump-to-definition uses grep (not always accurate)
-- Limited to single-project registries
+- Emacs: Requires active CIDER connection
+- Emacs: No real-time updates (manual refresh needed)
+- Emacs: Jump-to-definition uses grep (not always accurate)
+- Visual Explorer: Limited to single-project registries
+- Visual Explorer: Presets not persisted across sessions
+- Both: No collaborative real-time features
