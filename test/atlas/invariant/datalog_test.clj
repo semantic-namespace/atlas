@@ -1,7 +1,7 @@
 (ns atlas.invariant.datalog-test
   (:require
    [clojure.test :refer [deftest is use-fixtures testing]]
-   [atlas.datalog :as graph.datalog]
+   [atlas.datalog :as a.datalog]
    [atlas.invariant.datalog :as invariant.datalog]
    [atlas.invariant.dsl.datalog :as invariant.dsl.datalog]
    [atlas.invariant.dsl.operators :as dsl.operators]
@@ -15,7 +15,7 @@
 (use-fixtures :each
   (fn [f]
     (reset! registry/registry {})
-    (graph.datalog/reset-extensions!)
+    (a.datalog/reset-extensions!)
     ;; Load ontologies for each test
     (ef/reset-loaded-state!)
     (ie/reset-loaded-state!)
@@ -25,7 +25,7 @@
     (ip/load!)
     (f)
     (reset! registry/registry {})
-    (graph.datalog/reset-extensions!)))
+    (a.datalog/reset-extensions!)))
 
 ;; =============================================================================
 ;; TEST DATA FIXTURES
@@ -200,19 +200,19 @@
 
 (deftest datalog-surface-basic-violations
   (seed-basic-registry!)
-  (let [db (graph.datalog/create-db)]
+  (let [db (a.datalog/create-db)]
     (testing "missing producers are reported"
       (is (= #{[:data/unproduced :fn/missing-producer]}
-             (set (graph.datalog/query-missing-producers db)))))
+             (set (a.datalog/query-missing-producers db)))))
     (testing "orphan outputs are reported"
       (is (= #{[:out/orphan :fn/orphan-producer]}
-             (set (graph.datalog/query-orphan-outputs db)))))))
+             (set (a.datalog/query-orphan-outputs db)))))))
 
 (deftest datalog-respects-dataflow-markers
   (seed-dataflow-markers-registry!)
-  (let [db (graph.datalog/create-db)
-        missing (set (graph.datalog/query-missing-producers db))
-        orphans (set (graph.datalog/query-orphan-outputs db))]
+  (let [db (a.datalog/create-db)
+        missing (set (a.datalog/query-missing-producers db))
+        orphans (set (a.datalog/query-orphan-outputs db))]
     (testing "external input keys are not flagged as missing"
       (is (not (contains? missing [:data/external :fn/consumes-external]))))
     (testing "endpoint response keys are not flagged as orphans"
@@ -235,7 +235,7 @@
 
 (deftest compile-to-datalog-entity-has-aspect
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/entity-has-aspect :args :protocol/oauth}
                   db)]
@@ -249,7 +249,7 @@
 
 (deftest compile-to-datalog-entity-lacks-aspect
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/entity-lacks-aspect :args :protocol/oauth}
                   db)]
@@ -262,7 +262,7 @@
 
 (deftest compile-to-datalog-entity-depends-on
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/entity-depends-on :args :component/oauth}
                   db)]
@@ -275,7 +275,7 @@
 
 (deftest compile-to-datalog-entity-produces
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/entity-produces :args :auth/token}
                   db)]
@@ -286,7 +286,7 @@
 
 (deftest compile-to-datalog-entity-consumes
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/entity-consumes :args :user/credentials}
                   db)]
@@ -301,7 +301,7 @@
 
 (deftest compile-to-datalog-logic-and
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         ;; Entity must have both oauth AND service tier
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/logic-and
@@ -317,7 +317,7 @@
 
 (deftest compile-to-datalog-logic-or
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         ;; Entity has oauth OR api tier
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/logic-or
@@ -333,7 +333,7 @@
 
 (deftest compile-to-datalog-logic-not
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         ;; Entity does NOT have oauth
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/logic-not
@@ -348,7 +348,7 @@
 
 (deftest compile-to-datalog-logic-implies
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         ;; If entity has oauth, it must have service tier
         ;; oauth -> service = NOT(oauth) OR service
         check-fn (invariant.dsl.datalog/compile-to-datalog
@@ -370,7 +370,7 @@
 
 (deftest compile-to-datalog-graph-acyclic
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/graph-acyclic :args {:edge :depends}}
                   db)]
@@ -379,7 +379,7 @@
 
 (deftest compile-to-datalog-graph-reachable
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         check-fn (invariant.dsl.datalog/compile-to-datalog
                   {:op :dsl.op/graph-reachable :args {:edge :depends}}
                   db)]
@@ -394,7 +394,7 @@
 
 (deftest compile-and-check-invariant-datalog
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)
+  (let [db (a.datalog/create-db)
         invariant {:invariant/id :test/oauth-needs-service
                :invariant/level :error
                :invariant/when {:op :dsl.op/entity-has-aspect :args :protocol/oauth}
@@ -483,8 +483,8 @@
                :error
                "OAuth entities must depend on OAuth component (function style)"
                (fn [db]
-                 (let [oauth-entities (graph.datalog/query-entities-with-aspect db :protocol/oauth)
-                       violations (remove #(graph.datalog/query-depends-on db % :component/oauth) oauth-entities)]
+                 (let [oauth-entities (a.datalog/query-entities-with-aspect db :protocol/oauth)
+                       violations (remove #(a.datalog/query-depends-on db % :component/oauth) oauth-entities)]
                    (map (fn [e] {:entity e}) violations))))
         result (invariant.unified/check-all invariant)]
     (testing "Function invariant detects same violations"
@@ -504,8 +504,8 @@
                :warning
                "Function check"
                (fn [db]
-                 (let [components (graph.datalog/query-entities-with-aspect db :atlas/structure-component)
-                       foundation-entities (set (graph.datalog/query-entities-with-aspect db :tier/foundation))
+                 (let [components (a.datalog/query-entities-with-aspect db :atlas/structure-component)
+                       foundation-entities (set (a.datalog/query-entities-with-aspect db :tier/foundation))
                        without-foundation (remove foundation-entities components)]
                    (map (fn [e] {:entity e}) without-foundation))))
         result (invariant.unified/check-all [dsl-ax fn-ax])]
@@ -596,11 +596,11 @@
 
 (deftest extensible-datalog-integration
   (testing "ontologies register their fact extractors"
-    (is (>= (count @graph.datalog/fact-extractors) 3)
+    (is (>= (count @a.datalog/fact-extractors) 3)
         "Should have at least 3 extractors (ef, ie, ip)"))
 
   (testing "ontologies register their schemas"
-    (let [schema (graph.datalog/build-schema)]
+    (let [schema (a.datalog/build-schema)]
       (is (contains? schema :entity/depends) "execution-function schema")
       (is (contains? schema :entity/consumes) "execution-function schema")
       (is (contains? schema :entity/produces) "execution-function schema")
@@ -609,7 +609,7 @@
       (is (contains? schema :protocol/function) "interface-protocol schema")))
 
   (testing "core schema is present"
-    (let [schema (graph.datalog/build-schema)]
+    (let [schema (a.datalog/build-schema)]
       (is (contains? schema :atlas/dev-id) "core schema")
       (is (contains? schema :entity/aspect) "core schema")
       (is (contains? schema :dataflow/external-input) "core dataflow markers")
@@ -619,7 +619,7 @@
   (seed-oauth-registry!)
 
   (testing "execution-function facts are extracted"
-    (let [facts (graph.datalog/registry-facts)
+    (let [facts (a.datalog/registry-facts)
           depends-facts (filter #(= :entity/depends (nth % 2)) facts)
           consumes-facts (filter #(= :entity/consumes (nth % 2)) facts)
           produces-facts (filter #(= :entity/produces (nth % 2)) facts)]
@@ -628,40 +628,40 @@
       (is (pos? (count produces-facts)) "Should extract response facts")))
 
   (testing "interface-endpoint facts are extracted"
-    (let [facts (graph.datalog/registry-facts)
+    (let [facts (a.datalog/registry-facts)
           endpoint-context-facts (filter #(= :endpoint-context (nth % 2)) facts)
           endpoint-response-facts (filter #(= :endpoint-response (nth % 2)) facts)]
       (is (pos? (count endpoint-context-facts)) "Should extract endpoint context facts")
       (is (pos? (count endpoint-response-facts)) "Should extract endpoint response facts")))
 
   (testing "core aspects are extracted"
-    (let [facts (graph.datalog/registry-facts)
+    (let [facts (a.datalog/registry-facts)
           aspect-facts (filter #(= :entity/aspect (nth % 2)) facts)]
       (is (pos? (count aspect-facts)) "Should extract aspect facts"))))
 
 (deftest extensible-datalog-queries-work
   (seed-oauth-registry!)
-  (let [db (graph.datalog/create-db)]
+  (let [db (a.datalog/create-db)]
     (testing "can query dependencies extracted by ontology"
-      (let [deps (graph.datalog/query-dependencies db :fn/oauth-handler)]
+      (let [deps (a.datalog/query-dependencies db :fn/oauth-handler)]
         (is (= #{:component/oauth} (set deps)))))
 
     (testing "can query context extracted by ontology"
-      (let [ctx (graph.datalog/query-consumes db :fn/oauth-handler)]
+      (let [ctx (a.datalog/query-consumes db :fn/oauth-handler)]
         (is (= #{:user/credentials} (set ctx)))))
 
     (testing "can query response extracted by ontology"
-      (let [resp (graph.datalog/query-produces db :fn/oauth-handler)]
+      (let [resp (a.datalog/query-produces db :fn/oauth-handler)]
         (is (= #{:auth/token} (set resp)))))
 
     (testing "can query endpoint context"
-      (let [endpoint-ctx (graph.datalog/query-endpoint-inputs db)]
+      (let [endpoint-ctx (a.datalog/query-endpoint-inputs db)]
         (is (contains? (set endpoint-ctx) :user/credentials))))))
 
 (deftest custom-ontology-extensibility
   (testing "custom ontology can register extractor"
     ;; Reset to clean state
-    (graph.datalog/reset-extensions!)
+    (a.datalog/reset-extensions!)
     (ef/reset-loaded-state!)
     (ie/reset-loaded-state!)
     (ip/reset-loaded-state!)
@@ -669,9 +669,9 @@
     (ie/load!)
     (ip/load!)
 
-    (let [initial-count (count @graph.datalog/fact-extractors)]
+    (let [initial-count (count @a.datalog/fact-extractors)]
       ;; Register a custom extractor
-      (graph.datalog/register-fact-extractor!
+      (a.datalog/register-fact-extractor!
        (fn [compound-id props]
          (when (contains? compound-id :test/custom-entity)
            (let [dev-id (:atlas/dev-id props)]
@@ -679,12 +679,12 @@
                [[:db/add dev-id :custom/owner owner]])))))
 
       ;; Register custom schema
-      (graph.datalog/register-schema! {:custom/owner {}})
+      (a.datalog/register-schema! {:custom/owner {}})
 
-      (is (= (inc initial-count) (count @graph.datalog/fact-extractors))
+      (is (= (inc initial-count) (count @a.datalog/fact-extractors))
           "Extractor should be registered")
 
-      (is (contains? (graph.datalog/build-schema) :custom/owner)
+      (is (contains? (a.datalog/build-schema) :custom/owner)
           "Custom schema should be included")
 
       ;; Register entity with custom property
@@ -695,7 +695,7 @@
        {:custom/owner :team/test})
 
       ;; Verify facts are extracted
-      (let [db (graph.datalog/create-db)
+      (let [db (a.datalog/create-db)
             result (d/q '[:find ?owner
                           :where
                           [?e :atlas/dev-id :entity/custom]
