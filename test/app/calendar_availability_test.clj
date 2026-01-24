@@ -14,14 +14,12 @@
    [clojure.set :as set]
    [atlas.registry :as cid]
    [atlas.query :as q]
-   [atlas.registry.lookup :as rt]
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
    [atlas.ontology.interface-endpoint :as ie]
-   [atlas.ontology.execution-function.executor :as exec]
    [atlas.invariant.unified :as ax]
-   [app.calendar-availability-invariants :as dsl-invariants]
+   [app.calendar-availability-invariants :as calendar-invariants]
    [app.calendar-availability :as sut]))
 
 ;; =============================================================================
@@ -361,62 +359,62 @@
 
 (deftest test-dsl-invariants-oauth
   (testing "OAuth functions depend on OAuth component"
-    (let [result (dsl-invariants/check-oauth)]
+    (let [result (calendar-invariants/check-oauth)]
       (is (true? (:valid? result))
           (str "OAuth invariant violations: " (:errors result)))))
 
   (testing "OAuth invariant - individual check"
-    (let [result (ax/check-all dsl-invariants/oauth-functions-depend-on-oauth-component)]
+    (let [result (ax/check-all calendar-invariants/oauth-functions-depend-on-oauth-component)]
       (is (true? (:valid? result))
           "OAuth functions should depend on google-oauth component"))))
 
 (deftest test-dsl-invariants-tiers
   (testing "Components are foundation tier"
-    (let [result (ax/check-all dsl-invariants/components-are-foundation)]
+    (let [result (ax/check-all calendar-invariants/components-are-foundation)]
       (is (true? (:valid? result))
           "All components should be foundation tier")))
 
   (testing "Endpoints are API tier"
-    (let [result (ax/check-all dsl-invariants/endpoints-are-api)]
+    (let [result (ax/check-all calendar-invariants/endpoints-are-api)]
       (is (true? (:valid? result))
           "All endpoints should be API tier")))
 
   (testing "Functions are service tier"
-    (let [result (ax/check-all dsl-invariants/functions-are-service)]
+    (let [result (ax/check-all calendar-invariants/functions-are-service)]
       (is (true? (:valid? result))
           "All functions should be service tier")))
 
   (testing "All tier invariants pass together"
-    (let [result (dsl-invariants/check-tiers)]
+    (let [result (calendar-invariants/check-tiers)]
       (is (true? (:valid? result))
           (str "Tier violations: " (:errors result))))))
 
 (deftest test-dsl-invariants-architecture
   (testing "No dependency cycles"
-    (let [result (ax/check-all dsl-invariants/no-dependency-cycles)]
+    (let [result (ax/check-all calendar-invariants/no-dependency-cycles)]
       (is (true? (:valid? result))
           "Dependency graph should be acyclic")))
 
   (testing "All functions reachable from endpoints"
-    (let [result (ax/check-all dsl-invariants/all-functions-reachable)]
+    (let [result (ax/check-all calendar-invariants/all-functions-reachable)]
       ;; This is a warning-level invariant, so valid? may still be true
       (is (empty? (:errors result))
           "Should have no error-level reachability issues"))))
 
 (deftest test-dsl-invariants-pure-functions
   (testing "Pure functions have no component dependencies"
-    (let [result (ax/check-all dsl-invariants/pure-functions-no-component-deps)]
+    (let [result (ax/check-all calendar-invariants/pure-functions-no-component-deps)]
       (is (true? (:valid? result))
           "Pure functions should not depend on components"))))
 
 (deftest test-dsl-invariants-all
   (testing "All DSL invariants pass"
-    (let [result (dsl-invariants/check-all)]
+    (let [result (calendar-invariants/check-all)]
       (is (true? (:valid? result))
           (str "DSL invariant violations: " (:errors result)))))
 
   (testing "DSL invariants can be documented"
-    (let [docs (ax/document-all dsl-invariants/all-invariants)]
-      (is (= (count dsl-invariants/all-invariants) (count docs)))
+    (let [docs (ax/document-all calendar-invariants/all-invariants)]
+      (is (= (count calendar-invariants/all-invariants) (count docs)))
       (is (every? #(contains? % :id) docs))
       (is (every? #(= :dsl (:style %)) docs)))))
