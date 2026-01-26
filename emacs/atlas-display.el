@@ -386,5 +386,19 @@ Entity references (keywords) are rendered as clickable links."
          (when-let ((fp (atlas--get metadata 'friction-points)))
            (atlas--insert-business-metadata "Friction Points" fp nil)))))))
 
+;;; Popup Display
+
+(defun atlas--display-in-popup (content buffer-name)
+  "Display CONTENT in a popup buffer named BUFFER-NAME."
+  (let ((buf (get-buffer-create buffer-name)))
+    (with-current-buffer buf
+      (atlas-mode)
+      (read-only-mode -1)
+      (erase-buffer)
+      (insert content)
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
 (provide 'atlas-display)
 ;;; atlas-display.el ends here

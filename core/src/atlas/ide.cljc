@@ -9,7 +9,8 @@
             [atlas.ontology :as ot]
             [atlas.query :as query]
             [atlas.cljc.platform :as platform]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.set :as set]))
 
 ;; =============================================================================
 ;; HELPERS
@@ -113,6 +114,16 @@
 ;; QUERY API
 ;; =============================================================================
 
+(defn list-entity-types
+  "List all registered entity types in the registry."
+  []
+  (vec (sort (cid/registered-types))))
+
+(defn entity-type-ontology-keys
+  "Get ontology keys for a given entity type."
+  [entity-type]
+  (vec (or (ot/ontology-keys-for (ensure-keyword entity-type)) [])))
+
 (defn list-all-entities
   "List all registered entities with their type classification.
    Types: endpoint, function, component, schema, protocol,
@@ -144,21 +155,18 @@
   ([]
    (list-aspects @cid/registry))
   ([registry]
-   (let [core-aspects #{:atlas/execution-function
-                        :atlas/structure-component
-                        :atlas/interface-endpoint
-                        :atlas/schema
-                        :atlas/data-schema
-                        :semantic-namespace.contract/instance}
+   (let [;; Get registered entity types dynamically
+         entity-types (cid/registered-types)
+         ;; Count aspect usage, excluding entity types
          counts (reduce (fn [acc identity]
-                          (reduce (fn [m aspect]
-                                    (if (core-aspects aspect)
-                                      m
-                                      (update m aspect (fnil inc 0))))
-                                  acc
-                                  identity))
+                          (let [aspects (cid/aspects identity)]
+                            (reduce (fn [m aspect]
+                                      (update m aspect (fnil inc 0)))
+                                    acc
+                                    aspects)))
                         {}
                         (keys registry))
+         ;; Namespace ordering for display
          ns-order {"authorization" 0
                    "capacity" 1
                    "compliance" 2
@@ -175,6 +183,48 @@
                      (let [ns (namespace aspect)]
                        [(get ns-order ns 100) ns (name aspect)])))
           vec))))
+
+(defn list-aspect-namespaces
+  "List all aspect namespaces with usage counts.
+   Dynamically excludes entity types using the registry."
+  ([]
+   (list-aspect-namespaces @cid/registry))
+  ([registry]
+   (let [;; Count aspects by namespace
+         ns-counts (reduce (fn [acc identity]
+                             (let [aspects (cid/aspects identity)]
+                               (reduce (fn [m aspect]
+                                         (when-let [ns (namespace aspect)]
+                                           (update m ns (fnil inc 0))))
+                                       acc
+                                       aspects)))
+                           {}
+                           (keys registry))]
+     (->> ns-counts
+          (map (fn [[ns count]]
+                 {:namespace/name ns
+                  :namespace/count count}))
+          (sort-by :namespace/name)
+          vec))))
+
+(defn list-aspect-names-in-namespace
+  "List all aspect names (without namespace prefix) in a given namespace.
+   Returns only aspects, not entity types."
+  ([ns-name]
+   (list-aspect-names-in-namespace @cid/registry ns-name))
+  ([registry ns-name]
+   (let [;; Collect all unique names in the namespace
+         names (reduce (fn [acc identity]
+                         (let [aspects (cid/aspects identity)]
+                           (reduce (fn [s aspect]
+                                     (if (= (namespace aspect) ns-name)
+                                       (conj s (name aspect))
+                                       s))
+                                   acc
+                                   aspects)))
+                       #{}
+                       (keys registry))]
+     (vec (sort names)))))
 
 (defn entities-with-aspect [aspect]
   "Find all entities with given aspect."
@@ -785,13 +835,15 @@
 ;; =============================================================================
 
 (defn explorer-filter-entities
-  "Filter entities matching AND/OR aspect criteria.
+  "Filter entities matching AND/OR aspect criteria, sorted by semantic distance.
    - Entity matches if it has ALL aspects from aspects-and
    - OR entity matches if it has ANY aspect from aspects-or
-   Returns vector of {:dev-id :type} maps."
+   - Results sorted by Jaccard similarity to the query aspects (closest first)
+   Returns vector of {:dev-id :type :similarity :shared :unique} maps."
   [aspects-and aspects-or]
-  (let [registry @cid/registry]
-    (when (or (seq aspects-and) (seq aspects-or))
+  (let [registry @cid/registry
+        query-aspects (set/union (set aspects-and) (set aspects-or))]
+    (when (seq query-aspects)
       (->> registry
            (filter (fn [[identity _props]]
                      (let [matches-and? (and (seq aspects-and)
@@ -800,11 +852,51 @@
                                             (some #(contains? identity %) aspects-or))]
                        (or matches-and? matches-or?))))
            (map (fn [[identity props]]
-                  {:dev-id (:atlas/dev-id props)
-                   :type (to-string (:atlas/type props))}))
+                  (let [entity-aspects (cid/aspects identity)
+                        shared (set/intersection query-aspects entity-aspects)
+                        unique-to-entity (set/difference entity-aspects query-aspects)
+                        union (set/union query-aspects entity-aspects)
+                        similarity (if (seq union)
+                                     (/ (count shared) (count union))
+                                     0.0)]
+                    {:dev-id (:atlas/dev-id props)
+                     :type (to-string (:atlas/type props))
+                     :similarity (double similarity)
+                     :shared (sorted-vec shared)
+                     :unique (sorted-vec unique-to-entity)})))
            (filter :dev-id)
-           (sort-by :dev-id)
+           ;; Sort by similarity (descending), then by dev-id for stability
+           (sort-by (juxt (comp - :similarity) :dev-id))
            vec))))
+
+(defn similar-with-diff
+  "Find similar entities to a compound identity, showing aspect differences.
+   Returns entities sorted by similarity with shared and unique aspects highlighted."
+  [compound-identity]
+  (let [compound-identity-set (if (set? compound-identity)
+                                 compound-identity
+                                 (set compound-identity))
+        query-aspects (cid/aspects compound-identity-set)
+        registry @cid/registry]
+    (->> registry
+         (keep (fn [[identity props]]
+                 (when (not= identity compound-identity-set)
+                   (let [entity-aspects (cid/aspects identity)
+                         shared (set/intersection query-aspects entity-aspects)
+                         unique-to-query (set/difference query-aspects entity-aspects)
+                         unique-to-entity (set/difference entity-aspects query-aspects)
+                         union (set/union query-aspects entity-aspects)
+                         similarity (if (seq union)
+                                      (/ (count shared) (count union))
+                                      0.0)]
+                     (when (pos? similarity)  ; Only include entities with some overlap
+                       {:dev-id (:atlas/dev-id props)
+                        :similarity (double similarity)
+                        :shared (sorted-vec shared)
+                        :unique-to-query (sorted-vec unique-to-query)
+                        :unique-to-entity (sorted-vec unique-to-entity)})))))
+         (sort-by (juxt (comp - :similarity) :dev-id))
+         vec)))
 
 ;; =============================================================================
 ;; LLM EXPORT API

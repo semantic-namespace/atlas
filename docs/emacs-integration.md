@@ -96,6 +96,18 @@ The main menu (`M-x semantic-ns`) provides:
 | `a` | Find by aspect | Find entities with a specific aspect |
 | `A` | List aspects | Show all aspects with usage counts |
 
+### Authoring
+| Key | Command | Description |
+|-----|---------|-------------|
+| `N` | Interactive author entity | **NEW!** Guided entity creation with similarity feedback |
+| `+` | Add aspect to set | **NEW!** Add aspect to #{...} with real-time similarity |
+| `s` | Aspect stats | Show how many entities share each aspect with an entity |
+| `S` | Aspect stats at point | Show aspect stats for entity at cursor |
+| `I` | Insert aspect | Two-step completion: select namespace, then name |
+| `D` | Insert dev-id | Insert existing dev-id with type annotation |
+| `P` | Aspect palette | Browse all available aspects (click to copy) |
+| `~` | Similar at point | Show similar entities with aspect differences |
+
 ### Entity Details
 | Key | Command | Description |
 |-----|---------|-------------|
@@ -158,6 +170,12 @@ Press `z` from the main menu to access advanced features:
 | `P` | PII surface | Find entities handling PII |
 | `E` | Error handler coverage | Check error handling coverage |
 | `T` | Trace data flow | Trace a data key through the system |
+
+### Authoring Tools (Advanced)
+| Key | Command | Description |
+|-----|---------|-------------|
+| `n` | Create new aspect | Create a new aspect with guided prompts |
+| `e` | Scaffold entity | Insert template code for a new entity |
 
 ### Ontology Tools
 | Key | Command | Description |

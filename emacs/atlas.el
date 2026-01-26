@@ -49,6 +49,8 @@
 (require 'atlas-protocols)
 (require 'atlas-lsp)
 (require 'atlas-explorer)
+(require 'atlas-authoring)
+(require 'atlas-interactive)
 
 ;;; Explorer Transient Menu
 
@@ -81,6 +83,15 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("i" "Entity info" atlas-browse-entity-info)
     ("D" "Dependencies" atlas-browse-dependencies)
     ("R" "Dependents" atlas-browse-dependents)]
+   ["Authoring"
+    ("N" "New entity (interactive)" atlas-interactive-author-entity)
+    ("+" "Add aspect to set at point" atlas-interactive-add-aspect-to-set)
+    ("s" "Aspect stats" atlas-authoring-aspect-stats)
+    ("S" "Aspect stats at point" atlas-authoring-aspect-stats-at-point)
+    ("I" "Insert aspect" atlas-authoring-insert-aspect)
+    ("D" "Insert dev-id" atlas-authoring-insert-dev-id)
+    ("P" "Aspect palette" atlas-authoring-aspect-palette)
+    ("~" "Similar entities at point" atlas-authoring-similar-at-point)]
    ["Business Semantics"
     ("b" "List business entities" atlas-business-list-entities)
     ("B" "Business info" atlas-business-info)
@@ -111,6 +122,10 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("V" "Architecture view" atlas-analysis-architecture-view)
     ("O" "Operations view" atlas-analysis-operations-view)
     ("C" "Domain coupling" atlas-analysis-domain-coupling)]
+   ["Authoring Tools"
+    ("n" "Create new aspect" atlas-authoring-create-aspect)
+    ("d" "Create new dev-id" atlas-authoring-create-dev-id)
+    ("e" "Scaffold entity" atlas-authoring-scaffold-entity)]
    ["Business Semantics"
     ("N" "Implementations of aspect" atlas-business-implementations)]
    ["Impact & Refactoring"
