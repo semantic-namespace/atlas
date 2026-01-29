@@ -36,7 +36,8 @@
         dimmed? (and highlight-aspects
                      (not highlighted?)
                      (= filter-mode :highlight))
-        entity-count (get entity-counts full-aspect 0)]
+        entity-count (get entity-counts full-aspect 0)
+        zero-count? (= entity-count 0)]
     [:span {:on-click #(on-click full-aspect)
             :style {:display "inline-block"
                     :padding "0.25rem 0.5rem"
@@ -49,18 +50,24 @@
                                   in-or? "#4aef7a"       ; Green for OR
                                   in-not? "#ef4a4a"      ; Red for NOT
                                   highlighted? "#3a7a5a"
+                                  zero-count? "#1a1a2a"  ; Darker background for zero
                                   :else "#2a2a4a")
                     :color (cond
                              in-and? "#fff"
                              in-or? "#000"
                              in-not? "#fff"
                              dimmed? "#555"
+                             zero-count? "#555"         ; Dimmed text for zero
                              :else "#ccc")
-                    :opacity (if dimmed? 0.4 1)
+                    :opacity (cond
+                               dimmed? 0.4
+                               zero-count? 0.5          ; Reduced opacity for zero
+                               :else 1)
                     :border (cond
                               in-and? "1px solid #6ab4ff"
                               in-or? "1px solid #6aff9a"
                               in-not? "1px solid #ff6a6a"
+                              zero-count? "1px solid #2a2a3a"  ; Subtle border for zero
                               :else "1px solid #3a3a5a")
                     :transition "all 0.2s ease"}}
      (str (name aspect-name) " (" entity-count ")")]))

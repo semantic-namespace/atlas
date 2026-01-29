@@ -44,7 +44,7 @@
 
 (defn aspects-map-data
   "Build and sort aspects map: namespace -> #{aspect-names}"
-  [registry aspect-stats sort-ns sort-items]
+  [registry aspect-stats sort-ns sort-items aspects-and aspects-or aspects-not]
   (when (and registry aspect-stats)
     (let [aspect-stats-map (data/aspect-stats->map aspect-stats)
           _ (js/console.log "aspect-stats-map size:" (count aspect-stats-map)
@@ -54,8 +54,8 @@
           ;; Convert to vector to ensure order is preserved in React rendering
           aspects-vec (vec sorted-map)
           first-3-keys (vec (take 3 (keys sorted-map)))
-          ;; Count entities per aspect
-          entity-counts (data/count-entities-by-aspect registry)]
+          ;; Count entities per aspect - filtered by current query
+          entity-counts (data/count-entities-by-aspect-filtered registry aspects-and aspects-or aspects-not)]
       (js/console.log "aspects-map-data - sort-ns:" (name sort-ns)
                       "sort-items:" (name sort-items)
                       "namespaces:" (count sorted-map)
@@ -67,7 +67,7 @@
 
 (defn entities-map-data
   "Build and sort entities map: type -> {dev-id -> identity}"
-  [registry sort-type sort-items]
+  [registry sort-type sort-items query-aspects]
   (when registry
     (let [entities-map (data/build-entities-map registry)
           sorted-map (data/sort-entities-map entities-map sort-type)
@@ -79,7 +79,8 @@
                       "types:" (count sorted-map)
                       "order:" (clj->js all-keys))
       {:entities-map entities-vec
-       :sort-items sort-items})))
+       :sort-items sort-items
+       :query-aspects query-aspects})))
 
 ;; =============================================================================
 ;; Selection Handlers
@@ -92,27 +93,34 @@
          (fn [state]
            (let [in-and? (contains? (:aspects-and state) aspect)
                  in-or? (contains? (:aspects-or state) aspect)
-                 in-not? (contains? (:aspects-not state) aspect)]
-             (cond
-               ;; Not selected → AND
-               (and (not in-and?) (not in-or?) (not in-not?))
-               (update state :aspects-and conj aspect)
+                 in-not? (contains? (:aspects-not state) aspect)
+                 new-state (cond
+                             ;; Not selected → AND
+                             (and (not in-and?) (not in-or?) (not in-not?))
+                             (update state :aspects-and conj aspect)
 
-               ;; AND → OR
-               in-and?
-               (-> state
-                   (update :aspects-and disj aspect)
-                   (update :aspects-or conj aspect))
+                             ;; AND → OR
+                             in-and?
+                             (-> state
+                                 (update :aspects-and disj aspect)
+                                 (update :aspects-or conj aspect))
 
-               ;; OR → NOT
-               in-or?
-               (-> state
-                   (update :aspects-or disj aspect)
-                   (update :aspects-not conj aspect))
+                             ;; OR → NOT
+                             in-or?
+                             (-> state
+                                 (update :aspects-or disj aspect)
+                                 (update :aspects-not conj aspect))
 
-               ;; NOT → Not selected
-               in-not?
-               (update state :aspects-not disj aspect))))))
+                             ;; NOT → Not selected
+                             in-not?
+                             (update state :aspects-not disj aspect))
+                 ;; Auto-switch sorting: distance-asc if aspects selected, alpha-asc if none
+                 has-aspects? (or (seq (:aspects-and new-state))
+                                  (seq (:aspects-or new-state))
+                                  (seq (:aspects-not new-state)))
+                 new-sort (if has-aspects? :distance-asc :alpha-asc)]
+             (js/console.log "cycle-aspect! auto-sort:" (name new-sort) "has-aspects:" has-aspects?)
+             (assoc new-state :sort-entities-items new-sort)))))
 
 (defn toggle-type!
   "Toggle selection of an entity type"
@@ -154,7 +162,8 @@
          :aspects-not #{}
          :selected-types #{}
          :selected-entities #{}
-         :selected-entities-not #{}))
+         :selected-entities-not #{}
+         :sort-entities-items :alpha-asc))
 
 (defn toggle-filter-mode!
   "Toggle between highlight and hide modes"
@@ -412,8 +421,10 @@
 (defn main-view []
   (let [{:keys [registry aspect-stats aspects-and aspects-or aspects-not selected-types selected-entities selected-entities-not filter-mode
                 sort-aspects-ns sort-aspects-items sort-entities-type sort-entities-items]} @app-state
-        aspects-data (aspects-map-data registry aspect-stats sort-aspects-ns sort-aspects-items)
-        entities-data (entities-map-data registry sort-entities-type sort-entities-items)
+        ;; Combine all query aspects for filtering display
+        query-aspects (vec (set/union aspects-and aspects-or aspects-not))
+        aspects-data (aspects-map-data registry aspect-stats sort-aspects-ns sort-aspects-items aspects-and aspects-or aspects-not)
+        entities-data (entities-map-data registry sort-entities-type sort-entities-items query-aspects)
         ;; Compute what to highlight/hide based on selections
         ;; Aspects -> highlight matching entities
         highlight-entities (when (or (seq aspects-and) (seq aspects-or) (seq aspects-not))
@@ -459,8 +470,13 @@
          :selected-entities-not selected-entities-not
          :highlight-entities highlight-entities
          :filter-mode filter-mode
+         :query-aspects query-aspects
+         :aspects-and aspects-and
+         :aspects-or aspects-or
+         :aspects-not aspects-not
          :on-type-click toggle-type!
          :on-entity-click toggle-entity!
+         :on-aspect-click cycle-aspect!
          :sort-type sort-entities-type
          :sort-items sort-entities-items
          :on-sort-type #(set-sort! :sort-entities-type %)

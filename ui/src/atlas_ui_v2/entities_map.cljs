@@ -2,7 +2,8 @@
   "Entities Map component - displays type -> dev-id -> identity hierarchy.
 
    Click on a type or entity to filter the aspects map."
-  (:require [atlas-ui-v2.data :as data]))
+  (:require [atlas-ui-v2.data :as data]
+            [clojure.set :as set]))
 
 (defn sort-dropdown
   "Sort dropdown component"
@@ -26,22 +27,60 @@
       [:option {:value (name value)} label-text])]])
 
 (defn identity-aspects
-  "Render the sorted compound identity aspects (excluding atlas entity type)"
-  [identity text-color]
-  (let [;; Filter out the atlas entity type and sort the remaining aspects
+  "Render the sorted compound identity aspects (excluding atlas entity type and query aspects)"
+  [identity text-color query-aspects on-aspect-click aspects-and aspects-or aspects-not]
+  (let [query-set (set query-aspects)
+        ;; Filter out the atlas entity type, query aspects, and sort the remaining aspects
         aspects (->> identity
                      (filter keyword?)
                      (remove #(= "atlas" (namespace %)))
+                     (remove query-set)  ; Filter out query aspects
                      sort
                      vec)]
-    [:span {:style {:font-size "0.7rem"
-                    :color text-color
-                    :font-family "monospace"}}
-     (str aspects)]))
+    (if (empty? aspects)
+      [:span {:style {:font-size "0.7rem"
+                      :color text-color
+                      :font-family "monospace"}}
+       "[]"]
+      [:span {:style {:font-size "0.7rem"
+                      :font-family "monospace"
+                      :display "inline-flex"
+                      :flex-wrap "wrap"
+                      :gap "0.2rem"
+                      :align-items "center"}}
+       [:span {:style {:color text-color}} "["]
+       (interpose
+        [:span {:style {:color text-color}} " "]
+        (for [aspect aspects]
+          (let [in-and? (contains? aspects-and aspect)
+                in-or? (contains? aspects-or aspect)
+                in-not? (contains? aspects-not aspect)]
+            ^{:key aspect}
+            [:span {:on-click (fn [e]
+                                (.stopPropagation e)  ; Prevent entity row click
+                                (on-aspect-click aspect))
+                    :style {:cursor "pointer"
+                            :padding "0 0.2rem"
+                            :border-radius "2px"
+                            :background (cond
+                                          in-and? "#4a9eff"
+                                          in-or? "#4aef7a"
+                                          in-not? "#ef4a4a"
+                                          :else "transparent")
+                            :color (cond
+                                     in-and? "#fff"
+                                     in-or? "#000"
+                                     in-not? "#fff"
+                                     :else text-color)
+                            :transition "all 0.15s ease"
+                            :text-decoration (if (or in-and? in-or? in-not?) "none" "underline")
+                            :text-decoration-style (if (or in-and? in-or? in-not?) "solid" "dotted")}}
+             (str aspect)])))
+       [:span {:style {:color text-color}} "]"]])))
 
 (defn entity-row
   "Render a single entity as a clickable row"
-  [dev-id identity {:keys [selected-entities selected-entities-not highlight-entities filter-mode on-entity-click]}]
+  [dev-id identity {:keys [selected-entities selected-entities-not highlight-entities filter-mode on-entity-click query-aspects on-aspect-click aspects-and aspects-or aspects-not]}]
   (let [selected? (contains? selected-entities dev-id)
         not-selected? (contains? selected-entities-not dev-id)
         highlighted? (and highlight-entities (contains? highlight-entities dev-id))
@@ -51,10 +90,20 @@
         dimmed? (and highlight-entities
                      (not highlighted?)
                      (= filter-mode :highlight))
+        ;; Calculate if this is a 100% match (all non-atlas aspects are in the query)
+        entity-aspects (->> identity
+                            (filter keyword?)
+                            (remove #(= "atlas" (namespace %)))
+                            set)
+        query-set (set query-aspects)
+        perfect-match? (and (seq query-aspects)
+                           (seq entity-aspects)
+                           (empty? (set/difference entity-aspects query-set)))
         ;; Determine text color for compound identity based on background
         identity-text-color (cond
                               selected? "#cce5ff"      ; Light blue for selected (blue bg)
                               not-selected? "#ffcccc"  ; Light red for NOT selected (red bg)
+                              perfect-match? "#8a7a3a" ; Darker yellow-brown for perfect match (yellow bg)
                               highlighted? "#a8e6c1"   ; Light green for highlighted (green bg)
                               dimmed? "#444"           ; Dark for dimmed
                               :else "#888")]           ; Medium grey for default
@@ -67,17 +116,20 @@
                      :background (cond
                                    selected? "#4a9eff"
                                    not-selected? "#ef4a4a"
+                                   perfect-match? "#5a5a3a"  ; Light yellow-brown for perfect match
                                    highlighted? "#3a7a5a"
                                    :else "transparent")
                      :color (cond
                               selected? "#fff"
                               not-selected? "#fff"
+                              perfect-match? "#ffd"    ; Light yellow text for perfect match
                               dimmed? "#444"
                               :else "#bbb")
                      :opacity (if dimmed? 0.4 1)
                      :border-left (cond
                                     selected? "3px solid #6ab4ff"
                                     not-selected? "3px solid #ff6a6a"
+                                    perfect-match? "3px solid #8a8a4a"  ; Yellow-ish border for perfect match
                                     :else "3px solid transparent")
                      :transition "all 0.2s ease"
                      :display "flex"
@@ -85,11 +137,11 @@
                      :align-items "center"}}
        [:span {:style {:font-size "0.85rem"}}
         (str dev-id)]
-       [identity-aspects identity identity-text-color]])))
+       [identity-aspects identity identity-text-color query-aspects on-aspect-click aspects-and aspects-or aspects-not]])))
 
 (defn type-section
   "Render an entity type with its entities"
-  [entity-type dev-id-map sort-items opts]
+  [entity-type dev-id-map sort-items query-aspects opts]
   (let [{:keys [selected-types highlight-entities filter-mode on-type-click]} opts
         selected? (contains? selected-types entity-type)
         ;; Check if any entity in this type is highlighted
@@ -104,8 +156,8 @@
         dimmed-type? (and highlight-entities
                           (not type-has-highlight?)
                           (= filter-mode :highlight))
-        ;; Sort dev-ids according to sort-items setting
-        sorted-entities (data/sort-dev-ids dev-id-map sort-items)]
+        ;; Sort dev-ids according to sort-items setting, passing query-aspects for distance sorting
+        sorted-entities (data/sort-dev-ids dev-id-map sort-items query-aspects)]
     (when-not should-hide-type?
       [:div {:style {:margin-bottom "1.5rem"
                      :opacity (if dimmed-type? 0.4 1)
@@ -140,7 +192,7 @@
 (defn entities-map-view
   "Main entities map component"
   [entities-data opts]
-  (let [{:keys [entities-map sort-items]} entities-data
+  (let [{:keys [entities-map sort-items query-aspects]} entities-data
         {:keys [sort-type on-sort-type on-sort-items]} opts]
     [:div {:style {:display "flex"
                    :flex-direction "column"
@@ -168,7 +220,9 @@
         [[:alpha-asc "A-Z"]
          [:alpha-desc "Z-A"]
          [:aspect-count-desc "Most Aspects"]
-         [:aspect-count-asc "Fewest Aspects"]]
+         [:aspect-count-asc "Fewest Aspects"]
+         [:distance-asc "Best Match"]
+         [:distance-desc "Worst Match"]]
         on-sort-items]]]
      ;; Scrollable content
      [:div {:style {:flex 1
@@ -179,4 +233,4 @@
         [:div {:style {:color "#666"}} "No entities found"]
         (for [[entity-type dev-id-map] entities-map]
           ^{:key entity-type}
-          [type-section entity-type dev-id-map sort-items opts]))]]))
+          [type-section entity-type dev-id-map sort-items query-aspects opts]))]]))

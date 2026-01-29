@@ -90,6 +90,39 @@
        (filter keyword?)  ; Only keywords
        frequencies))  ; Count occurrences
 
+(defn count-entities-by-aspect-filtered
+  "Count how many entities have each aspect, filtered by current aspect query.
+   Only counts entities that match the AND/OR/NOT criteria.
+
+   - If no aspects are selected, returns global counts (same as count-entities-by-aspect)
+   - If aspects are selected, only counts aspects from entities matching the query
+
+   Returns map of {aspect-keyword -> count}"
+  [registry aspects-and aspects-or aspects-not]
+  (if (and (empty? aspects-and) (empty? aspects-or) (empty? aspects-not))
+    ;; No filter - return global counts
+    (count-entities-by-aspect registry)
+    ;; Filter entities first, then count their aspects
+    (let [matching-entities (->> registry
+                                (filter (fn [[identity _props]]
+                                          (let [matches-and? (and (seq aspects-and)
+                                                                  (every? #(contains? identity %) aspects-and))
+                                                matches-or? (and (seq aspects-or)
+                                                                 (some #(contains? identity %) aspects-or))
+                                                matches-not? (and (seq aspects-not)
+                                                                  (some #(contains? identity %) aspects-not))
+                                                has-positive-criteria? (or (seq aspects-and) (seq aspects-or))
+                                                base-match? (if has-positive-criteria?
+                                                              (or matches-and? matches-or?)
+                                                              true)]
+                                            (and base-match? (not matches-not?)))))
+                                (map first))]  ; Get compound identities
+      ;; Count aspects from matching entities
+      (->> matching-entities
+           (mapcat identity)  ; Flatten to individual aspects
+           (filter keyword?)  ; Only keywords
+           frequencies))))
+
 (defn stats
   "Compute statistics about the registry"
   [registry]
@@ -279,6 +312,18 @@
     ;; Default to alphabetical
     (into (sorted-map) entities-map)))
 
+(defn calculate-entity-distance
+  "Calculate distance from entity to query aspects.
+   Distance = number of aspects in entity NOT in the query.
+   Lower distance = better match (0 = perfect match)"
+  [identity query-aspects]
+  (let [entity-aspects (->> identity
+                            (filter keyword?)
+                            (remove #(= "atlas" (namespace %)))
+                            set)
+        query-set (set query-aspects)]
+    (count (set/difference entity-aspects query-set))))
+
 (defn sort-dev-ids
   "Sort dev-ids within an entity type.
 
@@ -286,35 +331,100 @@
    - :alpha-asc - Alphabetical A-Z (default)
    - :alpha-desc - Alphabetical Z-A
    - :aspect-count-desc - By number of aspects (most first)
-   - :aspect-count-asc - By number of aspects (fewest first)"
-  [dev-id-map sort-by]
-  (let [result (case sort-by
-                 :alpha-asc
-                 (into (sorted-map) dev-id-map)
+   - :aspect-count-asc - By number of aspects (fewest first)
+   - :distance-asc - By distance to query (closest match first) - requires query-aspects
+   - :distance-desc - By distance to query (furthest match first) - requires query-aspects"
+  ([dev-id-map sort-by] (sort-dev-ids dev-id-map sort-by nil))
+  ([dev-id-map sort-by query-aspects]
+   (let [result (case sort-by
+                  :alpha-asc
+                  (into (sorted-map) dev-id-map)
 
-                 :alpha-desc
-                 (into (sorted-map-by #(compare %2 %1)) dev-id-map)
+                  :alpha-desc
+                  (into (sorted-map-by #(compare %2 %1)) dev-id-map)
 
-                 :aspect-count-desc
-                 (reverse (sort-by (fn [[_dev-id identity]]
-                                     (count (filter keyword? identity)))
-                                   dev-id-map))
+                  :aspect-count-desc
+                  (reverse (sort-by (fn [[_dev-id identity]]
+                                      (count (filter keyword? identity)))
+                                    dev-id-map))
 
-                 :aspect-count-asc
-                 (sort-by (fn [[_dev-id identity]]
-                            (count (filter keyword? identity)))
-                          dev-id-map)
+                  :aspect-count-asc
+                  (sort-by (fn [[_dev-id identity]]
+                             (count (filter keyword? identity)))
+                           dev-id-map)
 
-                 ;; Default to alphabetical
-                 (into (sorted-map) dev-id-map))]
-    #?(:cljs (when (contains? #{:aspect-count-desc :aspect-count-asc} sort-by)
-               (let [first-3 (take 3 result)
-                     counts-str (->> first-3
-                                     (map (fn [[dev-id identity]]
-                                            (let [cnt (count (filter keyword? identity))]
-                                              (str (name dev-id) ":" cnt))))
-                                     (str/join ", "))]
-                 (js/console.log "sort-dev-ids sort-by:" (name sort-by)
-                                "first-3:" counts-str
-                                "total:" (count dev-id-map)))))
-    result))
+                  :distance-asc
+                  (if (seq query-aspects)
+                    ;; Sort by distance, but prioritize entities with additional aspects (distance > 0)
+                    ;; Distance 0 (perfect matches) appear last
+                    (let [_ #?(:cljs (js/console.log "DISTANCE-ASC sorting with query:" (clj->js query-aspects)))
+                          entries (vec dev-id-map)
+                          ;; Separate perfect matches (distance 0) from others
+                          {perfect-matches true others false}
+                          (group-by (fn [[_dev-id identity]]
+                                      (= 0 (calculate-entity-distance identity query-aspects)))
+                                    entries)
+                          ;; Sort others by distance then name
+                          _ #?(:cljs (when (seq others)
+                                       (js/console.log "  BEFORE SORT:"
+                                                      (->> (take 5 others)
+                                                           (map (fn [[dev-id identity]]
+                                                                  (str (name dev-id) ":d" (calculate-entity-distance identity query-aspects))))
+                                                           (str/join ", ")))))
+                          ;; Custom comparator instead of sort-by
+                          sorted-others (sort (fn [[dev-id-1 identity-1] [dev-id-2 identity-2]]
+                                                (let [dist1 (calculate-entity-distance identity-1 query-aspects)
+                                                      dist2 (calculate-entity-distance identity-2 query-aspects)]
+                                                  (if (= dist1 dist2)
+                                                    (compare (str dev-id-1) (str dev-id-2))
+                                                    (compare dist1 dist2))))
+                                              (or others []))
+                          _ #?(:cljs (when (seq sorted-others)
+                                       (js/console.log "  AFTER SORT:"
+                                                      (->> (take 5 sorted-others)
+                                                           (map (fn [[dev-id identity]]
+                                                                  (str (name dev-id) ":d" (calculate-entity-distance identity query-aspects))))
+                                                           (str/join ", ")))))
+                          ;; Sort perfect matches alphabetically
+                          sorted-perfect (sort-by (fn [[dev-id _identity]]
+                                                    (str dev-id))
+                                                  (or perfect-matches []))
+                          ;; Concatenate and force realization: others first, then perfect matches
+                          result (vec (concat sorted-others sorted-perfect))]
+                      #?(:cljs (js/console.log "  perfect-matches:" (count (or perfect-matches []))
+                                              "others:" (count (or others []))
+                                              "first-3 others:"
+                                              (->> sorted-others (take 3)
+                                                   (map (fn [[dev-id identity]]
+                                                          (str (name dev-id) ":d" (calculate-entity-distance identity query-aspects))))
+                                                   (str/join ", "))))
+                      result)
+                    (into (sorted-map) dev-id-map))  ; Fallback to alphabetical if no query
+
+                  :distance-desc
+                  (if (seq query-aspects)
+                    (reverse (sort-by (fn [[_dev-id identity]]
+                                        [(calculate-entity-distance identity query-aspects)
+                                         (str _dev-id)])  ; Secondary sort by name for stability
+                                      dev-id-map))
+                    (into (sorted-map) dev-id-map))  ; Fallback to alphabetical if no query
+
+                  ;; Default to alphabetical
+                  (into (sorted-map) dev-id-map))]
+     #?(:cljs (when (contains? #{:aspect-count-desc :aspect-count-asc :distance-asc :distance-desc} sort-by)
+                (let [first-3 (take 3 result)
+                      info-str (if (contains? #{:distance-asc :distance-desc} sort-by)
+                                 (->> first-3
+                                      (map (fn [[dev-id identity]]
+                                             (let [dist (calculate-entity-distance identity (or query-aspects []))]
+                                               (str (name dev-id) ":d" dist))))
+                                      (str/join ", "))
+                                 (->> first-3
+                                      (map (fn [[dev-id identity]]
+                                             (let [cnt (count (filter keyword? identity))]
+                                               (str (name dev-id) ":" cnt))))
+                                      (str/join ", ")))]
+                  (js/console.log "sort-dev-ids sort-by:" (name sort-by)
+                                 "first-3:" info-str
+                                 "total:" (count dev-id-map)))))
+     result)))
