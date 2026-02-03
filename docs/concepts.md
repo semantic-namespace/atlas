@@ -2,6 +2,17 @@
 
 Atlas rethinks how we describe software architecture. This guide explains the key ideas.
 
+## The Entity Model
+
+In Atlas, an entity is:
+
+- **anchored** by a dev-id
+- **understood** by a semantic identity
+- **discovered** via aspect filtering
+- **governed** via invariants
+
+The key insight: **identity is for attachment; semantics are for reasoning.**
+
 ## Semantic Identity vs. Spatial Identity
 
 ### The Traditional Approach
