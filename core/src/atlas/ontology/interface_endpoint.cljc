@@ -118,7 +118,6 @@
  :atlas/type-ref
  #{:meta/ref-interface-endpoint-deps}
  {:type-ref/source :atlas/interface-endpoint
-  :type-ref/target :atlas/execution-function
   :type-ref/property :interface-endpoint/deps
   :type-ref/datalog-verb :entity/depends
   :type-ref/cardinality :db.cardinality/many})

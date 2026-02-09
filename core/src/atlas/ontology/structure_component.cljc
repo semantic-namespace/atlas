@@ -12,15 +12,7 @@
             [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
-;; =============================================================================
-;; ONTOLOGY DEFINITION
-;; =============================================================================
 
-(def ontology-definition
-  "The ontology definition for :atlas/structure-component"
-  {:ontology/for :atlas/structure-component
-   :ontology/keys [:structure-component/deps]
-   :dataflow/deps-key :structure-component/deps})
 
 ;; =============================================================================
 ;; SPECS
@@ -180,7 +172,9 @@
  :atlas/structure-component
  :atlas/ontology
  #{:atlas/structure-component}
- ontology-definition)
+ {:ontology/for :atlas/structure-component
+   :ontology/keys [:structure-component/deps]
+   :dataflow/deps-key :structure-component/deps})
 
 ;; Type-ref: structure-component → structure-component (self-ref deps)
 (registry/register!
@@ -188,7 +182,6 @@
  :atlas/type-ref
  #{:meta/ref-structure-component-deps}
  {:type-ref/source :atlas/structure-component
-  :type-ref/target :atlas/structure-component
   :type-ref/property :structure-component/deps
   :type-ref/datalog-verb :entity/depends
   :type-ref/cardinality :db.cardinality/many})

@@ -18,7 +18,6 @@
 (def ontology-definition
   {:ontology/for :atlas/type-ref
    :ontology/keys [:type-ref/source        ; Source ontology (who has the ref)
-                   :type-ref/target        ; Target ontology (who is referenced)
                    :type-ref/property      ; Property key in source entity
                    :type-ref/datalog-verb  ; Datalog attribute name
                    :type-ref/cardinality]}) ; :db.cardinality/one or /many
@@ -47,19 +46,6 @@
                     (:type-ref/source (entity/props-for ref-id)))))
        vec))
 
-(defn type-refs-for-target
-  "Find all type-refs where target matches the given ontology.
-
-   Example:
-     (type-refs-for-target :atlas/yorba-serialisation)
-     ;; => #{:type-ref/cache-serialisation
-     ;;      :type-ref/endpoint-serialisation}"
-  [target-ontology]
-  (->> (all-type-refs)
-       (filter (fn [ref-id]
-                 (= target-ontology
-                    (:type-ref/target (entity/props-for ref-id)))))
-       vec))
 
 ;; =============================================================================
 ;; GENERIC REFERENCE EXTRACTOR
@@ -102,7 +88,6 @@
 (def datalog-schema
   "Datascript schema for type-ref properties."
   {:type-ref/source {:db/cardinality :db.cardinality/one}
-   :type-ref/target {:db/cardinality :db.cardinality/one}
    :type-ref/property {:db/cardinality :db.cardinality/one}
    :type-ref/datalog-verb {:db/cardinality :db.cardinality/one}
    :type-ref/cardinality {:db/cardinality :db.cardinality/one}})
@@ -111,33 +96,8 @@
 ;; INVARIANTS
 ;; =============================================================================
 
-(defn invariant-type-ref-target-exists
-  "Type-refs must point to registered ontologies.
-
-   This ensures that all target ontologies actually exist in the registry."
-  []
-  (let [type-refs (all-type-refs)
-        registered-ontologies (->> (entity/all-with-aspect :atlas/ontology)
-                                   (map entity/props-for)
-                                   (map :ontology/for)
-                                   set)
-        violations (for [ref-id type-refs
-                         :let [props (entity/props-for ref-id)
-                               target (:type-ref/target props)]
-                         :when (and target
-                                    (not (registered-ontologies target)))]
-                     {:type-ref ref-id
-                      :missing-target target})]
-    (when (seq violations)
-      {:invariant :type-ref-target-exists
-       :violation :missing-target-ontology
-       :details violations
-       :severity :error
-       :message (str "Type-refs reference non-existent ontologies: "
-                     (mapv :missing-target violations))})))
-
 (def invariants
-  [invariant-type-ref-target-exists])
+  [])
 
 ;; =============================================================================
 ;; AUTO-REGISTRATION (top-level, like clojure.spec)
@@ -159,16 +119,12 @@
                           (when (contains? compound-id :atlas/type-ref)
                             (let [dev-id (:atlas/dev-id props)
                                   source (:type-ref/source props)
-                                  target (:type-ref/target props)
                                   property (:type-ref/property props)
                                   datalog-verb (:type-ref/datalog-verb props)
                                   cardinality (:type-ref/cardinality props)]
                               (cond-> []
                                 source
                                 (conj [:db/add dev-id :type-ref/source source])
-
-                                target
-                                (conj [:db/add dev-id :type-ref/target target])
 
                                 property
                                 (conj [:db/add dev-id :type-ref/property property])
@@ -180,9 +136,3 @@
                                 (conj [:db/add dev-id :type-ref/cardinality cardinality])))))
   :datalog-extractor/schema datalog-schema})
 
-;; Invariant
-(registry/register!
- :invariant/type-ref-target-exists
- :atlas/invariant
- #{:meta/type-ref-target-check}
- {:invariant/fn invariant-type-ref-target-exists})

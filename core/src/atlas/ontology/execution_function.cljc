@@ -182,7 +182,6 @@
  :atlas/type-ref
  #{:meta/ref-execution-function-deps}
  {:type-ref/source :atlas/execution-function
-  :type-ref/target :atlas/structure-component
   :type-ref/property :execution-function/deps
   :type-ref/datalog-verb :entity/depends
   :type-ref/cardinality :db.cardinality/many})
