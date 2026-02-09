@@ -31,99 +31,99 @@
   ;; UI Components
   ;; =========================================================================
 
-  #{:atlas/structure-component :tier/ui :domain/visualization}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/visualization}
   {:atlas/dev-id :component.ui/graph-view
-   :structure-component/consumes
+   :visual-component/consumes
    [:state/graph-data
     :state/filtered-graph-data ;; NEW: Lens-filtered data
     :atlas-ui.ui.state/selections
     :atlas-ui.ui.state/query-mode
     :atlas-ui.ui.state/search-term
     :atlas-ui.ui.state/active-lens] ;; NEW: Phase 3a
-   :structure-component/emits
+   :visual-component/emits
    [:ui-event/aspect-clicked
     :ui-event/aspect-shift-clicked
     :ui-event/entity-clicked
     :ui-event/background-clicked]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Interactive semantic graph of entities and aspects"
-   :structure-component/rendering-features ;; NEW: Phase 3b
+   :visual-component/rendering-features ;; NEW: Phase 3b
    [:feature/shape-differentiation
     :feature/aspect-badges
     :feature/edge-labels
     :feature/adaptive-layout]}
 
-  #{:atlas/structure-component :tier/ui :domain/controls}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/controls}
   {:atlas/dev-id :component.ui/selection-controls
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.ui.state/selections
     :atlas-ui.ui.state/negated-aspects
     :atlas-ui.ui.state/query-mode
     :atlas-ui.ui.state/min-score
     :atlas-ui.ui.state/hide-unmatched?]
-   :structure-component/emits
+   :visual-component/emits
    [:ui-event/aspect-toggled
     :ui-event/query-mode-changed
     :ui-event/selections-cleared
     :ui-event/visibility-toggled
     :ui-event/min-score-changed]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Semantic boolean query builder"}
 
-  #{:atlas/structure-component :tier/ui :domain/exploration} ;; NEW: Phase 3a
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/exploration} ;; NEW: Phase 3a
   {:atlas/dev-id :component.ui/lens-selector
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.ui.state/registry
     :atlas-ui.ui.state/active-lens
     :atlas-ui.ui.state/available-lenses]
-   :structure-component/emits
+   :visual-component/emits
    [:ui-event/lens-activated
     :ui-event/lens-cleared]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Semantic dimension selector for entropy reduction"
-   :structure-component/provides
+   :visual-component/provides
    [:lens-type/domain
     :lens-type/tier
     :lens-type/protocol
     :lens-type/constraint
     :lens-type/ui-intent]}
 
-  #{:atlas/structure-component :tier/ui :domain/information}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/information}
   {:atlas/dev-id :component.ui/sidebar
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.graph.node/id
     :atlas-ui.graph.node/identity
     :atlas-ui.graph.node/props
     :atlas-ui.graph.node/type]
-   :structure-component/emits
+   :visual-component/emits
    [:ui-event/sidebar-closed]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Semantic entity inspection panel"}
 
-  #{:atlas/structure-component :tier/ui :domain/search}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/search}
   {:atlas/dev-id :component.ui/search-bar
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.ui.state/search-term]
-   :structure-component/emits
+   :visual-component/emits
    [:ui-event/search-changed]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Live semantic text filter"}
 
-  #{:atlas/structure-component :tier/ui :domain/legend}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/legend}
   {:atlas/dev-id :component.ui/color-legend
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.ui.state/query-mode
     :atlas-ui.ui.state/selections]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Explains semantic visual encoding"}
 
-  #{:atlas/structure-component :tier/ui :domain/analytics}
+  #{:atlas/structure-component :atlas/visual-component :tier/ui :domain/analytics}
   {:atlas/dev-id :component.ui/info-panel
-   :structure-component/consumes
+   :visual-component/consumes
    [:atlas-ui.stats/total
     :atlas-ui.stats/matching
     :atlas-ui.stats/percentage]
-   :structure-component/visual-purpose
+   :visual-component/visual-purpose
    "Semantic registry analytics"}
 
   ;; =========================================================================

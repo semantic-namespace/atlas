@@ -16,12 +16,12 @@
    {::dev-id :component/cart-db
     ::identity #{:atlas/structure-component :tier/foundation :domain/cart :storage/db}
     ::props {:structure-component/deps #{}
-             :structure-component/provides [:cart/id :cart/items :cart/total :cart/updated-at]}}
+             :visual-component/provides [:cart/id :cart/items :cart/total :cart/updated-at]}}
 
    {::dev-id :component/pricing-engine
     ::identity #{:atlas/structure-component :tier/foundation :domain/pricing}
     ::props {:structure-component/deps #{}
-             :structure-component/provides [:cart/total]}}
+             :visual-component/provides [:cart/total]}}
 
    {::dev-id :fn/get-cart
     ::identity #{:atlas/execution-function :tier/service :domain/cart :operation/read}
@@ -136,7 +136,7 @@
  :atlas/structure-component
  #{ :domain/inbox}
   {:atlas/dev-id :component/inbox-connector
-   :structure-component/provides [:capability/read-inbox]
+   :visual-component/provides [:capability/read-inbox]
    :structure-component/deps #{:protocol/email-provider :protocol/oauth2}})
 
 (cid/register!
@@ -144,16 +144,16 @@
  :atlas/structure-component
  #{ :domain/policy}
   {:atlas/dev-id :component/pending-policy-cache
-   :structure-component/provides [:capability/pending-results]
-   :structure-component/consumes [:schema/service-identity]
-   :structure-component/emits [:schema/pending-result]})
+   :visual-component/provides [:capability/pending-results]
+   :visual-component/consumes [:schema/service-identity]
+   :visual-component/emits [:schema/pending-result]})
 
 (cid/register!
  :component/wikidata-enricher
  :atlas/structure-component
  #{ :domain/enrichment}
   {:atlas/dev-id :component/wikidata-enricher
-   :structure-component/consumes [:schema/service-identity]
+   :visual-component/consumes [:schema/service-identity]
    :structure-component/deps #{:protocol/wikidata}})
 
 ;; ============================================================================

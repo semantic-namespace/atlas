@@ -9,6 +9,7 @@
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
             [atlas.ontology.type-ref :as type-ref]
+            [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -18,13 +19,14 @@
 (def ontology-definition
   "The ontology definition for :atlas/structure-component"
   {:ontology/for :atlas/structure-component
-   :ontology/keys [:structure-component/deps
-                   :structure-component/consumes
-                   :structure-component/emits
-                   :structure-component/visual-purpose
-                   :structure-component/rendering-features
-                   :structure-component/provides]
+   :ontology/keys [:structure-component/deps]
    :dataflow/deps-key :structure-component/deps})
+
+;; =============================================================================
+;; SPECS
+;; =============================================================================
+
+(s/def :structure-component/deps (s/coll-of :atlas/dev-id))
 
 ;; =============================================================================
 ;; TEMPLATES - Reducing boilerplate
