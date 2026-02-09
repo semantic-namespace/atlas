@@ -118,7 +118,11 @@
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.structure-component :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
+    (require 'atlas.ontology.data-schema :reload)
     (init-fn)
+    ;; Validate registry before running tests
+    (assert (cid/validate-ontology-specs)
+            "Registry validation failed: ontology entities missing required keys")
     (f)))
 
 ;; Alias for backwards compatibility

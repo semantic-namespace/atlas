@@ -10,7 +10,8 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.ontology.type-ref :as type-ref]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [clojure.spec.alpha :as s]))
 
 ;; =============================================================================
 ;; ONTOLOGY DEFINITION
@@ -25,6 +26,14 @@
    :dataflow/context-key :interface-endpoint/context
    :dataflow/response-key :interface-endpoint/response
    :dataflow/deps-key :interface-endpoint/deps})
+
+;; =============================================================================
+;; SPECS
+;; =============================================================================
+
+(s/def :interface-endpoint/context (s/coll-of qualified-keyword?))
+(s/def :interface-endpoint/response (s/coll-of qualified-keyword?))
+(s/def :interface-endpoint/deps (s/coll-of :atlas/dev-id))
 
 ;; =============================================================================
 ;; DATALOG INTEGRATION

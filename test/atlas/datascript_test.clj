@@ -13,6 +13,9 @@
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (require 'atlas.ontology.interface-protocol :reload)
+    ;; Validate registry before running tests
+    (assert (cid/validate-ontology-specs)
+            "Registry validation failed: ontology entities missing required keys")
     (f)
     (reset! cid/registry {})
     (sut/reset-db-cache!)))

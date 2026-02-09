@@ -215,6 +215,7 @@
  #{:tier/tooling :domain/llm-ide :intent/trace :tool/trace-causes}
  {:execution-function/context [:symptom/dev-id :query/max-hops]
   :execution-function/response [:trace/upstream :trace/components :trace/failure-modes]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:symptom/dev-id :query/max-hops]}]
                 (let [max-hops (or max-hops 5)
                       upstream (upstream-closure #{dev-id} max-hops)
@@ -231,6 +232,7 @@
  #{:tier/tooling :domain/llm-ide :intent/trace :tool/blast-radius}
  {:execution-function/context [:entity/dev-id-or-set :query/max-hops]
   :execution-function/response [:impact/affected :impact/tiers-hit :impact/domains-hit]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id-or-set :query/max-hops]}]
                 (let [max-hops (or max-hops 3)
                       changing-set (if (set? dev-id-or-set) dev-id-or-set #{dev-id-or-set})
@@ -256,6 +258,7 @@
                                :aspect/high-risk
                                :aspect/external-integration]
   :execution-function/response [:risk/score :risk/reasons :risk/suggestions]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id-set
                            :risk/centrality-threshold
                            :aspect/domain-namespace
@@ -301,6 +304,7 @@
  #{:tier/tooling :domain/llm-ide :intent/explain :tool/explain-area}
  {:execution-function/context [:query/focus :query/depth :aspect/entry-point :aspect/key-component]
   :execution-function/response [:area/entry-points :area/key-entities :area/components]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:query/focus :query/depth :aspect/entry-point :aspect/key-component]}]
                 (let [depth (or depth 2)
                       entry-point (or entry-point :tier/api)
@@ -341,6 +345,7 @@
  #{:tier/tooling :domain/llm-ide :intent/suggest :tool/suggest-placement}
  {:execution-function/context [:entity/intended-aspects :dataflow/consumes :dataflow/produces]
   :execution-function/response [:suggestion/similar :suggestion/deps :suggestion/patterns]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/intended-aspects :dataflow/consumes :dataflow/produces]}]
                 (let [aspect-set (if (set? intended-aspects) intended-aspects (set intended-aspects))
                       similar (->> @registry/registry
@@ -377,6 +382,7 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/orphans}
  {:execution-function/context [:aspect/exclude-from-orphan-check :aspect/type-namespace]
   :execution-function/response [:diagnose/orphans :diagnose/count]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:aspect/exclude-from-orphan-check :aspect/type-namespace]}]
                 (let [exclude-from-orphan-check (or exclude-from-orphan-check :tier/api)
                       type-namespace (or type-namespace "atlas")
@@ -396,6 +402,7 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/islands}
  {:execution-function/context []
   :execution-function/response [:diagnose/islands :diagnose/count]
+  :execution-function/deps #{}
   :atlas/impl (fn [_]
                 (let [all-ids (inv/all-dev-ids)
                       adjacency (reduce (fn [adj id]
@@ -437,6 +444,7 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/bottlenecks}
  {:execution-function/context []
   :execution-function/response [:diagnose/bottlenecks]
+  :execution-function/deps #{}
   :atlas/impl (fn [_]
                 (let [all-ids (inv/all-dev-ids)
                       scores (->> all-ids
@@ -459,6 +467,7 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/aspect-anomalies}
  {:execution-function/context []
   :execution-function/response [:diagnose/sparse :diagnose/similar-names]
+  :execution-function/deps #{}
   :atlas/impl (fn [_]
                 (let [aspects (ide/list-aspects)
                       freq-map (into {} (map (fn [{:keys [aspect/aspect aspect/count]}]
@@ -487,6 +496,7 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/structural-gaps}
  {:execution-function/context []
   :execution-function/response [:diagnose/gaps]
+  :execution-function/deps #{}
   :atlas/impl (fn [_]
                   ;; Uses cached datalog DB with precomputed aspects/deps for efficiency
                 {:gaps (datalog/query-structural-gaps (datalog/get-db) 0.5 20)})})
@@ -498,6 +508,7 @@
  #{:tier/tooling :domain/llm-ide :intent/query :tool/by-aspect}
  {:execution-function/context [:query/aspect]
   :execution-function/response [:query/entities]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:query/aspect]}]
                 {:entities (vec (ide/entities-with-aspect aspect))})})
 
@@ -507,6 +518,7 @@
  #{:tier/tooling :domain/llm-ide :intent/query :tool/entity-detail}
  {:execution-function/context [:entity/dev-id]
   :execution-function/response [:entity/info]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id]}]
                 (ide/entity-info dev-id))})
 
@@ -516,6 +528,7 @@
  #{:tier/tooling :domain/llm-ide :intent/query :tool/data-flow}
  {:execution-function/context [:entity/dev-id]
   :execution-function/response [:dataflow/trace]
+  :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id]}]
                 {:flow (ide/data-flow dev-id)})})
 

@@ -7,6 +7,7 @@
   (:require [clojure.string :as str]
             [clojure.set :as set]
             [atlas.query :as query]
+            [clojure.spec.alpha :as s]
             [taoensso.telemere :as tel]
             [clojure.walk :as walk]
             #?(:cljs [goog.string :as gstring])))
@@ -232,6 +233,37 @@
   ;; For now, just return valid
   {:valid? true
    :note "Spec validation not yet implemented"})
+
+(defn- dyn-spec
+  "Create a dynamic spec that requires the given keys."
+  [keys*]
+  (eval `(s/keys :req ~keys*)))
+
+(s/def :atlas/compound-id (s/coll-of qualified-keyword? ;;:min-count 1
+                                     ))
+(s/def :atlas/dev-id qualified-keyword?)
+
+(defn validate-ontology-specs
+  "Validate entities against their ontology definitions using dynamic specs.
+
+  Returns true if all entities are valid, false otherwise."
+  []
+  (let [ontologies (query/find-by-aspect @registry :atlas/ontology)
+        ontology-specs (into {}
+                             (for [[_compound-id props] ontologies
+                                   :let [entity-type (:ontology/for props)
+                                         required-keys (:ontology/keys props)]
+                                   :when (and entity-type required-keys)]
+                               [entity-type required-keys]))]
+    (every? (fn [[compound-id props]]
+              (or (contains? compound-id :atlas/ontology)
+                  (contains? compound-id :atlas/type)
+                  (let [etype (entity-type compound-id)
+                        required-keys (get ontology-specs etype)]
+                    (if required-keys
+                      (s/valid? (dyn-spec required-keys) props)
+                      true))))
+            @registry)))
 
 ;; =============================================================================
 ;; Analytical Utilities (Domain-Specific to Registry)

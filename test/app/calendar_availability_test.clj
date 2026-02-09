@@ -228,6 +228,9 @@
     (require 'atlas.ontology.structure-component :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (init-test-registry!)
+    ;; Validate registry before running tests
+    (assert (cid/validate-ontology-specs)
+            "Registry validation failed: ontology entities missing required keys")
     (f)))
 
 ;; =============================================================================

@@ -14,6 +14,9 @@
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (require 'atlas.llm-ide :reload)  ;; Re-execute top-level tool registrations
+    ;; Validate registry before running tests
+    (assert (registry/validate-ontology-specs)
+            "Registry validation failed: ontology entities missing required keys")
     (f)
     (reset! registry/registry {})
     (datalog/reset-db-cache!)))

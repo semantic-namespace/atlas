@@ -25,6 +25,9 @@
     (ot/register-entity-types!)
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
+    ;; Validate registry before running tests
+    (assert (cid/validate-ontology-specs)
+            "Registry validation failed: ontology entities missing required keys")
     (f)
     (reset! cid/registry {})
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})

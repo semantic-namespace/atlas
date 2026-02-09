@@ -16,7 +16,8 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.ontology.type-ref :as type-ref]
-            [atlas.query :as query]))
+            [atlas.query :as query]
+            [clojure.spec.alpha :as s]))
 
 ;; =============================================================================
 ;; ONTOLOGY DEFINITION
@@ -31,6 +32,14 @@
    :dataflow/context-key :execution-function/context
    :dataflow/response-key :execution-function/response
    :dataflow/deps-key :execution-function/deps})
+
+;; =============================================================================
+;; SPECS
+;; =============================================================================
+
+(s/def :execution-function/context (s/coll-of qualified-keyword?))
+(s/def :execution-function/response (s/coll-of qualified-keyword?))
+(s/def :execution-function/deps (s/coll-of :atlas/dev-id))
 
 ;; =============================================================================
 ;; TEMPLATES - Reducing boilerplate
