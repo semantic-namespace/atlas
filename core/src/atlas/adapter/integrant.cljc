@@ -28,9 +28,29 @@
 
    ## Composite Keys
 
-   For composite/derived Integrant keys like `[:base/key :specific/key]`:
-   - dev-id = `:specific/key` (the more specific one)
-   - compound-identity = `#{:base/key :specific/key}` (both)
+   For composite/derived Integrant keys, the format is `[base variant]`:
+   - The **base** (first element) is the dev-id
+   - The **variant** (second element) is the derivation/context
+
+   Example: `[:co.yorba.services.search.logins/schedule-periodical :accounts-by-email.spec.workers.logins-by-inbox/success]`
+   - dev-id = `:co.yorba.services.search.logins/schedule-periodical` (base - first element)
+   - compound-identity = `#{:co.yorba.services.search.logins/schedule-periodical :accounts-by-email.spec.workers.logins-by-inbox/success}` (both)
+   - `:integrant/composite-key` = full vector stored as metadata
+
+   ### Shared Base Collision Avoidance
+
+   When multiple composite keys share the same base (first element), adapted dev-ids are used to avoid collisions:
+
+   ```clojure
+   ;; Two components with shared base :service.inbox/update-search-status
+   [:service.inbox/update-search-status :worker.logins/success]
+   ; -> :service.inbox.update-search-status___worker.logins/success
+
+   [:service.inbox/update-search-status :worker.threads/success]
+   ; -> :service.inbox.update-search-status___worker.threads/success
+   ```
+
+   Format: `[:foo/zz :bar/yy]` -> `:foo.zz___bar/yy` (namespace.name___namespace/name)
 
    ## Runtime Resolution
 
@@ -85,17 +105,49 @@
   [k]
   (vector? k))
 
+(defn- find-shared-bases
+  "Find base keys (first element) that are shared by multiple composite keys.
+   Returns a set of shared base keys."
+  [config]
+  (let [composite-keys (filter composite-key? (keys config))
+        bases (map first composite-keys)
+        base-counts (frequencies bases)]
+    (set (keep (fn [[base count]] (when (> count 1) base)) base-counts))))
+
+(defn- adapted-dev-id
+  "Create an adapted dev-id for composite keys with shared bases.
+   Format: [:foo/zz :bar/yy] => :foo.zz___bar/yy"
+  [[k1 k2]]
+  (let [ns1 (namespace k1)
+        name1 (name k1)
+        ns2 (namespace k2)
+        name2 (name k2)]
+    (keyword (str ns1 "." name1 "___" ns2) name2)))
+
 (defn- normalize-integrant-key
   "Normalize Integrant key to a dev-id.
    - Simple key: :foo/bar -> :foo/bar
-   - Composite key: [:base/key :specific/key] -> :specific/key (the more specific)"
-  [k]
-  (if (composite-key? k)
-    (second k)
-    k))
+   - Composite key: [base variant] -> base (first element) OR adapted dev-id
+
+   For composite keys, the base (first element) becomes the dev-id.
+
+   However, if multiple composite keys share the same base (passed in shared-bases set),
+   use adapted-dev-id format to avoid collisions: [:foo/zz :bar/yy] => :foo.zz___bar/yy"
+  ([k]
+   ;; Without context, assume no shared bases
+   (if (composite-key? k)
+     (first k)
+     k))
+  ([k shared-bases]
+   (if (composite-key? k)
+     (if (contains? shared-bases (first k))
+       (adapted-dev-id k)
+       (first k))
+     k)))
 
 (defn- composite-identity
-  "For composite keys, return #{base specific} as compound identity."
+  "For composite keys [specific base], return #{specific base} as compound identity.
+   Both elements become aspects of the entity."
   [k]
   (when (composite-key? k)
     (set k)))
@@ -178,17 +230,20 @@
 
    Options:
    - :identities - map of {dev-id compound-identity} for custom aspects
+   - :shared-bases - set of base keys shared by multiple composite keys (for internal use)
 
    Returns:
    {:atlas/dev-id :component/id
     :atlas/type :atlas/structure-component
     :atlas/aspects #{...}
     :structure-component/deps #{:dep1 :dep2}
+    :integrant/composite-key [...]  ;; if composite key
     :integrant/config {...}  ;; if :include-config? true}"
   ([ig-key ig-value]
    (integrant-key->atlas-def ig-key ig-value {}))
   ([ig-key ig-value opts]
-   (let [dev-id (normalize-integrant-key ig-key)
+   (let [shared-bases (or (:shared-bases opts) #{})
+         dev-id (normalize-integrant-key ig-key shared-bases)
          deps (set (extract-key-refs ig-value))
          identities (:identities opts {})
 
@@ -204,6 +259,8 @@
               :atlas/type :atlas/structure-component
               :atlas/aspects aspects
               :structure-component/deps deps}
+       ;; Store original composite key vector for reference
+       (composite-key? ig-key) (assoc :integrant/composite-key ig-key)
        ;; Include original config for debugging/reference
        (:include-config? opts) (assoc :integrant/config ig-value)))))
 
@@ -215,14 +272,19 @@
    - :include-config? boolean - include original config in output
    - :filter-fn (fn [ig-key ig-value] -> boolean) - filter components
 
-   Returns vector of atlas definition maps."
+   Returns vector of atlas definition maps.
+
+   Note: Automatically detects composite keys with shared bases and uses
+   adapted dev-ids to avoid collisions."
   ([config]
    (config->atlas-defs config {}))
   ([config opts]
-   (let [filter-fn (or (:filter-fn opts) (constantly true))]
+   (let [filter-fn (or (:filter-fn opts) (constantly true))
+         shared-bases (find-shared-bases config)
+         opts-with-shared (assoc opts :shared-bases shared-bases)]
      (->> config
           (filter (fn [[k v]] (filter-fn k v)))
-          (map (fn [[k v]] (integrant-key->atlas-def k v opts)))
+          (map (fn [[k v]] (integrant-key->atlas-def k v opts-with-shared)))
           vec))))
 
 ;; =============================================================================
@@ -231,12 +293,13 @@
 
 (defn register-def!
   "Register a single Atlas definition to the registry."
-  [{:keys [atlas/dev-id atlas/aspects structure-component/deps]}]
+  [{:keys [atlas/dev-id atlas/aspects structure-component/deps integrant/composite-key]}]
   (registry/register!
    dev-id
    :atlas/structure-component
    aspects
-   {:structure-component/deps deps}))
+   (cond-> {:structure-component/deps deps}
+     composite-key (assoc :integrant/composite-key composite-key))))
 
 (defn register-config!
   "Convert and register all components from an Integrant config.
@@ -335,10 +398,11 @@
   (let [{:keys [edges]} (dependency-graph integrant-config)
         ;; Use original keys (including composite) for init
         ig-keys (keys integrant-config)
+        shared-bases (find-shared-bases integrant-config)
         ;; Build edges using dev-ids for the graph
-        dev-id-set (set (map normalize-integrant-key ig-keys))
+        dev-id-set (set (map #(normalize-integrant-key % shared-bases) ig-keys))
         ;; Map from dev-id back to original ig-key
-        dev-id->ig-key (into {} (map (fn [k] [(normalize-integrant-key k) k]) ig-keys))
+        dev-id->ig-key (into {} (map (fn [k] [(normalize-integrant-key k shared-bases) k]) ig-keys))
         sorted-dev-ids (topo-sort dev-id-set edges)]
     (mapv dev-id->ig-key sorted-dev-ids)))
 
@@ -356,13 +420,14 @@
 
    Returns map of {dev-id -> instance}."
   [integrant-config init-key-fn]
-  (reduce (fn [running ig-key]
-            (let [dev-id (normalize-integrant-key ig-key)
-                  config (build-init-config integrant-config ig-key running)
-                  instance (init-key-fn ig-key config)]
-              (assoc running dev-id instance)))
-          {}
-          (init-order integrant-config)))
+  (let [shared-bases (find-shared-bases integrant-config)]
+    (reduce (fn [running ig-key]
+              (let [dev-id (normalize-integrant-key ig-key shared-bases)
+                    config (build-init-config integrant-config ig-key running)
+                    instance (init-key-fn ig-key config)]
+                (assoc running dev-id instance)))
+            {}
+            (init-order integrant-config))))
 
 (defn stop-system
   "Stop all components in reverse dependency order.
@@ -370,7 +435,8 @@
    halt-key-fn - function to stop a component: (fn [ig-key instance] -> nil)
                  Typically integrant.core/halt-key!"
   [integrant-config running halt-key-fn]
-  (doseq [ig-key (halt-order integrant-config)]
-    (let [dev-id (normalize-integrant-key ig-key)]
-      (when-let [instance (get running dev-id)]
-        (halt-key-fn ig-key instance)))))
+  (let [shared-bases (find-shared-bases integrant-config)]
+    (doseq [ig-key (halt-order integrant-config)]
+      (let [dev-id (normalize-integrant-key ig-key shared-bases)]
+        (when-let [instance (get running dev-id)]
+          (halt-key-fn ig-key instance))))))

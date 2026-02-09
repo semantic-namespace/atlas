@@ -23,19 +23,30 @@
       (is (= #{} (:structure-component/deps result))))))
 
 (deftest test-composite-key-conversion
-  (testing "Composite key: dev-id = specific, aspects = #{base specific}"
+  (testing "Composite key: dev-id = base (first element), aspects = both"
     (let [result (ig-adapter/integrant-key->atlas-def
                   [:persistence/base :accounts/db]
                   {})]
-      (is (= :accounts/db (:atlas/dev-id result)))
-      (is (= #{:persistence/base :accounts/db} (:atlas/aspects result)))))
+      (is (= :persistence/base (:atlas/dev-id result)))
+      (is (= #{:persistence/base :accounts/db} (:atlas/aspects result)))
+      ;; Composite key vector is stored as metadata
+      (is (= [:persistence/base :accounts/db] (:integrant/composite-key result)))))
 
-  (testing "Three-element composite key"
+  (testing "Three-element composite key uses first element"
     (let [result (ig-adapter/integrant-key->atlas-def
                   [:a/base :b/middle :c/specific]
                   {})]
-      (is (= :b/middle (:atlas/dev-id result)))
-      (is (= #{:a/base :b/middle :c/specific} (:atlas/aspects result))))))
+      (is (= :a/base (:atlas/dev-id result)))
+      (is (= #{:a/base :b/middle :c/specific} (:atlas/aspects result)))
+      ;; Composite key vector is stored
+      (is (= [:a/base :b/middle :c/specific] (:integrant/composite-key result)))))
+
+  (testing "Simple key has no composite-key metadata"
+    (let [result (ig-adapter/integrant-key->atlas-def
+                  :component/logger
+                  {})]
+      (is (= :component/logger (:atlas/dev-id result)))
+      (is (nil? (:integrant/composite-key result))))))
 
 ;; =============================================================================
 ;; DEPENDENCY EXTRACTION TESTS
@@ -93,8 +104,8 @@
     (let [result (ig-adapter/integrant-key->atlas-def
                   [:persistence/base :accounts/db]
                   {}
-                  {:identities {:accounts/db #{:domain/accounts :tier/foundation :storage/postgres}}})]
-      (is (= :accounts/db (:atlas/dev-id result)))
+                  {:identities {:persistence/base #{:domain/accounts :tier/foundation :storage/postgres}}})]
+      (is (= :persistence/base (:atlas/dev-id result)))
       (is (= #{:domain/accounts :tier/foundation :storage/postgres}
              (:atlas/aspects result)))))
 
@@ -102,7 +113,8 @@
     (let [result (ig-adapter/integrant-key->atlas-def
                   [:persistence/base :orders/db]
                   {}
-                  {:identities {:accounts/db #{:domain/accounts}}})]
+                  {:identities {:cache/base #{:domain/cache}}})]
+      (is (= :persistence/base (:atlas/dev-id result)))
       (is (= #{:persistence/base :orders/db} (:atlas/aspects result))))))
 
 ;; =============================================================================
@@ -126,13 +138,14 @@
   (testing "Handles mixed simple and composite keys"
     (let [config {:component/logger {}
                   [:persistence/base :accounts/db] {:logger {:key :component/logger}}
-                  [:persistence/base :orders/db] {:logger {:key :component/logger}}}
+                  [:cache/base :orders/cache] {:logger {:key :component/logger}}}
           defs (ig-adapter/config->atlas-defs config)
           by-id (into {} (map (juxt :atlas/dev-id identity) defs))]
       (is (= 3 (count defs)))
       (is (= #{:component/logger} (:atlas/aspects (by-id :component/logger))))
-      (is (= #{:persistence/base :accounts/db} (:atlas/aspects (by-id :accounts/db))))
-      (is (= #{:persistence/base :orders/db} (:atlas/aspects (by-id :orders/db)))))))
+      ;; Composite keys use first element as dev-id (when not shared)
+      (is (= #{:persistence/base :accounts/db} (:atlas/aspects (by-id :persistence/base))))
+      (is (= #{:cache/base :orders/cache} (:atlas/aspects (by-id :cache/base)))))))
 
 (deftest test-config->atlas-defs-options
   (testing ":filter-fn filters components"
@@ -190,7 +203,18 @@
       (is (some? entity))
       (is (contains? identity :domain/users))
       (is (contains? identity :tier/service))
-      (is (= :atlas/structure-component (:atlas/type entity))))))
+      (is (= :atlas/structure-component (:atlas/type entity)))))
+
+  (testing "Composite keys are registered with composite-key metadata"
+    (reset! registry/registry {})
+    (ig-adapter/register-config!
+     {[:persistence/base :accounts/db] {:pool-size 5}})
+    (let [[identity entity] (query/find-by-dev-id @registry/registry :persistence/base)]
+      (is (some? entity))
+      (is (contains? identity :persistence/base))
+      (is (contains? identity :accounts/db))
+      ;; The composite key vector is stored in the entity
+      (is (= [:persistence/base :accounts/db] (:integrant/composite-key entity))))))
 
 ;; =============================================================================
 ;; ANALYSIS HELPER TESTS
@@ -318,9 +342,9 @@
 
   (testing "Works with composite keys"
     (let [ig-config {[:persistence/base :accounts/db] {:pool-size 5}
-                     :service/accounts {:db {:key :accounts/db}}}
+                     :service/accounts {:db {:key :persistence/base}}}
           db-instance {:type :accounts-db}
-          running {:accounts/db db-instance}
+          running {:persistence/base db-instance}
           init-config (ig-adapter/build-init-config
                        ig-config :service/accounts running)]
       (is (= db-instance (:db init-config)))))
@@ -391,6 +415,99 @@
 
 ;; Helper to access private fn for tests
 (def ^:private normalize-integrant-key @#'ig-adapter/normalize-integrant-key)
+(def ^:private find-shared-bases @#'ig-adapter/find-shared-bases)
+(def ^:private adapted-dev-id @#'ig-adapter/adapted-dev-id)
+
+;; =============================================================================
+;; SHARED BASE DETECTION TESTS
+;; =============================================================================
+
+(deftest test-find-shared-bases
+  (testing "Detects when multiple composite keys share the same base (first element)"
+    (let [config {[:co.yorba.services.search.inbox/update-search-status
+                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
+                  [:co.yorba.services.search.inbox/update-search-status
+                   :accounts-by-email.spec.workers.gmail-threads/success] {}
+                  [:co.yorba.services.search.inbox/reset-failed-state
+                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
+                  [:co.yorba.services.search.inbox/reset-failed-state
+                   :accounts-by-email.spec.workers.gmail-threads/success] {}
+                  [:co.yorba.services.search.logins/schedule-periodical
+                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}}
+          shared (find-shared-bases config)]
+      ;; :co.yorba.services.search.inbox/update-search-status is shared by 2 keys
+      (is (contains? shared :co.yorba.services.search.inbox/update-search-status))
+      ;; :co.yorba.services.search.inbox/reset-failed-state is shared by 2 keys
+      (is (contains? shared :co.yorba.services.search.inbox/reset-failed-state))
+      ;; :co.yorba.services.search.logins/schedule-periodical is not shared
+      (is (not (contains? shared :co.yorba.services.search.logins/schedule-periodical)))))
+
+  (testing "Returns empty set when no bases are shared"
+    (let [config {[:persistence/base :accounts/db] {}
+                  [:cache/base :orders/cache] {}
+                  :component/logger {}}
+          shared (find-shared-bases config)]
+      (is (empty? shared))))
+
+  (testing "Detects shared first elements"
+    (let [config {[:persistence/base :accounts/db] {}
+                  [:persistence/base :orders/db] {}
+                  :component/logger {}}
+          shared (find-shared-bases config)]
+      ;; :persistence/base is shared by 2 keys
+      (is (contains? shared :persistence/base))))
+
+  (testing "Handles config with only simple keys"
+    (let [config {:component/logger {}
+                  :component/db {}
+                  :service/users {}}
+          shared (find-shared-bases config)]
+      (is (empty? shared)))))
+
+(deftest test-adapted-dev-id
+  (testing "Creates adapted dev-id with ___ separator"
+    (is (= :foo.zz___bar/yy
+           (adapted-dev-id [:foo/zz :bar/yy])))
+    (is (= :co.yorba.services.search.logins.schedule-periodical___accounts-by-email.spec.workers.logins-by-inbox/success
+           (adapted-dev-id [:co.yorba.services.search.logins/schedule-periodical
+                            :accounts-by-email.spec.workers.logins-by-inbox/success])))))
+
+(deftest test-shared-base-conversion
+  (testing "Composite keys with shared bases (first element) get adapted dev-ids"
+    (let [config {[:co.yorba.services.search.inbox/update-search-status
+                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
+                  [:co.yorba.services.search.inbox/update-search-status
+                   :accounts-by-email.spec.workers.gmail-threads/success] {}
+                  [:co.yorba.services.search.logins/schedule-periodical
+                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}}
+          defs (ig-adapter/config->atlas-defs config)
+          dev-ids (set (map :atlas/dev-id defs))]
+      ;; update-search-status is shared, so both get adapted dev-ids
+      (is (contains? dev-ids :co.yorba.services.search.inbox.update-search-status___accounts-by-email.spec.workers.logins-by-inbox/success))
+      (is (contains? dev-ids :co.yorba.services.search.inbox.update-search-status___accounts-by-email.spec.workers.gmail-threads/success))
+      ;; schedule-periodical is unique, so uses first element as dev-id
+      (is (contains? dev-ids :co.yorba.services.search.logins/schedule-periodical))))
+
+  (testing "Composite keys with unique bases use first element as dev-id"
+    (let [config {[:persistence/base :accounts/db] {}
+                  [:cache/base :orders/cache] {}}
+          defs (ig-adapter/config->atlas-defs config)
+          dev-ids (set (map :atlas/dev-id defs))]
+      ;; Each has unique first element, so use first element as dev-id
+      (is (contains? dev-ids :persistence/base))
+      (is (contains? dev-ids :cache/base))))
+
+  (testing "Mixed: some shared, some unique"
+    (let [config {[:shared/base :variant1/a] {}
+                  [:shared/base :variant2/b] {}
+                  [:unique/base :variant3/c] {}}
+          defs (ig-adapter/config->atlas-defs config)
+          dev-ids (set (map :atlas/dev-id defs))]
+      ;; Shared first element gets adapted dev-ids
+      (is (contains? dev-ids :shared.base___variant1/a))
+      (is (contains? dev-ids :shared.base___variant2/b))
+      ;; Unique first element uses it as dev-id
+      (is (contains? dev-ids :unique/base)))))
 
 ;; =============================================================================
 ;; TOPOLOGICAL SORT TESTS
