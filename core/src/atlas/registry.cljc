@@ -127,13 +127,13 @@
      (assert (valid? id) (format* "Invalid compound identity: %s" id))
      (when (and (contains? @registry id)
                 (not= (get @registry id) (assoc value :atlas/dev-id dev-id)))
-       (tel/log! {:level :warn} ["Compound identity already exists in registry"
+       #_(tel/log! {:level :warn} ["Compound identity already exists in registry"
                                  {:compound-id id
                                   :existing-value (get @registry id)
                                   :attempted-value (assoc value :atlas/dev-id dev-id)}]))
      (when-let [[existing-id existing-value] (find-by-dev-id dev-id)]
        (when (not= existing-id id)
-         (tel/log! {:level :warn} ["dev-id already exists in registry"
+         #_(tel/log! {:level :warn} ["dev-id already exists in registry"
                                    {:dev-id dev-id
                                     :existing-compound-id existing-id
                                     :existing-value existing-value

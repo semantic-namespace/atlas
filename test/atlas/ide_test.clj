@@ -18,12 +18,11 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
-    (ef/reset-loaded-state!)
-    (sc/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ef/load!)
-    (sc/load!)
-    (ie/load!)
+    (require 'atlas.ontology :reload)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.structure-component :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
+    (ot/register-entity-types!)
     (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     (f)
@@ -150,11 +149,23 @@
   (seed-registry!)
   (let [entities (ide/list-all-entities)
         aspects (ide/list-aspects)
-        ;; Filter out ontology definitions from entity list for deterministic comparison
-        ontology-dev-ids #{:atlas/execution-function :atlas/structure-component :atlas/interface-endpoint}
-        non-ontology-entities (remove #(ontology-dev-ids (:entity/dev-id %)) entities)
-        ;; Filter out ontology aspect from aspects list
-        non-ontology-aspects (remove #(= :atlas/ontology (:aspect/aspect %)) aspects)]
+        ;; Filter out ontology definitions and meta-entities (extractors, invariants) from entity list
+        meta-entity? (fn [entity]
+                       (let [dev-id (:entity/dev-id entity)]
+                         (and (keyword? dev-id)
+                              (or (= "atlas" (namespace dev-id))
+                                  (= "ontology" (namespace dev-id))
+                                  (= "datalog-extractor" (namespace dev-id))
+                                  (= "invariant" (namespace dev-id))
+                                  (= "type-ref" (namespace dev-id))))))
+        non-ontology-entities (remove meta-entity? entities)
+        ;; Filter out ontology, entity type, and meta aspects from aspects list
+        entity-type-aspect? (fn [aspect-map]
+                              (let [aspect (:aspect/aspect aspect-map)
+                                    ns (when (keyword? aspect) (namespace aspect))]
+                                (or (= "atlas" ns)
+                                    (= "meta" ns))))
+        non-ontology-aspects (remove entity-type-aspect? aspects)]
     (is (= [:component/audit :component/cache :component/storage :endpoint/order :fn/alpha :fn/beta :fn/gamma :fn/http-handler :fn/profile]
            (map :entity/dev-id non-ontology-entities))
         "list-all-entities returns deterministic order for dev-ids (excluding ontology)")

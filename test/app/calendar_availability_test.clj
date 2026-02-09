@@ -224,12 +224,9 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
-    (ef/reset-loaded-state!)
-    (sc/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ef/load!)
-    (sc/load!)
-    (ie/load!)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.structure-component :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
     (init-test-registry!)
     (f)))
 

@@ -2,6 +2,7 @@
   "Fixed invariants that understand dataflow markers and terminal outputs."
   (:require [atlas.registry :as cid]
             [atlas.registry.graph :as graph]
+            [atlas.query :as q]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -153,35 +154,11 @@
 ;;   (ef/load!)
 
 ;; =============================================================================
-;; ONTOLOGY INVARIANT REGISTRY
+;; ONTOLOGY INVARIANT DISCOVERY
 ;; =============================================================================
 ;;
-;; Ontology modules can register their own invariants here.
-;; This allows modular ontologies to contribute invariants without
-;; modifying this core invariant namespace.
-
-;; Registry of invariants contributed by ontology modules.
-;; Ontology modules add their invariants here via `register-ontology-invariant!`.
-(defonce ontology-invariants (atom []))
-
-(defn register-ontology-invariant!
-  "Register an invariant function from an ontology module.
-
-   invariant-fn should be a zero-arg function that returns:
-   - nil if the invariant passes
-   - A map with :invariant, :violation, :severity, :message if it fails"
-  [invariant-fn]
-  (swap! ontology-invariants conj invariant-fn))
-
-(defn unregister-ontology-invariant!
-  "Unregister an invariant function (useful for testing)."
-  [invariant-fn]
-  (swap! ontology-invariants (fn [invs] (vec (remove #{invariant-fn} invs)))))
-
-(defn reset-ontology-invariants!
-  "Reset ontology invariants to empty (useful for testing)."
-  []
-  (reset! ontology-invariants []))
+;; Ontology modules register their invariants as :atlas/invariant entities
+;; in the registry. They are discovered at check time by querying the registry.
 
 ;; =============================================================================
 ;; CHECK ALL
@@ -197,9 +174,14 @@
    invariant-no-orphan-responses])
 
 (defn all-invariants
-  "All invariants including core and ontology-contributed invariants."
+  "All invariants including core and ontology-contributed invariants.
+   Ontology invariants are discovered by querying the registry for :atlas/invariant entities."
   []
-  (into core-invariants @ontology-invariants))
+  (let [ontology-invs (->> (q/find-by-aspect @cid/registry :atlas/invariant)
+                           vals
+                           (map :invariant/fn)
+                           (remove nil?))]
+    (into core-invariants ontology-invs)))
 
 (defn- result-level [result]
   (or (:level result) (:severity result)))

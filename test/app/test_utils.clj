@@ -16,6 +16,7 @@
    [atlas.registry.lookup :as rt]
    [atlas.registry.graph :as graph]
    [atlas.invariant :as ax]
+   [atlas.datalog :as datalog]
    [atlas.ontology :as o]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.structure-component :as sc]
@@ -112,12 +113,11 @@
   [init-fn]
   (fn [f]
     (reset! cid/registry {})
-    (ef/reset-loaded-state!)
-    (sc/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ef/load!)
-    (sc/load!)
-    (ie/load!)
+    (datalog/reset-db-cache!)
+    (require 'atlas.ontology :reload)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.structure-component :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
     (init-fn)
     (f)))
 
@@ -154,12 +154,11 @@
   [init-fn reset-fn]
   (fn [f]
     (reset! cid/registry {})
-    (ef/reset-loaded-state!)
-    (sc/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ef/load!)
-    (sc/load!)
-    (ie/load!)
+    (datalog/reset-db-cache!)
+    (require 'atlas.ontology :reload)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.structure-component :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
     (init-fn)
     (reset-fn)
     (f)))

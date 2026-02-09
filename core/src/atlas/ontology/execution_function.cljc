@@ -2,24 +2,21 @@
   "Execution-function ontology module.
 
    This module defines the `:atlas/execution-function` entity type and related
-   functionality. It is an optional ontology that must be explicitly loaded
-   before using execution-function features.
+   functionality. Auto-registers on require (like clojure.spec).
 
    Usage:
-     (require '[atlas.ontology.execution-function :as ef])
-     (ef/load!)
+     (require '[atlas.ontology.execution-function])
 
-   After loading, you can:
+   After requiring, you can:
    - Register execution-functions with :execution-function/context, :response, :deps
    - Use ontology/context-for, ontology/response-for, ontology/deps-for
    - Use templates like template:service-function, template:api-endpoint
-   - Run invariants like invariant-pure-has-no-deps"
+   - Invariants like invariant-pure-has-no-deps are auto-discovered"
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
-            [atlas.query :as query]
-            [atlas.invariant :as invariant]
-            [atlas.datalog :as datalog]))
+            [atlas.ontology.type-ref :as type-ref]
+            [atlas.query :as query]))
 
 ;; =============================================================================
 ;; ONTOLOGY DEFINITION
@@ -83,42 +80,6 @@
 ;; =============================================================================
 ;; DATALOG INTEGRATION
 ;; =============================================================================
-
-(defn extract-facts
-  "Extract Datascript facts from execution-function properties.
-   Called by atlas.datalog when building database.
-
-   For backward compatibility, also accepts interface-endpoint property names
-   (:interface-endpoint/context, :interface-endpoint/response) on execution-functions."
-  [compound-id props]
-  (when (contains? compound-id :atlas/execution-function)
-    (let [dev-id (:atlas/dev-id props)
-          ;; Accept both execution-function and interface-endpoint property names
-          ;; for backward compatibility
-          context-keys (or (:execution-function/context props)
-                           (:interface-endpoint/context props))
-          response-keys (or (:execution-function/response props)
-                            (:interface-endpoint/response props))
-          deps (:execution-function/deps props)
-          facts []]
-      (cond-> facts
-        ;; Dependencies
-        deps
-        (concat (map (fn [dep]
-                       [:db/add dev-id :entity/depends dep])
-                     deps))
-
-        ;; Context (consumed keys)
-        context-keys
-        (concat (map (fn [ctx]
-                       [:db/add dev-id :entity/consumes ctx])
-                     context-keys))
-
-        ;; Response (produced keys)
-        response-keys
-        (concat (map (fn [resp]
-                       [:db/add dev-id :entity/produces resp])
-                     response-keys))))))
 
 (def datalog-schema
   "Datascript schema for execution-function properties."
@@ -196,72 +157,79 @@
    invariant-internal-fn-outputs-consumed])
 
 ;; =============================================================================
-;; LOADING
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
 ;; =============================================================================
 
-(defn- register-ontology!
-  "Register the execution-function ontology in the registry."
-  []
-  (registry/register!
-   :atlas/execution-function
-   :atlas/ontology
-   #{:atlas/execution-function}
-   ontology-definition))
+;; Ontology
+(registry/register!
+ :atlas/execution-function
+ :atlas/ontology
+ #{:atlas/execution-function}
+ ontology-definition)
 
+;; Type-ref: execution-function → structure-component (deps)
+(registry/register!
+ :type-ref/execution-function-deps
+ :atlas/type-ref
+ #{:meta/ref-execution-function-deps}
+ {:type-ref/source :atlas/execution-function
+  :type-ref/target :atlas/structure-component
+  :type-ref/property :execution-function/deps
+  :type-ref/datalog-verb :entity/depends
+  :type-ref/cardinality :db.cardinality/many})
 
-(defn- register-invariants!
-  "Register execution-function invariants with the invariant module."
-  []
-  (doseq [inv invariants]
-    (invariant/register-ontology-invariant! inv)))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/execution-function
+ :atlas/datalog-extractor
+ #{:meta/execution-function-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/execution-function)
+                            (let [dev-id (:atlas/dev-id props)
+                                  ;; Accept both execution-function and interface-endpoint property names
+                                  ;; for backward compatibility
+                                  context-keys (or (:execution-function/context props)
+                                                   (:interface-endpoint/context props))
+                                  response-keys (or (:execution-function/response props)
+                                                    (:interface-endpoint/response props))]
+                              (vec
+                               (concat
+                                ;; Automatic reference extraction via type-ref
+                                (type-ref/extract-reference-facts
+                                 :atlas/execution-function
+                                 compound-id
+                                 props)
 
-(defn- register-datalog!
-  "Register datalog extensions for execution-function properties."
-  []
-  (datalog/register-fact-extractor! extract-facts)
-  (datalog/register-schema! datalog-schema))
+                                ;; Manual extraction for non-reference properties
+                                (cond-> []
+                                  ;; Context (consumed keys)
+                                  context-keys
+                                  (concat (map (fn [ctx]
+                                                 [:db/add dev-id :entity/consumes ctx])
+                                               context-keys))
 
-(defonce ^:private loaded? (atom false))
+                                  ;; Response (produced keys)
+                                  response-keys
+                                  (concat (map (fn [resp]
+                                                 [:db/add dev-id :entity/produces resp])
+                                               response-keys))))))))
+  :datalog-extractor/schema datalog-schema})
 
-(defn load!
-  "Load the execution-function ontology.
+;; Invariants
+(registry/register!
+ :invariant/pure-has-no-deps
+ :atlas/invariant
+ #{:meta/pure-function-check}
+ {:invariant/fn invariant-pure-has-no-deps})
 
-   This must be called before using execution-function features:
-   - Registering entities with :execution-function/* properties
-   - Using context-for/response-for/deps-for with execution-functions
-   - Using templates like template:service-function
-   - Running invariant-pure-has-no-deps
+(registry/register!
+ :invariant/external-is-async
+ :atlas/invariant
+ #{:meta/external-async-check}
+ {:invariant/fn invariant-external-is-async})
 
-   Safe to call multiple times - subsequent calls are no-ops."
-  []
-  (when-not @loaded?
-    (register-ontology!)
-    (register-invariants!)
-    (register-datalog!)
-    (reset! loaded? true))
-  :loaded)
-
-(defn loaded?*
-  "Check if the execution-function ontology has been loaded."
-  []
-  @loaded?)
-
-(defn unload!
-  "Unload the execution-function ontology (primarily for testing).
-
-   WARNING: This does not remove already-registered execution-functions
-   from the registry. Use reset! on registry/registry for a full reset."
-  []
-  (when @loaded?
-    (doseq [inv invariants]
-      (invariant/unregister-ontology-invariant! inv))
-    (reset! loaded? false))
-  :unloaded)
-
-(defn reset-loaded-state!
-  "Reset the loaded state to false (for testing).
-
-   Use this before calling load! in test fixtures when you've also reset
-   the registry. This ensures load! will re-register the ontology."
-  []
-  (reset! loaded? false))
+(registry/register!
+ :invariant/internal-fn-outputs-consumed
+ :atlas/invariant
+ #{:meta/output-consumption-check}
+ {:invariant/fn invariant-internal-fn-outputs-consumed})

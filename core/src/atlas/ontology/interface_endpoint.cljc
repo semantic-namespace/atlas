@@ -2,22 +2,14 @@
   "Interface-endpoint ontology module.
 
    This module defines the `:atlas/interface-endpoint` entity type and related
-   functionality. It is an optional ontology that must be explicitly loaded
-   before using interface-endpoint features.
+   functionality. Auto-registers on require.
 
    Usage:
-     (require '[atlas.ontology.interface-endpoint :as ie])
-     (ie/load!)
-
-   After loading, you can:
-   - Register interface-endpoints with :interface-endpoint/context, :response, :deps
-   - Use ontology/context-for, ontology/response-for, ontology/deps-for
-   - Run invariants like invariant-endpoints-are-api-tier"
+     (require '[atlas.ontology.interface-endpoint])"
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
-            [atlas.invariant :as invariant]
-            [atlas.datalog :as datalog]
+            [atlas.ontology.type-ref :as type-ref]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -37,55 +29,6 @@
 ;; =============================================================================
 ;; DATALOG INTEGRATION
 ;; =============================================================================
-
-(defn extract-facts
-  "Extract Datascript facts from interface-endpoint properties.
-   Called by atlas.datalog when building database.
-
-   For backward compatibility, also accepts execution-function property names
-   (:execution-function/context, :execution-function/response, :execution-function/deps)."
-  [compound-id props]
-  (when (contains? compound-id :atlas/interface-endpoint)
-    (let [dev-id (:atlas/dev-id props)
-          ;; Accept both interface-endpoint and execution-function property names
-          ;; for backward compatibility
-          context-keys (or (:interface-endpoint/context props)
-                           (:execution-function/context props))
-          response-keys (or (:interface-endpoint/response props)
-                            (:execution-function/response props))
-          deps (or (:interface-endpoint/deps props)
-                   (:execution-function/deps props))
-          facts []]
-      (cond-> facts
-        ;; Context (consumed keys) - generic
-        context-keys
-        (concat (map (fn [ctx]
-                       [:db/add dev-id :entity/consumes ctx])
-                     context-keys))
-
-        ;; Response (produced keys) - generic
-        response-keys
-        (concat (map (fn [resp]
-                       [:db/add dev-id :entity/produces resp])
-                     response-keys))
-
-        ;; Endpoint-specific context (for invariant checking)
-        context-keys
-        (concat (map (fn [ctx]
-                       [:db/add dev-id :endpoint-context ctx])
-                     context-keys))
-
-        ;; Endpoint-specific response (for invariant checking)
-        response-keys
-        (concat (map (fn [resp]
-                       [:db/add dev-id :endpoint-response resp])
-                     response-keys))
-
-        ;; Dependencies (endpoints can also have deps)
-        deps
-        (concat (map (fn [dep]
-                       [:db/add dev-id :entity/depends dep])
-                     deps))))))
 
 (def datalog-schema
   "Datascript schema for interface-endpoint properties."
@@ -150,70 +93,84 @@
    invariant-all-fns-reachable])
 
 ;; =============================================================================
-;; LOADING
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
 ;; =============================================================================
 
-(defn- register-ontology!
-  "Register the interface-endpoint ontology in the registry."
-  []
-  (registry/register!
-   :atlas/interface-endpoint
-   :atlas/ontology
-   #{:atlas/interface-endpoint}
-   ontology-definition))
+;; Ontology
+(registry/register!
+ :atlas/interface-endpoint
+ :atlas/ontology
+ #{:atlas/interface-endpoint}
+ ontology-definition)
 
-(defn- register-invariants!
-  "Register interface-endpoint invariants with the invariant module."
-  []
-  (doseq [inv invariants]
-    (invariant/register-ontology-invariant! inv)))
+;; Type-ref: interface-endpoint → execution-function (deps)
+(registry/register!
+ :type-ref/interface-endpoint-deps
+ :atlas/type-ref
+ #{:meta/ref-interface-endpoint-deps}
+ {:type-ref/source :atlas/interface-endpoint
+  :type-ref/target :atlas/execution-function
+  :type-ref/property :interface-endpoint/deps
+  :type-ref/datalog-verb :entity/depends
+  :type-ref/cardinality :db.cardinality/many})
 
-(defn- register-datalog!
-  "Register datalog extensions for interface-endpoint properties."
-  []
-  (datalog/register-fact-extractor! extract-facts)
-  (datalog/register-schema! datalog-schema))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/interface-endpoint
+ :atlas/datalog-extractor
+ #{:meta/interface-endpoint-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/interface-endpoint)
+                            (let [dev-id (:atlas/dev-id props)
+                                  ;; Accept both interface-endpoint and execution-function property names
+                                  ;; for backward compatibility
+                                  context-keys (or (:interface-endpoint/context props)
+                                                   (:execution-function/context props))
+                                  response-keys (or (:interface-endpoint/response props)
+                                                    (:execution-function/response props))]
+                              (concat
+                               ;; Automatic reference extraction via type-ref
+                               (type-ref/extract-reference-facts
+                                :atlas/interface-endpoint
+                                compound-id
+                                props)
 
-(defonce ^:private loaded? (atom false))
+                               ;; Manual extraction for non-reference properties
+                               (cond-> []
+                                 ;; Context (consumed keys) - generic
+                                 context-keys
+                                 (concat (map (fn [ctx]
+                                                [:db/add dev-id :entity/consumes ctx])
+                                              context-keys))
 
-(defn load!
-  "Load the interface-endpoint ontology.
+                                 ;; Response (produced keys) - generic
+                                 response-keys
+                                 (concat (map (fn [resp]
+                                                [:db/add dev-id :entity/produces resp])
+                                              response-keys))
 
-   This must be called before using interface-endpoint features:
-   - Registering entities with :interface-endpoint/* properties
-   - Using ontology/context-for, ontology/response-for, ontology/deps-for
-   - Running invariant-endpoints-are-api-tier
+                                 ;; Endpoint-specific context (for invariant checking)
+                                 context-keys
+                                 (concat (map (fn [ctx]
+                                                [:db/add dev-id :endpoint-context ctx])
+                                              context-keys))
 
-   Safe to call multiple times - subsequent calls are no-ops."
-  []
-  (when-not @loaded?
-    (register-ontology!)
-    (register-invariants!)
-    (register-datalog!)
-    (reset! loaded? true))
-  :loaded)
+                                 ;; Endpoint-specific response (for invariant checking)
+                                 response-keys
+                                 (concat (map (fn [resp]
+                                                [:db/add dev-id :endpoint-response resp])
+                                              response-keys)))))))
+  :datalog-extractor/schema datalog-schema})
 
-(defn loaded?*
-  "Check if the interface-endpoint ontology has been loaded."
-  []
-  @loaded?)
+;; Invariants
+(registry/register!
+ :invariant/endpoints-are-api-tier
+ :atlas/invariant
+ #{:meta/api-tier-check}
+ {:invariant/fn invariant-endpoints-are-api-tier})
 
-(defn unload!
-  "Unload the interface-endpoint ontology (primarily for testing).
-
-   WARNING: This does not remove already-registered interface-endpoints
-   from the registry. Use reset! on registry/registry for a full reset."
-  []
-  (when @loaded?
-    (doseq [inv invariants]
-      (invariant/unregister-ontology-invariant! inv))
-    (reset! loaded? false))
-  :unloaded)
-
-(defn reset-loaded-state!
-  "Reset the loaded state to false (for testing).
-
-   Use this before calling load! in test fixtures when you've also reset
-   the registry. This ensures load! will re-register the ontology."
-  []
-  (reset! loaded? false))
+(registry/register!
+ :invariant/all-fns-reachable
+ :atlas/invariant
+ #{:meta/reachability-check}
+ {:invariant/fn invariant-all-fns-reachable})

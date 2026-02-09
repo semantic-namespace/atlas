@@ -1,5 +1,5 @@
 (ns atlas.ontology.business-pattern
-  "Business-pattern ontology module."
+  "Business-pattern ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
 (def ontology-definition
@@ -13,24 +13,43 @@
                    :business-pattern/business-value
                    :business-pattern/metrics-improved]})
 
-(defonce ^:private loaded? (atom false))
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
 
-(defn load!
-  "Load the business-pattern ontology."
-  []
-  (when-not @loaded?
-    (registry/register!
-     :atlas/business-pattern
-     :atlas/ontology
-     #{:atlas/business-pattern}
-     ontology-definition)
-    (reset! loaded? true))
-  :loaded)
+(def datalog-schema
+  "Datascript schema for business-pattern properties."
+  {:business-pattern/experience-journey {:db/cardinality :db.cardinality/one}
+   :business-pattern/metrics-improved {:db/cardinality :db.cardinality/many}})
 
-(defn loaded?* [] @loaded?)
+;; =============================================================================
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
+;; =============================================================================
 
-(defn unload! []
-  (when @loaded? (reset! loaded? false))
-  :unloaded)
+(registry/register!
+ :atlas/business-pattern
+ :atlas/ontology
+ #{:atlas/business-pattern}
+ ontology-definition)
 
-(defn reset-loaded-state! [] (reset! loaded? false))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/business-pattern
+ :atlas/datalog-extractor
+ #{:meta/business-pattern-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/business-pattern)
+                            (let [dev-id (:atlas/dev-id props)
+                                  journey (:business-pattern/experience-journey props)
+                                  metrics (:business-pattern/metrics-improved props)]
+                              (cond-> []
+                                ;; Experience journey reference (if it's a dev-id)
+                                journey
+                                (conj [:db/add dev-id :business-pattern/experience-journey journey])
+
+                                ;; Metrics improved (collection)
+                                metrics
+                                (concat (map (fn [metric]
+                                               [:db/add dev-id :business-pattern/metrics-improved metric])
+                                             metrics))))))
+  :datalog-extractor/schema datalog-schema})

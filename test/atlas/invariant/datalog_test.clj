@@ -7,6 +7,7 @@
    [atlas.invariant.dsl.operators :as dsl.operators]
    [atlas.invariant.unified :as invariant.unified]
    [atlas.registry :as registry]
+   [atlas.query]
    [atlas.ontology.execution-function :as ef]
    [atlas.ontology.interface-endpoint :as ie]
    [atlas.ontology.interface-protocol :as ip]
@@ -15,17 +16,14 @@
 (use-fixtures :each
   (fn [f]
     (reset! registry/registry {})
-    (a.datalog/reset-extensions!)
+    (a.datalog/reset-all!)  ;; Reset DB cache
     ;; Load ontologies for each test
-    (ef/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ip/reset-loaded-state!)
-    (ef/load!)
-    (ie/load!)
-    (ip/load!)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
+    (require 'atlas.ontology.interface-protocol :reload)
     (f)
     (reset! registry/registry {})
-    (a.datalog/reset-extensions!)))
+    (a.datalog/reset-all!)))
 
 ;; =============================================================================
 ;; TEST DATA FIXTURES
@@ -158,7 +156,7 @@
 
    :atlas/interface-endpoint
 
-   #{ :tier/api}
+   #{:tier/api}
    {:atlas/dev-id :endpoint/auth
     :interface-endpoint/context [:user/credentials]
     :interface-endpoint/response [:auth/token]
@@ -595,9 +593,10 @@
 ;; =============================================================================
 
 (deftest extensible-datalog-integration
-  (testing "ontologies register their fact extractors"
-    (is (>= (count @a.datalog/fact-extractors) 3)
-        "Should have at least 3 extractors (ef, ie, ip)"))
+  (testing "ontologies register their fact extractors in the registry"
+    (let [extractors (atlas.query/find-by-aspect @registry/registry :atlas/datalog-extractor)]
+      (is (>= (count extractors) 3)
+          "Should have at least 3 extractors (ef, ie, ip)")))
 
   (testing "ontologies register their schemas"
     (let [schema (a.datalog/build-schema)]
@@ -659,46 +658,44 @@
         (is (contains? (set endpoint-ctx) :user/credentials))))))
 
 (deftest custom-ontology-extensibility
-  (testing "custom ontology can register extractor"
+  (testing "custom ontology can register extractor via registry"
     ;; Reset to clean state
-    (a.datalog/reset-extensions!)
-    (ef/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ip/reset-loaded-state!)
-    (ef/load!)
-    (ie/load!)
-    (ip/load!)
+    (reset! registry/registry {})
+    (a.datalog/reset-all!)  ;; Reset DB cache
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
+    (require 'atlas.ontology.interface-protocol :reload)
 
-    (let [initial-count (count @a.datalog/fact-extractors)]
-      ;; Register a custom extractor
-      (a.datalog/register-fact-extractor!
-       (fn [compound-id props]
-         (when (contains? compound-id :test/custom-entity)
-           (let [dev-id (:atlas/dev-id props)]
-             (when-let [owner (:custom/owner props)]
-               [[:db/add dev-id :custom/owner owner]])))))
+    ;; Define custom extractor function
+    (defn custom-extractor [compound-id props]
+      (when (contains? compound-id :test/custom-entity)
+        (let [dev-id (:atlas/dev-id props)]
+          (when-let [owner (:custom/owner props)]
+            [[:db/add dev-id :custom/owner owner]]))))
 
-      ;; Register custom schema
-      (a.datalog/register-schema! {:custom/owner {}})
+    ;; Register custom extractor as :atlas/datalog-extractor entity
+    (registry/register!
+     :datalog-extractor/custom-test
+     :atlas/datalog-extractor
+     #{}
+     {:datalog-extractor/fn custom-extractor
+      :datalog-extractor/schema {:custom/owner {}}})
 
-      (is (= (inc initial-count) (count @a.datalog/fact-extractors))
-          "Extractor should be registered")
+    (is (contains? (a.datalog/build-schema) :custom/owner)
+        "Custom schema should be included")
 
-      (is (contains? (a.datalog/build-schema) :custom/owner)
-          "Custom schema should be included")
+    ;; Register entity with custom property
+    (registry/register!
+     :entity/custom
+     :test/custom-entity
+     #{:domain/test}
+     {:custom/owner :team/test})
 
-      ;; Register entity with custom property
-      (registry/register!
-       :entity/custom
-       :test/custom-entity
-       #{:domain/test}
-       {:custom/owner :team/test})
-
-      ;; Verify facts are extracted
-      (let [db (a.datalog/create-db)
-            result (d/q '[:find ?owner
-                          :where
-                          [?e :atlas/dev-id :entity/custom]
-                          [?e :custom/owner ?owner]]
-                        db)]
-        (is (= #{[:team/test]} result) "Custom property should be queryable")))))
+    ;; Verify facts are extracted
+    (let [db (a.datalog/create-db)
+          result (d/q '[:find ?owner
+                        :where
+                        [?e :atlas/dev-id :entity/custom]
+                        [?e :custom/owner ?owner]]
+                      db)]
+      (is (= #{[:team/test]} result) "Custom property should be queryable"))))

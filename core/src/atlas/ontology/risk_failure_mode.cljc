@@ -1,5 +1,5 @@
 (ns atlas.ontology.risk-failure-mode
-  "Risk-failure-mode ontology module."
+  "Risk-failure-mode ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
 (def ontology-definition
@@ -19,24 +19,55 @@
                    :risk-failure-mode/logged
                    :risk-failure-mode/log-details]})
 
-(defonce ^:private loaded? (atom false))
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
 
-(defn load!
-  "Load the risk-failure-mode ontology."
-  []
-  (when-not @loaded?
-    (registry/register!
-     :atlas/risk-failure-mode
-     :atlas/ontology
-     #{:atlas/risk-failure-mode}
-     ontology-definition)
-    (reset! loaded? true))
-  :loaded)
+(def datalog-schema
+  "Datascript schema for risk-failure-mode properties."
+  {:risk/triggered-by {:db/cardinality :db.cardinality/many}
+   :risk/preventable {:db/cardinality :db.cardinality/one}
+   :risk/security-event {:db/cardinality :db.cardinality/one}
+   :risk/logged {:db/cardinality :db.cardinality/one}})
 
-(defn loaded?* [] @loaded?)
+;; =============================================================================
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
+;; =============================================================================
 
-(defn unload! []
-  (when @loaded? (reset! loaded? false))
-  :unloaded)
+(registry/register!
+ :atlas/risk-failure-mode
+ :atlas/ontology
+ #{:atlas/risk-failure-mode}
+ ontology-definition)
 
-(defn reset-loaded-state! [] (reset! loaded? false))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/risk-failure-mode
+ :atlas/datalog-extractor
+ #{:meta/risk-failure-mode-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/risk-failure-mode)
+                            (let [dev-id (:atlas/dev-id props)
+                                  triggered-by (:risk-failure-mode/triggered-by props)
+                                  preventable (:risk-failure-mode/preventable props)
+                                  security-event (:risk-failure-mode/security-event props)
+                                  logged (:risk-failure-mode/logged props)]
+                              (cond-> []
+                                ;; Triggered by (collection)
+                                triggered-by
+                                (concat (map (fn [trigger]
+                                               [:db/add dev-id :risk/triggered-by trigger])
+                                             (if (coll? triggered-by) triggered-by [triggered-by])))
+
+                                ;; Preventable (boolean)
+                                preventable
+                                (conj [:db/add dev-id :risk/preventable preventable])
+
+                                ;; Security event (boolean)
+                                security-event
+                                (conj [:db/add dev-id :risk/security-event security-event])
+
+                                ;; Logged (boolean)
+                                logged
+                                (conj [:db/add dev-id :risk/logged logged])))))
+  :datalog-extractor/schema datalog-schema})

@@ -172,6 +172,7 @@
     (cond
       (set? deps) deps
       (coll? deps) (set deps)
+      (qualified-keyword? deps) #{deps}  ; Single reference (e.g., :endpoint/serialisation :serial/user)
       :else #{})))
 
 (defn context-for [dev-id]
@@ -443,7 +444,7 @@
       (registry/register!
        entity-type
        :atlas/type
-       #{}
+       #{entity-type}  ; Include entity-type as aspect to prevent compound-id collision
        {:registry-definition/keys (vec (cons :atlas/dev-id (:ontology/keys ont)))}))
     (count ontologies)))
 
@@ -451,7 +452,7 @@
 ;; Ontology Registration - Ontologies as semantic entities
 ;; =============================================================================
 
-;; loading this namespace already register a enitity
+;; loading this namespace already registers entities
 (registry/register!
    :ontology/ontology
    :atlas/ontology
@@ -459,20 +460,39 @@
    {:ontology/for :atlas/ontology
     :ontology/keys [:ontology/for :ontology/keys]})
 
+(registry/register!
+   :ontology/datalog-extractor
+   :atlas/ontology
+   #{:atlas/datalog-extractor}
+   {:ontology/for :atlas/datalog-extractor
+    :ontology/keys [:datalog-extractor/fn :datalog-extractor/schema]})
+
+(registry/register!
+   :ontology/invariant
+   :atlas/ontology
+   #{:atlas/invariant}
+   {:ontology/for :atlas/invariant
+    :ontology/keys [:invariant/fn]})
+
 ;; =============================================================================
 ;; ONTOLOGY MODULES
 ;; =============================================================================
 ;;
-;; All ontologies have been moved to their own namespaces under atlas.ontology.*
-;; Each ontology can be loaded independently via (ontology/load!).
+;; All ontologies are defined in their own namespaces under atlas.ontology.*
+;; Each ontology auto-registers when required (similar to clojure.spec).
 ;;
-;; Core ontologies (with invariants):
+;; Ontologies register:
+;;   - Ontology definition (entity type, keys, dataflow mappings)
+;;   - Datalog extractors (as :atlas/datalog-extractor entities)
+;;   - Invariants (as :atlas/invariant entities)
+;;
+;; Core ontologies (with invariants and extractors):
 ;;   atlas.ontology.execution-function  - execution functions with context/response/deps
 ;;   atlas.ontology.structure-component - infrastructure components
 ;;   atlas.ontology.interface-endpoint  - API endpoints
-;;
-;; Supporting ontologies:
 ;;   atlas.ontology.interface-protocol  - protocol definitions
+;;
+;; Supporting ontologies (ontology definition only):
 ;;   atlas.ontology.data-schema         - data structure schemas
 ;;   atlas.ontology.business-pattern    - business patterns
 ;;   atlas.ontology.governance-constraint - governance rules
@@ -482,7 +502,6 @@
 ;;   atlas.ontology.experience-journey  - user journeys
 ;;
 ;; Example usage:
-;;   (require '[atlas.ontology.execution-function :as ef])
-;;   (ef/load!)
+;;   (require 'atlas.ontology.execution-function)  ; auto-registers ontology, extractor, and invariants
 
 

@@ -2,43 +2,8 @@
   "Datascript/Datalog backend for invariant checking."
   (:require [datascript.core :as d]
             [atlas.registry :as registry]
-            [atlas.registry.lookup :as entity]))
-
-;; =============================================================================
-;; EXTENSION REGISTRY
-;; =============================================================================
-
-(defonce fact-extractors
-  (atom []))
-
-(defonce schema-contributions
-  (atom {}))
-
-(defn register-fact-extractor!
-  "Register a fact extractor function for custom properties.
-
-   extractor-fn: (fn [compound-id props] => [[op dev-id attr value] ...])
-
-   The extractor should return a sequence of Datascript transaction ops.
-   Return empty collection if the entity doesn't apply to this extractor."
-  [extractor-fn]
-  (swap! fact-extractors conj extractor-fn))
-
-(defn register-schema!
-  "Register schema attributes for custom properties.
-
-   schema-map: Datascript schema map
-
-   Example:
-   {:my-ontology/property {:db/cardinality :db.cardinality/many}}"
-  [schema-map]
-  (swap! schema-contributions merge schema-map))
-
-(defn reset-extensions!
-  "Reset all extensions (useful for testing)."
-  []
-  (reset! fact-extractors [])
-  (reset! schema-contributions {}))
+            [atlas.registry.lookup :as entity]
+            [atlas.query :as q]))
 
 ;; =============================================================================
 ;; FACT GENERATION
@@ -67,12 +32,17 @@
     @facts))
 
 (defn custom-registry-facts
-  "Extract facts using registered extractors.
-   Calls all registered fact extractors and collects their results."
+  "Extract facts using extractors discovered from the registry.
+   Finds all :atlas/datalog-extractor entities and calls their :datalog-extractor/fn."
   []
-  (let [facts (atom [])]
+  (let [extractors (->> (q/find-by-aspect @registry/registry :atlas/datalog-extractor)
+                        vals
+                        (map :datalog-extractor/fn)
+                        (remove nil?))
+        facts (atom [])]
     (doseq [[compound-id props] @registry/registry
-            extractor @fact-extractors]
+            extractor extractors]
+;;      (println "trying  " extractor "with " compound-id "------"props)
       (when-let [extracted (seq (extractor compound-id props))]
         (swap! facts concat extracted)))
     @facts))
@@ -95,10 +65,13 @@
    :dataflow/display-output {:db/cardinality :db.cardinality/many}})
 
 (defn build-schema
-  "Build complete schema (core + contributions from ontologies)."
+  "Build complete schema (core + contributions from ontology extractors)."
   []
-  (merge (core-schema)
-         @schema-contributions))
+  (let [extractor-schemas (->> (q/find-by-aspect @registry/registry :atlas/datalog-extractor)
+                               vals
+                               (map :datalog-extractor/schema)
+                               (remove nil?))]
+    (apply merge (core-schema) extractor-schemas)))
 
 (defn create-db
   "Create Datascript database with extensible schema and facts."
@@ -115,6 +88,53 @@
                         facts)]
       (d/transact! conn tx-data))
     @conn))
+
+;; =============================================================================
+;; DB CACHING
+;; =============================================================================
+;;
+;; The registry is loaded at app startup and remains stable thereafter.
+;; We lazily create and cache the Datascript DB on first complex query,
+;; then reuse it for all subsequent queries.
+;;
+;; For testing or explicit reload scenarios, use `reset-db-cache!`.
+
+;; Cached Datascript database. Created lazily on first access via `get-db`.
+(defonce ^:private db-cache (atom nil))
+
+(defn get-db
+  "Get the cached Datascript DB, creating it on first call.
+
+   The DB is built from the current registry state and cached indefinitely,
+   since the registry is stable after app startup.
+
+   For complex queries, prefer this over `create-db` to avoid rebuilding
+   the database on every query."
+  []
+  (or @db-cache
+      (swap! db-cache (fn [existing]
+                        (or existing (create-db))))))
+
+(defn reset-db-cache!
+  "Reset the cached DB, forcing recreation on next `get-db` call.
+
+   Use this:
+   - In tests (to ensure fresh state)
+   - After explicit registry modifications (rare)
+   - When ontology extensions are registered after initial load"
+  []
+  (reset! db-cache nil))
+
+(defn db-cached?
+  "Check if the DB has been cached (useful for diagnostics)."
+  []
+  (some? @db-cache))
+
+(defn reset-all!
+  "Reset DB cache (useful for testing).
+   Extensions now live in the registry, so only the DB cache needs resetting."
+  []
+  (reset-db-cache!))
 
 ;; =============================================================================
 ;; DATALOG QUERIES
@@ -378,7 +398,7 @@
                (into deps new-deps))))))
 
 (defn query-reverse-dependencies
-  "Find all entities that depend on the given entity."
+  "Find all entities that depend on the given entity (reverse dependencies)."
   [db dev-id]
   (d/q '[:find [?dependent ...]
          :in $ ?target
@@ -386,6 +406,75 @@
          [?e :atlas/dev-id ?dependent]
          [?e :entity/depends ?target]]
        db dev-id))
+
+;; =============================================================================
+;; CLOSURE QUERIES (with hop tracking)
+;; =============================================================================
+;;
+;; These functions compute transitive closures with:
+;; - Support for multiple start nodes
+;; - Max-hops limiting
+;; - Hop count tracking per entity
+;;
+;; Used by atlas.ide and atlas.llm-ide for impact analysis.
+
+(defn query-upstream-closure
+  "Transitive closure of dependencies (what this entity depends on).
+
+   Args:
+     db        - Datascript database
+     start-ids - Single dev-id or set of dev-ids to start from
+     max-hops  - Maximum number of hops to traverse (nil = unlimited)
+
+   Returns vector of {:entity dev-id :hops n} sorted by hops ascending.
+   Does not include start-ids in the result."
+  [db start-ids max-hops]
+  (let [start-set (if (set? start-ids) start-ids #{start-ids})]
+    (loop [frontier start-set
+           visited start-set
+           result []
+           hop 0]
+      (if (or (empty? frontier)
+              (and max-hops (>= hop max-hops)))
+        result
+        (let [next-frontier (->> frontier
+                                 (mapcat #(query-dependencies db %))
+                                 set
+                                 (#(clojure.set/difference % visited)))
+              hop-results (map (fn [e] {:entity e :hops (inc hop)}) next-frontier)]
+          (recur next-frontier
+                 (into visited next-frontier)
+                 (into result hop-results)
+                 (inc hop)))))))
+
+(defn query-downstream-closure
+  "Transitive closure of dependents (what depends on this entity).
+
+   Args:
+     db        - Datascript database
+     start-ids - Single dev-id or set of dev-ids to start from
+     max-hops  - Maximum number of hops to traverse (nil = unlimited)
+
+   Returns vector of {:entity dev-id :hops n} sorted by hops ascending.
+   Does not include start-ids in the result."
+  [db start-ids max-hops]
+  (let [start-set (if (set? start-ids) start-ids #{start-ids})]
+    (loop [frontier start-set
+           visited start-set
+           result []
+           hop 0]
+      (if (or (empty? frontier)
+              (and max-hops (>= hop max-hops)))
+        result
+        (let [next-frontier (->> frontier
+                                 (mapcat #(query-reverse-dependencies db %))
+                                 set
+                                 (#(clojure.set/difference % visited)))
+              hop-results (map (fn [e] {:entity e :hops (inc hop)}) next-frontier)]
+          (recur next-frontier
+                 (into visited next-frontier)
+                 (into result hop-results)
+                 (inc hop)))))))
 
 (defn query-aspect-frequency
   "Get frequency count of each aspect."
@@ -396,7 +485,8 @@
        db))
 
 (defn query-entities-by-multiple-aspects
-  "Find entities that have ALL of the specified aspects."
+  "Find entities that have ANY of the specified aspects (OR semantics).
+   Note: Despite the name, this is OR not AND. Use query-entities-with-all-aspects for AND."
   [db aspects]
   (let [aspect-list (vec aspects)]
     (d/q {:find ['?dev-id]
@@ -404,6 +494,134 @@
           :where [['?e :atlas/dev-id '?dev-id]
                   ['?e :entity/aspect '?aspect]]}
          db [aspect-list])))
+
+;; =============================================================================
+;; EXPLORER QUERIES (aspect filtering and similarity)
+;; =============================================================================
+
+(defn query-entity-aspects
+  "Get all aspects for a specific entity."
+  [db dev-id]
+  (set (d/q '[:find [?aspect ...]
+              :in $ ?dev-id
+              :where
+              [?e :atlas/dev-id ?dev-id]
+              [?e :entity/aspect ?aspect]]
+            db dev-id)))
+
+;; TODO this should be dynamic
+(defn query-entity-type
+  "Get the entity type (e.g., :atlas/execution-function) for a dev-id."
+  [db dev-id]
+  (let [aspects (query-entity-aspects db dev-id)
+        type-aspects #{:atlas/execution-function
+                       :atlas/interface-endpoint
+                       :atlas/structure-component
+                       :atlas/interface-protocol
+                       :atlas/data-schema}]
+    (first (filter type-aspects aspects))))
+
+(defn query-entities-with-all-aspects
+  "Find entities that have ALL of the specified aspects (AND semantics).
+   Returns set of dev-ids."
+  [db aspects]
+  (when (seq aspects)
+    (let [aspect-vec (vec aspects)
+          ;; Start with entities having the first aspect
+          initial-set (set (query-entities-with-aspect db (first aspect-vec)))]
+      ;; Intersect with entities having each subsequent aspect
+      (reduce (fn [acc aspect]
+                (clojure.set/intersection acc (set (query-entities-with-aspect db aspect))))
+              initial-set
+              (rest aspect-vec)))))
+
+(defn query-entities-with-any-aspect
+  "Find entities that have ANY of the specified aspects (OR semantics).
+   Returns set of dev-ids."
+  [db aspects]
+  (when (seq aspects)
+    (->> aspects
+         (mapcat #(query-entities-with-aspect db %))
+         set)))
+
+(defn query-all-entities
+  "Get all entity dev-ids in the database."
+  [db]
+  (d/q '[:find [?dev-id ...]
+         :where
+         [?e :atlas/dev-id ?dev-id]]
+       db))
+
+(defn query-explorer-filter
+  "Filter entities by AND/OR aspect criteria.
+   Returns set of dev-ids matching:
+   - ALL aspects in aspects-and (if provided), OR
+   - ANY aspect in aspects-or (if provided)
+
+   Args:
+     db          - Datascript database
+     aspects-and - Collection of aspects (entity must have ALL)
+     aspects-or  - Collection of aspects (entity must have ANY)
+
+   Returns set of matching dev-ids."
+  [db aspects-and aspects-or]
+  (let [and-matches (when (seq aspects-and)
+                      (query-entities-with-all-aspects db aspects-and))
+        or-matches (when (seq aspects-or)
+                     (query-entities-with-any-aspect db aspects-or))]
+    (cond
+      (and and-matches or-matches) (clojure.set/union and-matches or-matches)
+      and-matches and-matches
+      or-matches or-matches
+      :else #{})))
+
+(defn query-structural-gaps
+  "Find entity pairs that are semantically similar but not connected.
+
+   A 'structural gap' is when two entities:
+   - Have high aspect similarity (Jaccard > min-similarity)
+   - Are NOT connected via dependencies (neither depends on the other)
+
+   This can indicate missing relationships or architectural inconsistencies.
+
+   Args:
+     db             - Datascript database
+     min-similarity - Minimum Jaccard similarity threshold (default 0.5)
+     max-results    - Maximum number of gaps to return (default 20)
+
+   Returns vector of {:a dev-id :b dev-id :similarity n :shared-aspects [...]}
+   sorted by similarity descending."
+  ([db] (query-structural-gaps db 0.5 20))
+  ([db min-similarity] (query-structural-gaps db min-similarity 20))
+  ([db min-similarity max-results]
+   (let [all-dev-ids (vec (query-all-entities db))
+         ;; Precompute aspects and deps for all entities (batch efficiency)
+         aspects-map (into {} (map (fn [id] [id (query-entity-aspects db id)]) all-dev-ids))
+         deps-map (into {} (map (fn [id] [id (set (query-dependencies db id))]) all-dev-ids))
+         n (count all-dev-ids)
+         ;; O(n²) comparison but with precomputed data
+         gaps (for [i (range n)
+                    j (range (inc i) n)
+                    :let [dev-a (nth all-dev-ids i)
+                          dev-b (nth all-dev-ids j)
+                          aspects-a (get aspects-map dev-a #{})
+                          aspects-b (get aspects-map dev-b #{})
+                          shared (clojure.set/intersection aspects-a aspects-b)
+                          union (clojure.set/union aspects-a aspects-b)
+                          similarity (if (seq union)
+                                       (/ (count shared) (count union))
+                                       0)
+                          deps-a (get deps-map dev-a #{})
+                          deps-b (get deps-map dev-b #{})
+                          connected? (or (contains? deps-a dev-b)
+                                         (contains? deps-b dev-a))]
+                    :when (and (> similarity min-similarity)
+                               (not connected?))]
+                {:a dev-a
+                 :b dev-b
+                 :similarity (double similarity)
+                 :shared-aspects (vec (sort shared))})]
+     (vec (take max-results (sort-by (comp - :similarity) gaps))))))
 
 ;; =============================================================================
 ;; DSL COMPILATION
@@ -484,7 +702,9 @@
    {:not [[:logic/has-aspect :arg/dev :tier/foundation]]}]
 
   This returns the equivalent Datascript query that can be executed with
-  `(d/q (compile-logic-query dsl) (create-db))`."
+  `(d/q (compile-logic-query dsl) (get-db))`.
+
+  Prefer using `run-logic-query` which handles caching automatically."
   [dsl]
   (let [parts (vec dsl)
         where-idx (.indexOf parts :where)
@@ -501,14 +721,16 @@
                   where-clauses))))
 
 (defn run-logic-query
-  "Helper that compiles and runs a DSL query against the live registry.
+  "Helper that compiles and runs a DSL query against the cached DB.
+
+   Uses `get-db` for efficient repeated queries (DB is cached after first call).
 
    Automatically filters out ontology meta-entities (marked with :atlas/ontology)
    from results, as most business logic queries should only operate on application
    entities."
   [dsl]
   (let [query (compile-logic-query dsl)
-        db (create-db)
+        db (get-db)
         results (d/q query db)]
     ;; Filter out ontology meta-entities from results
     (if (and (sequential? results) (every? keyword? results))
@@ -727,16 +949,6 @@
 ;; =============================================================================
 ;; ERROR IMPACT ANALYSIS QUERIES
 ;; =============================================================================
-
-(defn query-reverse-dependencies
-  "Find all entities that depend on the given entity (reverse dependencies)."
-  [db dev-id]
-  (d/q '[:find [?dependent ...]
-         :in $ ?target
-         :where
-         [?e :entity/depends ?target]
-         [?e :atlas/dev-id ?dependent]]
-       db dev-id))
 
 (defn query-transitive-reverse-dependencies
   "Find all entities that depend on the given entity, transitively.

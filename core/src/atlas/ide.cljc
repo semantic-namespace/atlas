@@ -8,6 +8,7 @@
             [atlas.docs :as docs]
             [atlas.ontology :as ot]
             [atlas.query :as query]
+            [atlas.datalog :as datalog]
             [atlas.cljc.platform :as platform]
             [clojure.string :as str]
             [clojure.set :as set]))
@@ -59,28 +60,6 @@
 (def ^:private data-key-cache (atom {:time 0 :entity/produces {} :entity/consumes {}}))
 (def ^:private cache-ttl-ms 5000)
 
-(defn- build-reverse-deps []
-  "Build reverse dependency index: maps dev-id to set of dependents."
-  (let [all-ids (ax/all-dev-ids)]
-    (reduce (fn [acc dev-id]
-              (let [deps (ot/deps-for dev-id)]
-                (reduce (fn [inner dep]
-                          (update inner dep (fnil conj #{}) dev-id))
-                        acc
-                        deps)))
-            {}
-            all-ids)))
-
-(defn- get-reverse-deps []
-  "Get reverse deps cache, rebuilding if stale."
-  (let [now (platform/now-ms)
-        {:keys [time data]} @reverse-deps-cache]
-    (if (and (pos? time) (< (- now time) cache-ttl-ms))
-      data
-      (let [new-data (build-reverse-deps)]
-        (swap! reverse-deps-cache assoc :time now :data new-data)
-        new-data))))
-
 (defn- build-data-key-cache []
   "Build indexes for producers/consumers keyed by data-key."
   (reduce (fn [acc [_ props]]
@@ -109,6 +88,53 @@
             new-consumes (:entity/consumes new-cache)]
         (swap! data-key-cache assoc :time now :entity/produces new-produces :entity/consumes new-consumes)
         {:entity/produces new-produces :entity/consumes new-consumes}))))
+
+(defn- dataflow-dependencies-for
+  "Compute implicit dependencies via dataflow (producer/consumer matching).
+   Returns set of dev-ids that this entity depends on based on data keys it consumes."
+  [dev-id]
+  (let [context-keys (ot/context-for dev-id)
+        cache (get-data-key-cache)
+        produces-map (:entity/produces cache)]
+    ;; For each key this entity consumes, find who produces it
+    (set (mapcat (fn [ctx-key]
+                   (get produces-map ctx-key #{}))
+                 context-keys))))
+
+(defn- effective-dependencies-for
+  "Compute effective dependencies: explicit deps + dataflow deps.
+
+   This allows the system to work with different modeling approaches:
+   - Systems with explicit :execution-function/deps use those
+   - Systems with only dataflow (context/response) derive deps from producer/consumer matching
+   - Hybrid systems get both"
+  [dev-id]
+  (let [explicit-deps (ot/deps-for dev-id)
+        dataflow-deps (dataflow-dependencies-for dev-id)]
+    (set/union explicit-deps dataflow-deps)))
+
+(defn- build-reverse-deps []
+  "Build reverse dependency index: maps dev-id to set of dependents.
+   Uses effective dependencies (explicit + dataflow) for comprehensive graph."
+  (let [all-ids (ax/all-dev-ids)]
+    (reduce (fn [acc dev-id]
+              (let [deps (effective-dependencies-for dev-id)]
+                (reduce (fn [inner dep]
+                          (update inner dep (fnil conj #{}) dev-id))
+                        acc
+                        deps)))
+            {}
+            all-ids)))
+
+(defn- get-reverse-deps []
+  "Get reverse deps cache, rebuilding if stale."
+  (let [now (platform/now-ms)
+        {:keys [time data]} @reverse-deps-cache]
+    (if (and (pos? time) (< (- now time) cache-ttl-ms))
+      data
+      (let [new-data (build-reverse-deps)]
+        (swap! reverse-deps-cache assoc :time now :data new-data)
+        new-data))))
 
 ;; =============================================================================
 ;; QUERY API
@@ -329,10 +355,11 @@
         dependents (get reverse-deps dev-id-kw #{})]
     (vec (sort dependents))))
 
-(defn dependencies-of 
-  "Find what this entity depends on."
+(defn dependencies-of
+  "Find what this entity depends on.
+   Uses effective dependencies (explicit deps + dataflow-derived deps)."
   [dev-id]
-  (vec (sort (ot/deps-for (ensure-keyword dev-id)))))
+  (vec (sort (effective-dependencies-for (ensure-keyword dev-id)))))
 
 (defn producers-of
   "Find functions that produce a data key."
@@ -474,6 +501,7 @@
           (assoc :ontology/suggested-aspects (->> suggested-aspects sort vec))
           (dissoc :similar-entries :suggested-aspects)))))
 
+;; WHY this is execution-function/deps related?
 (defn inspect-entity
   "Quick inspection of an entity."
   [dev-id]
@@ -839,49 +867,52 @@
    - Entity matches if it has ALL aspects from aspects-and
    - OR entity matches if it has ANY aspect from aspects-or
    - Results sorted by Jaccard similarity to the query aspects (closest first)
-   Returns vector of {:dev-id :type :similarity :shared :unique} maps."
+   Returns vector of {:dev-id :type :similarity :shared :unique} maps.
+
+   Uses cached datalog DB for efficient querying."
   [aspects-and aspects-or]
-  (let [registry @cid/registry
-        query-aspects (set/union (set aspects-and) (set aspects-or))]
+  (let [query-aspects (set/union (set aspects-and) (set aspects-or))]
     (when (seq query-aspects)
-      (->> registry
-           (filter (fn [[identity _props]]
-                     (let [matches-and? (and (seq aspects-and)
-                                             (every? #(contains? identity %) aspects-and))
-                           matches-or? (and (seq aspects-or)
-                                            (some #(contains? identity %) aspects-or))]
-                       (or matches-and? matches-or?))))
-           (map (fn [[identity props]]
-                  (let [entity-aspects (cid/aspects identity)
-                        shared (set/intersection query-aspects entity-aspects)
-                        unique-to-entity (set/difference entity-aspects query-aspects)
-                        union (set/union query-aspects entity-aspects)
-                        similarity (if (seq union)
-                                     (/ (count shared) (count union))
-                                     0.0)]
-                    {:dev-id (:atlas/dev-id props)
-                     :type (to-string (:atlas/type props))
-                     :similarity (double similarity)
-                     :shared (sorted-vec shared)
-                     :unique (sorted-vec unique-to-entity)})))
-           (filter :dev-id)
-           ;; Sort by similarity (descending), then by dev-id for stability
-           (sort-by (juxt (comp - :similarity) :dev-id))
-           vec))))
+      (let [db (datalog/get-db)
+            matching-dev-ids (datalog/query-explorer-filter db aspects-and aspects-or)]
+        (->> matching-dev-ids
+             (map (fn [dev-id]
+                    (let [entity-aspects (datalog/query-entity-aspects db dev-id)
+                          entity-type (datalog/query-entity-type db dev-id)
+                          shared (set/intersection query-aspects entity-aspects)
+                          unique-to-entity (set/difference entity-aspects query-aspects)
+                          union (set/union query-aspects entity-aspects)
+                          similarity (if (seq union)
+                                       (/ (count shared) (count union))
+                                       0.0)]
+                      {:dev-id dev-id
+                       :type (to-string entity-type)
+                       :similarity (double similarity)
+                       :shared (sorted-vec shared)
+                       :unique (sorted-vec unique-to-entity)})))
+             (filter :dev-id)
+             ;; Sort by similarity (descending), then by dev-id for stability
+             (sort-by (juxt (comp - :similarity) :dev-id))
+             vec)))))
 
 (defn similar-with-diff
   "Find similar entities to a compound identity, showing aspect differences.
-   Returns entities sorted by similarity with shared and unique aspects highlighted."
+   Returns entities sorted by similarity with shared and unique aspects highlighted.
+
+   Uses cached datalog DB for efficient querying."
   [compound-identity]
   (let [compound-identity-set (if (set? compound-identity)
                                  compound-identity
                                  (set compound-identity))
         query-aspects (cid/aspects compound-identity-set)
-        registry @cid/registry]
-    (->> registry
-         (keep (fn [[identity props]]
-                 (when (not= identity compound-identity-set)
-                   (let [entity-aspects (cid/aspects identity)
+        db (datalog/get-db)
+        ;; Get dev-id for the query identity if it exists
+        query-dev-id (:atlas/dev-id (cid/fetch compound-identity-set))
+        all-dev-ids (datalog/query-all-entities db)]
+    (->> all-dev-ids
+         (keep (fn [dev-id]
+                 (when (not= dev-id query-dev-id)
+                   (let [entity-aspects (datalog/query-entity-aspects db dev-id)
                          shared (set/intersection query-aspects entity-aspects)
                          unique-to-query (set/difference query-aspects entity-aspects)
                          unique-to-entity (set/difference entity-aspects query-aspects)
@@ -889,8 +920,8 @@
                          similarity (if (seq union)
                                       (/ (count shared) (count union))
                                       0.0)]
-                     (when (pos? similarity)  ; Only include entities with some overlap
-                       {:dev-id (:atlas/dev-id props)
+                     (when (pos? similarity)
+                       {:dev-id dev-id
                         :similarity (double similarity)
                         :shared (sorted-vec shared)
                         :unique-to-query (sorted-vec unique-to-query)

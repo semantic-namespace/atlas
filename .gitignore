@@ -47,3 +47,6 @@ ui/resources/public-v2/atlas-ui/js/
 /ui/target/
 /core/.nrepl-port
 /ui/.nrepl-port
+/ui/resources/public-v3/
+/ui/resources/public-v4/
+/ui/resources/public-v5/

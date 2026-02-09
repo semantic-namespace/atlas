@@ -1,5 +1,5 @@
 (ns atlas.ontology.identity-role
-  "Identity-role ontology module."
+  "Identity-role ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
 (def ontology-definition
@@ -15,24 +15,49 @@
                    :identity-role/typical-users
                    :identity-role/privacy-constraint]})
 
-(defonce ^:private loaded? (atom false))
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
 
-(defn load!
-  "Load the identity-role ontology."
-  []
-  (when-not @loaded?
-    (registry/register!
-     :atlas/identity-role
-     :atlas/ontology
-     #{:atlas/identity-role}
-     ontology-definition)
-    (reset! loaded? true))
-  :loaded)
+(def datalog-schema
+  "Datascript schema for identity-role properties."
+  {:role/data-access {:db/cardinality :db.cardinality/many}
+   :role/granted-by {:db/cardinality :db.cardinality/one}
+   :role/audit-logged {:db/cardinality :db.cardinality/one}})
 
-(defn loaded?* [] @loaded?)
+;; =============================================================================
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
+;; =============================================================================
 
-(defn unload! []
-  (when @loaded? (reset! loaded? false))
-  :unloaded)
+(registry/register!
+ :atlas/identity-role
+ :atlas/ontology
+ #{:atlas/identity-role}
+ ontology-definition)
 
-(defn reset-loaded-state! [] (reset! loaded? false))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/identity-role
+ :atlas/datalog-extractor
+ #{:meta/identity-role-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/identity-role)
+                            (let [dev-id (:atlas/dev-id props)
+                                  data-access (:identity-role/data-access props)
+                                  granted-by (:identity-role/granted-by props)
+                                  audit-logged (:identity-role/audit-logged props)]
+                              (cond-> []
+                                ;; Data access (collection)
+                                data-access
+                                (concat (map (fn [access]
+                                               [:db/add dev-id :role/data-access access])
+                                             (if (coll? data-access) data-access [data-access])))
+
+                                ;; Granted by (reference)
+                                granted-by
+                                (conj [:db/add dev-id :role/granted-by granted-by])
+
+                                ;; Audit logged (boolean)
+                                audit-logged
+                                (conj [:db/add dev-id :role/audit-logged audit-logged])))))
+  :datalog-extractor/schema datalog-schema})

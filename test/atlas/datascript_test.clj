@@ -9,17 +9,13 @@
 (use-fixtures :each
   (fn [f]
     (reset! cid/registry {})
-    (sut/reset-extensions!)
-    ;; Load ontologies
-    (ef/reset-loaded-state!)
-    (ie/reset-loaded-state!)
-    (ip/reset-loaded-state!)
-    (ef/load!)
-    (ie/load!)
-    (ip/load!)
+    (sut/reset-db-cache!)
+    (require 'atlas.ontology.execution-function :reload)
+    (require 'atlas.ontology.interface-endpoint :reload)
+    (require 'atlas.ontology.interface-protocol :reload)
     (f)
     (reset! cid/registry {})
-    (sut/reset-extensions!)))
+    (sut/reset-db-cache!)))
 
 (defn- seed-registry! []
   ;; Endpoint exposing one context key

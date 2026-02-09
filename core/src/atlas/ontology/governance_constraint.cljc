@@ -1,5 +1,5 @@
 (ns atlas.ontology.governance-constraint
-  "Governance-constraint ontology module."
+  "Governance-constraint ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
 (def ontology-definition
@@ -19,24 +19,59 @@
                    :governance-constraint/revocable
                    :governance-constraint/revocation-path]})
 
-(defonce ^:private loaded? (atom false))
+;; =============================================================================
+;; DATALOG INTEGRATION
+;; =============================================================================
 
-(defn load!
-  "Load the governance-constraint ontology."
-  []
-  (when-not @loaded?
-    (registry/register!
-     :atlas/governance-constraint
-     :atlas/ontology
-     #{:atlas/governance-constraint}
-     ontology-definition)
-    (reset! loaded? true))
-  :loaded)
+(def datalog-schema
+  "Datascript schema for governance-constraint properties."
+  {:constraint/enforced-by {:db/cardinality :db.cardinality/many}
+   :constraint/compliance-requirement {:db/cardinality :db.cardinality/many}
+   :constraint/oauth-scope {:db/cardinality :db.cardinality/many}
+   :constraint/revocable {:db/cardinality :db.cardinality/one}})
 
-(defn loaded?* [] @loaded?)
+;; =============================================================================
+;; AUTO-REGISTRATION (top-level, like clojure.spec)
+;; =============================================================================
 
-(defn unload! []
-  (when @loaded? (reset! loaded? false))
-  :unloaded)
+(registry/register!
+ :atlas/governance-constraint
+ :atlas/ontology
+ #{:atlas/governance-constraint}
+ ontology-definition)
 
-(defn reset-loaded-state! [] (reset! loaded? false))
+;; Datalog extractor
+(registry/register!
+ :datalog-extractor/governance-constraint
+ :atlas/datalog-extractor
+ #{:meta/governance-constraint-extractor}
+ {:datalog-extractor/fn (fn [compound-id props]
+                          (when (contains? compound-id :atlas/governance-constraint)
+                            (let [dev-id (:atlas/dev-id props)
+                                  enforced-by (:governance-constraint/enforced-by props)
+                                  compliance (:governance-constraint/compliance-requirement props)
+                                  oauth-scopes (:governance-constraint/google-oauth-scope props)
+                                  revocable (:governance-constraint/revocable props)]
+                              (cond-> []
+                                ;; Enforced by (references to components/functions)
+                                enforced-by
+                                (concat (map (fn [enforcer]
+                                               [:db/add dev-id :constraint/enforced-by enforcer])
+                                             (if (coll? enforced-by) enforced-by [enforced-by])))
+
+                                ;; Compliance requirements
+                                compliance
+                                (concat (map (fn [req]
+                                               [:db/add dev-id :constraint/compliance-requirement req])
+                                             (if (coll? compliance) compliance [compliance])))
+
+                                ;; OAuth scopes
+                                oauth-scopes
+                                (concat (map (fn [scope]
+                                               [:db/add dev-id :constraint/oauth-scope scope])
+                                             (if (coll? oauth-scopes) oauth-scopes [oauth-scopes])))
+
+                                ;; Revocable flag
+                                revocable
+                                (conj [:db/add dev-id :constraint/revocable revocable])))))
+  :datalog-extractor/schema datalog-schema})
