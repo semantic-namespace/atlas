@@ -43,7 +43,7 @@
    #{ :tier/api}
    {:atlas/dev-id :endpoint/orders
     :interface-endpoint/context [:ctx/order]
-    :execution-function/deps #{:fn/consumer}})
+    :interface-endpoint/deps #{:fn/consumer}})
 
   ;; Consumer pulls input from the endpoint and depends on producer
   (registry/register!
@@ -160,7 +160,7 @@
    {:atlas/dev-id :endpoint/auth
     :interface-endpoint/context [:user/credentials]
     :interface-endpoint/response [:auth/token]
-    :execution-function/deps #{:fn/oauth-handler}})
+    :interface-endpoint/deps #{:fn/oauth-handler}})
 
   (registry/register!
    :fn/oauth-handler
