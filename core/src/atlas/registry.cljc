@@ -101,6 +101,28 @@
         joined (str/join "--" aspect-names)]
     (keyword "auto" joined)))
 
+(defn- get-not-serialisable-keys
+  "Get not-serialisable keys for a compound identity by reading ontology from registry.
+   Avoids circular dependency with atlas.ontology by reading registry directly."
+  [compound-id]
+  (let [entity-types (filter #(= "atlas" (namespace %)) compound-id)
+        ontology-entries (filter #(contains? % :atlas/ontology) (keys @registry))]
+    (set (mapcat (fn [entity-type]
+                   ;; Find ontology entry that has both :atlas/ontology and this entity-type
+                   (when-let [ontology-id (first (filter #(contains? % entity-type)
+                                                         ontology-entries))]
+                     (let [ontology-props (get @registry ontology-id)]
+                       (:ontology/not-serialisable-keys ontology-props))))
+                 entity-types))))
+
+(defn- serialisable-value
+  "Filter value to only include serialisable keys (exclude :ontology/not-serialisable-keys).
+   Used for comparing entity definitions to detect semantic conflicts.
+   Reads ontology definitions directly from registry to avoid circular dependency."
+  [compound-id value]
+  (let [not-serialisable-keys (get-not-serialisable-keys compound-id)]
+    (apply dissoc value not-serialisable-keys)))
+
 (defn register!
   "Register a new compound identity with explicit entity type and aspects.
 
@@ -124,23 +146,33 @@
            (format* "Entity type must be a qualified keyword, got: %s" type))
    (assert (set? aspects)
            (format* "Aspects must be a set, got: %s" aspects))
-   (let [id (conj aspects type)]
+   (let [id (conj aspects type)
+         value-with-meta (assoc value :atlas/dev-id dev-id :atlas/type type)]
      (assert (valid? id) (format* "Invalid compound identity: %s" id))
-     (when (and (contains? @registry id)
-                (not= (get @registry id) (assoc value :atlas/dev-id dev-id)))
-       #_(tel/log! {:level :warn} ["Compound identity already exists in registry"
-                                 {:compound-id id
-                                  :existing-value (get @registry id)
-                                  :attempted-value (assoc value :atlas/dev-id dev-id)}]))
+
+     ;; Check for duplicate compound-id with different serialisable values
+     (when (contains? @registry id)
+       (let [existing-value (get @registry id)
+             existing-serialisable (serialisable-value id existing-value)
+             new-serialisable (serialisable-value id value-with-meta)]
+         (when (not= existing-serialisable new-serialisable)
+           (tel/log! {:level :warn}
+                     ["Compound identity already exists with different serialisable values"
+                      {:compound-id id
+                       :dev-id dev-id
+                       :existing-serialisable existing-serialisable
+                       :attempted-serialisable new-serialisable}]))))
+
+     ;; Check for duplicate dev-id with different compound-id
      (when-let [[existing-id existing-value] (find-by-dev-id dev-id)]
        (when (not= existing-id id)
-         #_(tel/log! {:level :warn} ["dev-id already exists in registry"
-                                   {:dev-id dev-id
-                                    :existing-compound-id existing-id
-                                    :existing-value existing-value
-                                    :attempted-compound-id id
-                                    :attempted-value (assoc value :atlas/dev-id dev-id)}])))
-     (swap! registry assoc id (assoc value :atlas/dev-id dev-id :atlas/type type))
+         (tel/log! {:level :warn}
+                   ["dev-id already exists with different compound identity"
+                    {:dev-id dev-id
+                     :existing-compound-id existing-id
+                     :attempted-compound-id id}])))
+
+     (swap! registry assoc id value-with-meta)
      id))) 
 
 ;; =============================================================================

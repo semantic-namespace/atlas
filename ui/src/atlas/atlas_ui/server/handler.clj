@@ -13,23 +13,22 @@
            "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
            "Access-Control-Allow-Headers" "Content-Type, Accept"}))
 
-(defn- registry-payload [registry-atom]
-  (let [registry @registry-atom]
-    {:atlas-ui.api.response/registry registry
-     :atlas-ui.api.response/aspect-stats (ide/list-aspects registry)
-     :timestamp (System/currentTimeMillis)
-     :count (count registry)}))
+(defn- registry-payload [registry]
+  {:atlas-ui.api.response/registry registry
+   :atlas-ui.api.response/aspect-stats (ide/list-aspects registry)
+   :timestamp (System/currentTimeMillis)
+   :count (count registry)})
 
 (defn- registry-edn-handler
   "Handler that returns the current registry as EDN.
 
   Note: we intentionally avoid `*print-namespace-maps*` here to keep the
   output maximally compatible across EDN readers."
-  [registry-atom _request]
+  [registry _request]
   (cors-headers
    {:status 200
     :headers {"Content-Type" "application/edn"}
-    :body (pr-str (registry-payload registry-atom))}))
+    :body (pr-str (registry-payload registry))}))
 
 (defn- transit-bytes [data]
   (let [out (ByteArrayOutputStream.)
@@ -39,11 +38,11 @@
 
 (defn- registry-transit-handler
   "Handler that returns the current registry as Transit+JSON."
-  [registry-atom _request]
+  [registry _request]
   (cors-headers
    {:status 200
     :headers {"Content-Type" "application/transit+json"}
-    :body (ByteArrayInputStream. (transit-bytes (registry-payload registry-atom)))}))
+    :body (ByteArrayInputStream. (transit-bytes (registry-payload registry)))}))
 
 (defn- request-wants-transit?
   [request]
@@ -53,12 +52,14 @@
 (defn registry-handler
   "Handler that returns the current registry.
 
+  Takes a registry map (not an atom) and a request.
+
   Responds with Transit+JSON when the request `Accept` header includes
   `application/transit+json`, otherwise defaults to EDN."
-  [registry-atom request]
+  [registry request]
   (if (request-wants-transit? request)
-    (registry-transit-handler registry-atom request)
-    (registry-edn-handler registry-atom request)))
+    (registry-transit-handler registry request)
+    (registry-edn-handler registry request)))
 
 (defn options-handler
   "Handler for CORS preflight requests"
@@ -69,5 +70,5 @@
     :body "OK"}))
 
 (comment
-  ;; Test the handler
-  (registry-handler {}))
+  ;; Test the handler with an empty registry map
+  (registry-handler {} {:uri "/api/atlas/registry"}))

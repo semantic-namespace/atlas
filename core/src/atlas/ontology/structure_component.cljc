@@ -44,8 +44,8 @@
  :atlas/ontology
  #{:atlas/structure-component}
  {:ontology/for :atlas/structure-component
-   :ontology/keys [:structure-component/deps]
-   :dataflow/deps-key :structure-component/deps})
+  :ontology/keys [:structure-component/deps]
+  :dataflow/deps-key :structure-component/deps})
 
 ;; Type-ref: structure-component → structure-component (self-ref deps)
 (registry/register!

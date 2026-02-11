@@ -16,7 +16,6 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.ontology.type-ref :as type-ref]
-            [atlas.query :as query]
             [clojure.spec.alpha :as s]))
 
 (s/def :execution-function/context (s/coll-of qualified-keyword?))

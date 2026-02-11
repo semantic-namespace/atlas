@@ -55,6 +55,17 @@
       (:atlas/fields props)
       []))
 
+(defn- filter-non-serialisable
+  "Remove non-serialisable keys from a map based on its compound identity.
+   Returns the filtered map. Used to ensure atlas.ide never returns function values to Emacs."
+  [compound-id m]
+  (if (and (map? m) compound-id)
+    (let [not-serialisable-keys (ot/not-serialisable-keys-for-identity compound-id)]
+      (if (seq not-serialisable-keys)
+        (reduce dissoc m not-serialisable-keys)
+        m))
+    m))
+
 ;; Cache for reverse dependency index (for performance optimization)
 (def ^:private reverse-deps-cache (atom {:time 0 :data {}}))
 (def ^:private data-key-cache (atom {:time 0 :entity/produces {} :entity/consumes {}}))
@@ -266,9 +277,13 @@
         props (rt/props-for dev-id-kw)]
     (when id
       (let [definition-keys (ot/definition-keys-for-identity id)
+            not-serialisable-keys (ot/not-serialisable-keys-for-identity id)
+            ;; Filter to only include ontology-defined keys, then remove non-serialisable ones
             definition-values (when (seq definition-keys)
                              (reduce (fn [acc k]
-                                       (if (contains? props k)
+                                       ;; Only include if: (1) in props, (2) not in non-serialisable list
+                                       (if (and (contains? props k)
+                                               (not (contains? not-serialisable-keys k)))
                                          (assoc acc k (definition-value (get props k)))
                                          acc))
                                      (array-map)
@@ -507,12 +522,14 @@
   [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)]
     (let [{:keys [semantic-identity value]} (ot/inspect dev-id-kw)
-          namespaced-value (when value
-                             (cond-> value
-                               (:execution-function/deps value)
-                               (update :execution-function/deps sorted-vec)))]
+          ;; Filter non-serialisable keys before returning
+          filtered-value (when value
+                           (let [filtered (filter-non-serialisable semantic-identity value)]
+                             (cond-> filtered
+                               (:execution-function/deps filtered)
+                               (update :execution-function/deps sorted-vec))))]
       {:inspection/semantic-identity (sorted-vec semantic-identity)
-       :inspection/value namespaced-value})))
+       :inspection/value filtered-value})))
 
 (defn aspect-catalog
   "Show all aspects with usage stats."
@@ -746,64 +763,68 @@
      :business/experiences (sorted-vec (map :entity/dev-id (get grouped :user-experience)))}))
 
 (defn- extract-business-metadata
-  "Extract type-specific metadata from business entity properties."
-  [props biz-type]
-  (case biz-type
-    :business-pattern
-    {:principle (:semantic-namespace/principle props)
-     :justification (:semantic-namespace/justification props)
-     :user-experience (:atlas/experience-journey props)
-     :business-value (:semantic-namespace/business-value props)
-     :alternative-rejected (:semantic-namespace/alternative-rejected props)
-     :why-rejected (:semantic-namespace/why-rejected props)}
+  "Extract type-specific metadata from business entity properties.
+   Only extracts keys defined in the business entity ontology (serialisable keys only)."
+  [compound-id props biz-type]
+  ;; Extract metadata, then filter non-serialisable keys
+  (let [metadata (case biz-type
+                   :business-pattern
+                   {:principle (:semantic-namespace/principle props)
+                    :justification (:semantic-namespace/justification props)
+                    :user-experience (:atlas/experience-journey props)
+                    :business-value (:semantic-namespace/business-value props)
+                    :alternative-rejected (:semantic-namespace/alternative-rejected props)
+                    :why-rejected (:semantic-namespace/why-rejected props)}
 
-    :constraint
-    {:enforced-by (:semantic-namespace/enforced-by props)
-     :rationale (:semantic-namespace/rationale props)
-     :compliance-requirement (:semantic-namespace/compliance-requirement props)
-     :violation-response (:semantic-namespace/violation-response props)
-     :user-sees (:semantic-namespace/user-sees props)
-     :business-impact (:semantic-namespace/business-impact props)}
+                   :constraint
+                   {:enforced-by (:semantic-namespace/enforced-by props)
+                    :rationale (:semantic-namespace/rationale props)
+                    :compliance-requirement (:semantic-namespace/compliance-requirement props)
+                    :violation-response (:semantic-namespace/violation-response props)
+                    :user-sees (:semantic-namespace/user-sees props)
+                    :business-impact (:semantic-namespace/business-impact props)}
 
-    :failure-mode
-    {:triggered-by (:semantic-namespace/triggered-by props)
-     :detection (:semantic-namespace/detection props)
-     :user-experiences (:semantic-namespace/user-experiences props)
-     :recovery-path (:semantic-namespace/recovery-path props)
-     :recovery-steps (:semantic-namespace/recovery-steps props)
-     :data-loss (:semantic-namespace/data-loss props)
-     :business-impact (:semantic-namespace/business-impact props)
-     :frequency (:semantic-namespace/frequency props)
-     :preventable (:semantic-namespace/preventable props)}
+                   :failure-mode
+                   {:triggered-by (:semantic-namespace/triggered-by props)
+                    :detection (:semantic-namespace/detection props)
+                    :user-experiences (:semantic-namespace/user-experiences props)
+                    :recovery-path (:semantic-namespace/recovery-path props)
+                    :recovery-steps (:semantic-namespace/recovery-steps props)
+                    :data-loss (:semantic-namespace/data-loss props)
+                    :business-impact (:semantic-namespace/business-impact props)
+                    :frequency (:semantic-namespace/frequency props)
+                    :preventable (:semantic-namespace/preventable props)}
 
-    :value-proposition
-    {:business-problem (:semantic-namespace/business-problem props)
-     :before-state (:semantic-namespace/before-state props)
-     :after-state (:semantic-namespace/after-state props)
-     :solution (:semantic-namespace/solution props)
-     :user-segment (:semantic-namespace/user-segment props)
-     :business-value (:semantic-namespace/business-value props)
-     :competitive-advantage (:semantic-namespace/competitive-advantage props)}
+                   :value-proposition
+                   {:business-problem (:semantic-namespace/business-problem props)
+                    :before-state (:semantic-namespace/before-state props)
+                    :after-state (:semantic-namespace/after-state props)
+                    :solution (:semantic-namespace/solution props)
+                    :user-segment (:semantic-namespace/user-segment props)
+                    :business-value (:semantic-namespace/business-value props)
+                    :competitive-advantage (:semantic-namespace/competitive-advantage props)}
 
-    :user-role
-    {:description (:semantic-namespace/description props)
-     :cannot-access (:semantic-namespace/cannot-access props)
-     :responsibilities (:semantic-namespace/responsibilities props)
-     :expectations (:semantic-namespace/expectations props)
-     :data-access (:semantic-namespace/data-access props)
-     :granted-by (:semantic-namespace/granted-by props)
-     :security-requirement (:semantic-namespace/security-requirement props)}
+                   :user-role
+                   {:description (:semantic-namespace/description props)
+                    :cannot-access (:semantic-namespace/cannot-access props)
+                    :responsibilities (:semantic-namespace/responsibilities props)
+                    :expectations (:semantic-namespace/expectations props)
+                    :data-access (:semantic-namespace/data-access props)
+                    :granted-by (:semantic-namespace/granted-by props)
+                    :security-requirement (:semantic-namespace/security-requirement props)}
 
-    :user-experience
-    {:user-journey (:semantic-namespace/user-journey props)
-     :time-to-complete (:semantic-namespace/time-to-complete props)
-     :friction-points (:semantic-namespace/friction-points props)
-     :user-sentiment (:semantic-namespace/user-sentiment props)
-     :failure-mode (:atlas/risk-failure-mode props)
-     :why-designed-this-way (:semantic-namespace/why-designed-this-way props)
-     :delivers-value (:semantic-namespace/delivers-value props)}
+                   :user-experience
+                   {:user-journey (:semantic-namespace/user-journey props)
+                    :time-to-complete (:semantic-namespace/time-to-complete props)
+                    :friction-points (:semantic-namespace/friction-points props)
+                    :user-sentiment (:semantic-namespace/user-sentiment props)
+                    :failure-mode (:atlas/risk-failure-mode props)
+                    :why-designed-this-way (:semantic-namespace/why-designed-this-way props)
+                    :delivers-value (:semantic-namespace/delivers-value props)}
 
-    {}))
+                   {})]
+    ;; Filter out non-serialisable keys from metadata
+    (filter-non-serialisable compound-id metadata)))
 
 (defn business-entity-info
   "Get detailed information about a business entity including metadata and implementations."
@@ -815,7 +836,7 @@
         (cond-> {:entity/dev-id dev-id-kw
                  :entity/type biz-type
                  :entity/identity (vec (sort id))}
-          biz-type (assoc :business/metadata (extract-business-metadata props biz-type))
+          biz-type (assoc :business/metadata (extract-business-metadata id props biz-type))
           biz-type (assoc :business/implements-in
                          (sorted-vec (entities-with-aspect dev-id-kw))))))))
 

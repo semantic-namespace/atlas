@@ -28,6 +28,29 @@
   [entity-type]
   (:ontology/keys (ontology-for entity-type)))
 
+(defn not-serialisable-keys-for
+  "Return the not-serialisable keys for a given entity type from the registry.
+
+   These keys should be filtered out before sending data to external systems
+   (like Emacs) that cannot handle function values or other non-serialisable data.
+
+   Note: :ontology/not-serialisable-keys must always be a subset of :ontology/keys.
+   This allows you to define a key in the ontology (making it valid) while marking
+   it as not-serialisable for IDE/external consumption."
+  [entity-type]
+  (:ontology/not-serialisable-keys (ontology-for entity-type)))
+
+(defn not-serialisable-keys-for-identity
+  "Return all not-serialisable keys for a compound identity.
+
+   Combines not-serialisable keys from all entity types in the identity.
+   These keys will be filtered out when serializing entity data to external
+   systems (e.g., Emacs via atlas.ide)."
+  [identity]
+  (let [entity-types (filter #(= "atlas" (namespace %)) identity)
+        ontologies (keep ontology-for entity-types)]
+    (set (mapcat :ontology/not-serialisable-keys ontologies))))
+
 ;; =============================================================================
 ;; DEFINITION HELPERS - For backward compatibility
 ;; =============================================================================
@@ -432,15 +455,37 @@
 ;; Type Registration
 ;; =============================================================================
 
+(defn- validate-ontology
+  "Validate ontology definition invariants.
+
+   Ensures:
+   - :ontology/not-serialisable-keys is a subset of :ontology/keys"
+  [ontology]
+  (let [ont-keys (set (:ontology/keys ontology))
+        not-serialisable (set (:ontology/not-serialisable-keys ontology))
+        invalid-keys (set/difference not-serialisable ont-keys)]
+    (when (seq invalid-keys)
+      (throw (ex-info
+              (str "Invalid ontology: :ontology/not-serialisable-keys must be a subset of :ontology/keys. "
+                   "Found keys in not-serialisable that are not in ontology/keys: " invalid-keys)
+              {:ontology/for (:ontology/for ontology)
+               :invalid-keys invalid-keys
+               :ontology/keys ont-keys
+               :ontology/not-serialisable-keys not-serialisable})))))
+
 (defn register-entity-types!
   "Register all entity types in the registry with :atlas/type.
 
   This makes entity types discoverable and enables runtime type validation.
-  Call this once during initialization, after register-ontologies!."
+  Call this once during initialization, after register-ontologies!.
+
+  Validates that :ontology/not-serialisable-keys is a subset of :ontology/keys."
   []
   (let [ontologies (all-ontologies)]
     (doseq [[_ ont] ontologies
             :let [entity-type (:ontology/for ont)]]
+      ;; Validate ontology before registering type
+      (validate-ontology ont)
       (registry/register!
        entity-type
        :atlas/type
@@ -465,14 +510,16 @@
    :atlas/ontology
    #{:atlas/datalog-extractor}
    {:ontology/for :atlas/datalog-extractor
-    :ontology/keys [:datalog-extractor/fn :datalog-extractor/schema]})
+    :ontology/keys [:datalog-extractor/fn :datalog-extractor/schema]
+    :ontology/not-serialisable-keys [:datalog-extractor/fn]})
 
 (registry/register!
    :ontology/invariant
    :atlas/ontology
    #{:atlas/invariant}
    {:ontology/for :atlas/invariant
-    :ontology/keys [:invariant/fn]})
+    :ontology/keys [:invariant/fn]
+    :ontology/not-serialisable-keys [:invariant/fn]})
 
 ;; =============================================================================
 ;; ONTOLOGY MODULES

@@ -16,9 +16,9 @@
 (require 'atlas-core)
 
 ;; Forward declarations for functions defined in other modules
-(declare-function atlas-entity-info "atlas-browse")
-(declare-function atlas-find-by-aspect "atlas-browse")
-(declare-function atlas-producers "atlas-browse")
+(declare-function atlas-browse-entity-info "atlas-browse")
+(declare-function atlas-browse-find-by-aspect "atlas-browse")
+(declare-function atlas-browse-producers "atlas-browse")
 (declare-function atlas-business-info "atlas-business")
 
 ;;; Major Mode
@@ -32,8 +32,8 @@
     (define-key map (kbd "TAB") 'forward-button)
     (define-key map (kbd "<backtab>") 'backward-button)
     (define-key map (kbd "d") 'atlas-jump-to-definition-at-point)
-    (define-key map (kbd "i") 'atlas-entity-info)
-    (define-key map (kbd "a") 'atlas-find-by-aspect)
+    (define-key map (kbd "i") 'atlas-browse-entity-info)
+    (define-key map (kbd "a") 'atlas-browse-find-by-aspect)
     map)
   "Keymap for `atlas-mode'.")
 
@@ -125,7 +125,7 @@
                         'face 'atlas-entity-face
                         'entity entity-str
                         'action (let ((e entity-str))
-                                  (lambda (_) (atlas-entity-info e)))
+                                  (lambda (_) (atlas-browse-entity-info e)))
                         'follow-link t
                         'help-echo "Click: show info, d: jump to definition")))
 
@@ -154,7 +154,7 @@ Handles edn-set objects by unwrapping and displaying as a set."
       (insert-text-button aspect-str
                           'face 'atlas-aspect-face
                           'action (let ((a aspect-str))
-                                    (lambda (_) (atlas-find-by-aspect a)))
+                                    (lambda (_) (atlas-browse-find-by-aspect a)))
                           'follow-link t
                           'help-echo "Click to find entities with this aspect")))))
 
@@ -164,7 +164,7 @@ Handles edn-set objects by unwrapping and displaying as a set."
     (insert-text-button key-str
                         'face 'font-lock-variable-name-face
                         'action (let ((k key-str))
-                                  (lambda (_) (atlas-producers k)))
+                                  (lambda (_) (atlas-browse-producers k)))
                         'follow-link t
                         'help-echo "Click to find producers")))
 
