@@ -90,13 +90,15 @@
   "Components should be :tier/foundation."
   []
   (let [components (entity/all-with-aspect :atlas/structure-component)
-        violations (remove #(entity/has-aspect? % :tier/foundation) components)]
+
+        violations (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                (entity/has-aspect? % :tier/foundation)) components)]
     (when (seq violations)
       {:invariant :components-are-foundation
        :violation :wrong-tier
        :components violations
        :severity :error
-       :message (str "Components should be :tier/foundation: " violations)})))
+       :message (str "Components should be :tier/foundation: " (pr-str violations))})))
 
 (defn invariant-protocol-exists
   "Components that declare protocol aspects must have those protocols registered."

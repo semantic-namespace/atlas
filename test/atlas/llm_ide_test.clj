@@ -93,7 +93,6 @@
       (is (= "Unknown tool" (get-in result [:error :message]))))))
 
 (deftest test-available-tools
-  (llm-ide/register-tools!)
   (testing "Lists all available tools from registry"
     (let [tools (llm-ide/available-tools)]
       (is (vector? tools))
@@ -325,7 +324,6 @@
 
 (deftest test-llm-context
   (setup-test-registry!)
-  (llm-ide/register-tools!)
   (testing "Exports full LLM context"
     (let [ctx (llm-ide/llm-context)]
       (is (map? (:atlas/ontology ctx)))
@@ -335,7 +333,6 @@
 
 (deftest test-llm-context-compact
   (setup-test-registry!)
-  (llm-ide/register-tools!)
   (testing "Exports compact LLM context"
     (let [ctx (llm-ide/llm-context-compact)]
       (is (vector? (:atlas/tools ctx)))

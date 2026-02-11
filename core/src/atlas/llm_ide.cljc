@@ -198,16 +198,6 @@
    :atlas/aspect-namespaces (ide/list-aspect-namespaces)
    :atlas/entity-count (count @registry/registry)})
 
-;; =============================================================================
-;; TOOL SELF-REGISTRATION (explicit registry/register! calls)
-;; =============================================================================
-
-(defn register-tools!
-  "Register all LLM-IDE tools as :atlas/execution-function entities.
-   Each tool includes :atlas/impl with its handler function inlined.
-   Safe to call multiple times."
-[])
-
 ;; Intent: trace
 (registry/register!
  :atlas.llm-ide/trace-causes
@@ -532,12 +522,3 @@
   :atlas/impl (fn [{:keys [:entity/dev-id]}]
                 {:flow (ide/data-flow dev-id)})})
 
-:registered
-
-(defn unregister-tools!
-  "Unregister tools (for testing)."
-  []
-  (doseq [dev-id (ide/entities-with-aspect :domain/llm-ide)]
-    (when-let [id (lookup/identity-for dev-id)]
-      (registry/remove id)))
-  :unregistered)

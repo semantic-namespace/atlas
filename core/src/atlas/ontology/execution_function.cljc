@@ -142,7 +142,8 @@
   []
   (let [;; All execution-functions that are NOT endpoints
         internal-fn-ids (->> (entity/all-with-aspect :atlas/execution-function)
-                             (remove #(entity/has-aspect? % :atlas/interface-endpoint)))
+                             (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                          (entity/has-aspect? % :atlas/interface-endpoint))))
         ;; Collect all response keys from internal functions
         produced (->> internal-fn-ids
                       (mapcat ontology/response-for)
