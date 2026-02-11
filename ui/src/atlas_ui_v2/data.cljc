@@ -357,7 +357,8 @@
                   (if (seq query-aspects)
                     ;; Sort by distance, but prioritize entities with additional aspects (distance > 0)
                     ;; Distance 0 (perfect matches) appear last
-                    (let [_ #?(:cljs (js/console.log "DISTANCE-ASC sorting with query:" (clj->js query-aspects)))
+                    (let [_ #?(:clj nil
+                               :cljs (js/console.log "DISTANCE-ASC sorting with query:" (clj->js query-aspects)))
                           entries (vec dev-id-map)
                           ;; Separate perfect matches (distance 0) from others
                           {perfect-matches true others false}
@@ -365,7 +366,8 @@
                                       (= 0 (calculate-entity-distance identity query-aspects)))
                                     entries)
                           ;; Sort others by distance then name
-                          _ #?(:cljs (when (seq others)
+                          _ #?(:clj nil
+                               :cljs (when (seq others)
                                        (js/console.log "  BEFORE SORT:"
                                                       (->> (take 5 others)
                                                            (map (fn [[dev-id identity]]
@@ -379,7 +381,8 @@
                                                     (compare (str dev-id-1) (str dev-id-2))
                                                     (compare dist1 dist2))))
                                               (or others []))
-                          _ #?(:cljs (when (seq sorted-others)
+                          _ #?(:clj nil
+                               :cljs (when (seq sorted-others)
                                        (js/console.log "  AFTER SORT:"
                                                       (->> (take 5 sorted-others)
                                                            (map (fn [[dev-id identity]]
