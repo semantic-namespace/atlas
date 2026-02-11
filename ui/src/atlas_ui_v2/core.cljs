@@ -30,6 +30,8 @@
            :selected-types #{}        ; Set of selected entity types
            :selected-entities #{}     ; Set of selected dev-ids (positive selection)
            :selected-entities-not #{} ; Set of excluded dev-ids (negative selection)
+           ;; Expand/collapse state
+           :expanded-types #{}        ; Set of expanded entity types (starts empty = all collapsed)
            ;; Filter mode
            :filter-mode :hide         ; :highlight or :hide
            ;; Sort options
@@ -131,6 +133,15 @@
              (disj selected entity-type)
              (conj selected entity-type)))))
 
+(defn toggle-expand-type!
+  "Toggle expand/collapse state of an entity type"
+  [entity-type]
+  (swap! app-state update :expanded-types
+         (fn [expanded]
+           (if (contains? expanded entity-type)
+             (disj expanded entity-type)
+             (conj expanded entity-type)))))
+
 (defn toggle-entity!
   "Cycle entity through: not selected → selected (blue) → NOT (red) → not selected"
   [dev-id]
@@ -154,7 +165,7 @@
                (update state :selected-entities-not disj dev-id))))))
 
 (defn clear-selection!
-  "Clear all selections"
+  "Clear all selections and collapse all groups"
   []
   (swap! app-state assoc
          :aspects-and #{}
@@ -163,6 +174,7 @@
          :selected-types #{}
          :selected-entities #{}
          :selected-entities-not #{}
+         :expanded-types #{}
          :sort-entities-items :alpha-asc))
 
 (defn toggle-filter-mode!
@@ -419,8 +431,8 @@
        #(set-sort! :sort-entities-items %)]]]))
 
 (defn main-view []
-  (let [{:keys [registry aspect-stats aspects-and aspects-or aspects-not selected-types selected-entities selected-entities-not filter-mode
-                sort-aspects-ns sort-aspects-items sort-entities-type sort-entities-items]} @app-state
+  (let [{:keys [registry aspect-stats aspects-and aspects-or aspects-not selected-types selected-entities selected-entities-not
+                expanded-types filter-mode sort-aspects-ns sort-aspects-items sort-entities-type sort-entities-items]} @app-state
         ;; Combine all query aspects for filtering display
         query-aspects (vec (set/union aspects-and aspects-or aspects-not))
         aspects-data (aspects-map-data registry aspect-stats sort-aspects-ns sort-aspects-items aspects-and aspects-or aspects-not)
@@ -468,6 +480,7 @@
         {:selected-types selected-types
          :selected-entities selected-entities
          :selected-entities-not selected-entities-not
+         :expanded-types expanded-types
          :highlight-entities highlight-entities
          :filter-mode filter-mode
          :query-aspects query-aspects
@@ -475,6 +488,7 @@
          :aspects-or aspects-or
          :aspects-not aspects-not
          :on-type-click toggle-type!
+         :on-expand-type-click toggle-expand-type!
          :on-entity-click toggle-entity!
          :on-aspect-click cycle-aspect!
          :sort-type sort-entities-type

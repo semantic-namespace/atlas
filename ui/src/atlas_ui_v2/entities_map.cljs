@@ -142,8 +142,9 @@
 (defn type-section
   "Render an entity type with its entities"
   [entity-type dev-id-map sort-items query-aspects opts]
-  (let [{:keys [selected-types highlight-entities filter-mode on-type-click]} opts
+  (let [{:keys [selected-types expanded-types highlight-entities filter-mode on-type-click on-expand-type-click]} opts
         selected? (contains? selected-types entity-type)
+        expanded? (contains? expanded-types entity-type)
         ;; Check if any entity in this type is highlighted
         type-has-highlight? (and highlight-entities
                                  (some (fn [[dev-id _]]
@@ -163,32 +164,48 @@
                      :opacity (if dimmed-type? 0.4 1)
                      :transition "opacity 0.2s ease"}}
        ;; Type header (clickable)
-       [:div {:on-click #(on-type-click entity-type)
-              :style {:font-weight "bold"
+       [:div {:style {:font-weight "bold"
                       :color (if selected? "#4a9eff" "#9a9aba")
                       :font-size "0.95rem"
                       :margin-bottom "0.5rem"
                       :padding "0.3rem 0.5rem"
                       :background (if selected? "#2a3a5a" "#1a1a2e")
                       :border-radius "4px"
-                      :cursor "pointer"
                       :display "flex"
                       :justify-content "space-between"
                       :align-items "center"
                       :border-left (if selected?
                                      "4px solid #4a9eff"
                                      "4px solid #4a4a6a")}}
-        [:span (name entity-type)]
+        ;; Expand/collapse chevron (left side)
+        [:div {:on-click (fn [e]
+                           (.stopPropagation e)
+                           (on-expand-type-click entity-type))
+               :style {:cursor "pointer"
+                       :padding "0.2rem 0.5rem"
+                       :margin-right "0.5rem"
+                       :user-select "none"
+                       :font-size "1rem"
+                       :color "#7a7a9a"
+                       :transition "transform 0.2s ease"
+                       :transform (if expanded? "rotate(90deg)" "rotate(0deg)")}}
+         "▶"]
+        ;; Type name (clickable for selection)
+        [:span {:on-click #(on-type-click entity-type)
+                :style {:flex 1
+                        :cursor "pointer"}}
+         (name entity-type)]
+        ;; Entity count
         [:span {:style {:color "#5a5a7a"
                         :font-weight "normal"
                         :font-size "0.85rem"}}
          (str "(" (count dev-id-map) ")")]]
-       ;; Entities list
-       [:div {:style {:padding-left "0.5rem"}}
-        (for [[dev-id identity] sorted-entities]
-          ^{:key dev-id}
-          [entity-row dev-id identity opts])]])))
-
+       ;; Entities list (only shown when expanded)
+       (when expanded?
+         [:div {:style {:padding-left "0.5rem"}}
+          (for [[dev-id identity] sorted-entities]
+            ^{:key dev-id}
+            [entity-row dev-id identity opts])])])))
 (defn entities-map-view
   "Main entities map component"
   [entities-data opts]
