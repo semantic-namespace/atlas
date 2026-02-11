@@ -19,163 +19,22 @@
             [atlas.query :as query]
             [clojure.spec.alpha :as s]))
 
-;; =============================================================================
-;; ONTOLOGY DEFINITION
-;; =============================================================================
-
-(def ontology-definition
-  "The ontology definition for :atlas/execution-function"
-  {:ontology/for :atlas/execution-function
-   :ontology/keys [:execution-function/context
-                   :execution-function/response
-                   :execution-function/deps]
-   :dataflow/context-key :execution-function/context
-   :dataflow/response-key :execution-function/response
-   :dataflow/deps-key :execution-function/deps})
-
-;; =============================================================================
-;; SPECS
-;; =============================================================================
-
 (s/def :execution-function/context (s/coll-of qualified-keyword?))
 (s/def :execution-function/response (s/coll-of qualified-keyword?))
 (s/def :execution-function/deps (s/coll-of :atlas/dev-id))
-
-;; =============================================================================
-;; TEMPLATES - Reducing boilerplate
-;; =============================================================================
-
-(defn template:service-function
-  "Template for service-tier business logic functions.
-
-   Usage:
-     (template:service-function :domain/users :operation/fetch
-       :external? false :pure? true :pii? false)"
-  [domain operation & {:keys [external? pure? pii?]
-                       :or {external? false pure? false pii? false}}]
-  (cond-> #{:atlas/execution-function
-            :semantic/docs
-            :tier/service
-            :effect/read}
-    domain (conj domain)
-    operation (conj operation)
-    external? (conj :integration/external :temporal/async :temporal/timeout-configured :observability/traced)
-    (not external?) (conj :observability/metered)
-    pure? (conj :effect/pure)
-    pii? (conj :compliance/pii :compliance/audited)))
-
-(defn template:api-endpoint
-  "Template for API endpoints that also act as execution functions.
-
-   Usage:
-     (template:api-endpoint :domain/users :operation/list
-       :auth-required? true :rate-limited? false :pii? false)"
-  [domain operation & {:keys [auth-required? rate-limited? pii?]
-                       :or {auth-required? true rate-limited? false pii? false}}]
-  (cond-> #{:atlas/interface-endpoint
-            :atlas/execution-function
-            :semantic/docs
-            :tier/api
-            :effect/read
-            :protocol/http
-            :observability/logged
-            :observability/metered}
-    domain (conj domain)
-    operation (conj operation)
-    auth-required? (conj :authorization/required)
-    rate-limited? (conj :capacity/rate-limited)
-    pii? (conj :compliance/pii :compliance/audited)))
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for execution-function properties."
-  {:entity/depends {:db/cardinality :db.cardinality/many}
-   :entity/consumes {:db/cardinality :db.cardinality/many}
-   :entity/produces {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; INVARIANTS - Execution-function specific rules
-;; =============================================================================
-
-(defn invariant-pure-has-no-deps
-  "Functions marked :effect/pure should have no component dependencies.
-
-   A pure function computes output solely from its inputs, so it should not
-   depend on infrastructure components that have side effects."
-  []
-  (let [pure-fns (filter #(entity/has-aspect? % :effect/pure)
-                          (entity/all-with-aspect :atlas/execution-function))
-        violations (for [fn-id pure-fns
-                          :let [deps (ontology/deps-for fn-id)
-                                component-deps (filter #(entity/has-aspect? % :atlas/structure-component) deps)]
-                          :when (seq component-deps)]
-                      {:fn fn-id :component-deps (vec component-deps)})]
-    (when (seq violations)
-      {:invariant :pure-has-no-deps
-       :violation :pure-fn-with-deps
-       :details violations
-       :severity :error
-       :message "Pure functions should not depend on components"})))
-
-(defn invariant-external-is-async
-  "Functions marked :integration/external should also be :temporal/async."
-  []
-  (let [external-fns (filter #(entity/has-aspect? % :atlas/execution-function)
-                             (entity/all-with-aspect :integration/external))
-        violations (remove #(entity/has-aspect? % :temporal/async) external-fns)]
-    (when (seq violations)
-      {:invariant :external-is-async
-       :violation :external-not-async
-       :functions violations
-       :severity :warning
-       :message (str "External integrations should be async: " violations)})))
-
-(defn invariant-internal-fn-outputs-consumed
-  "Internal function outputs (non-endpoint) should be consumed by other functions.
-
-   This checks that execution-functions that are NOT endpoints have their
-   response keys consumed by some other function's context. Catches dead code
-   in service layers where everything should chain."
-  []
-  (let [;; All execution-functions that are NOT endpoints
-        internal-fn-ids (->> (entity/all-with-aspect :atlas/execution-function)
-                             (remove #(or (entity/has-aspect? % :atlas/ontology)
-                                          (entity/has-aspect? % :atlas/interface-endpoint))))
-        ;; Collect all response keys from internal functions
-        produced (->> internal-fn-ids
-                      (mapcat ontology/response-for)
-                      set)
-        ;; Collect all context keys from all functions
-        consumed (->> (entity/all-with-aspect :atlas/execution-function)
-                      (mapcat ontology/context-for)
-                      set)
-        orphans (clojure.set/difference produced consumed)]
-    (when (seq orphans)
-      {:invariant :internal-fn-outputs-consumed
-       :violation :orphan-internal-outputs
-       :orphans orphans
-       :severity :warning
-       :message (str "Internal function outputs not consumed: " orphans)})))
-
-(def invariants
-  "All invariants specific to execution-function ontology"
-  [invariant-pure-has-no-deps
-   invariant-external-is-async
-   invariant-internal-fn-outputs-consumed])
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
 
 ;; Ontology
 (registry/register!
  :atlas/execution-function
  :atlas/ontology
  #{:atlas/execution-function}
- ontology-definition)
+ {:ontology/for :atlas/execution-function
+   :ontology/keys [:execution-function/context
+                   :execution-function/response
+                   :execution-function/deps]
+   :dataflow/context-key :execution-function/context
+   :dataflow/response-key :execution-function/response
+   :dataflow/deps-key :execution-function/deps})
 
 ;; Type-ref: execution-function → structure-component (deps)
 (registry/register!
@@ -222,23 +81,78 @@
                                   (concat (map (fn [resp]
                                                  [:db/add dev-id :entity/produces resp])
                                                response-keys))))))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:entity/depends {:db/cardinality :db.cardinality/many}
+                             :entity/consumes {:db/cardinality :db.cardinality/many}
+                             :entity/produces {:db/cardinality :db.cardinality/many}}})
 
 ;; Invariants
 (registry/register!
  :invariant/pure-has-no-deps
  :atlas/invariant
  #{:meta/pure-function-check}
- {:invariant/fn invariant-pure-has-no-deps})
+ {:invariant/fn (fn []
+                  "Functions marked :effect/pure should have no component dependencies.
+
+   A pure function computes output solely from its inputs, so it should not
+   depend on infrastructure components that have side effects."
+
+                  (let [pure-fns (filter #(entity/has-aspect? % :effect/pure)
+                                         (entity/all-with-aspect :atlas/execution-function))
+                        violations (for [fn-id pure-fns
+                                         :let [deps (ontology/deps-for fn-id)
+                                               component-deps (filter #(entity/has-aspect? % :atlas/structure-component) deps)]
+                                         :when (seq component-deps)]
+                                     {:fn fn-id :component-deps (vec component-deps)})]
+                    (when (seq violations)
+                      {:invariant :pure-has-no-deps
+                       :violation :pure-fn-with-deps
+                       :details violations
+                       :severity :error
+                       :message "Pure functions should not depend on components"})))})
 
 (registry/register!
  :invariant/external-is-async
  :atlas/invariant
  #{:meta/external-async-check}
- {:invariant/fn invariant-external-is-async})
+ {:invariant/fn (fn []
+                  ;; "Functions marked :integration/external should also be :temporal/async."
+                  (let [external-fns (filter #(entity/has-aspect? % :atlas/execution-function)
+                                             (entity/all-with-aspect :integration/external))
+                        violations (remove #(entity/has-aspect? % :temporal/async) external-fns)]
+                    (when (seq violations)
+                      {:invariant :external-is-async
+                       :violation :external-not-async
+                       :functions violations
+                       :severity :warning
+                       :message (str "External integrations should be async: " violations)})))})
 
 (registry/register!
  :invariant/internal-fn-outputs-consumed
  :atlas/invariant
  #{:meta/output-consumption-check}
- {:invariant/fn invariant-internal-fn-outputs-consumed})
+ {:invariant/fn (fn []
+                  "Internal function outputs (non-endpoint) should be consumed by other functions.
+
+   This checks that execution-functions that are NOT endpoints have their
+   response keys consumed by some other function's context. Catches dead code
+   in service layers where everything should chain."
+                  
+                  (let [;; All execution-functions that are NOT endpoints
+                        internal-fn-ids (->> (entity/all-with-aspect :atlas/execution-function)
+                                             (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                                          (entity/has-aspect? % :atlas/interface-endpoint))))
+        ;; Collect all response keys from internal functions
+                        produced (->> internal-fn-ids
+                                      (mapcat ontology/response-for)
+                                      set)
+        ;; Collect all context keys from all functions
+                        consumed (->> (entity/all-with-aspect :atlas/execution-function)
+                                      (mapcat ontology/context-for)
+                                      set)
+                        orphans (clojure.set/difference produced consumed)]
+                    (when (seq orphans)
+                      {:invariant :internal-fn-outputs-consumed
+                       :violation :orphan-internal-outputs
+                       :orphans orphans
+                       :severity :warning
+                       :message (str "Internal function outputs not consumed: " orphans)})))})

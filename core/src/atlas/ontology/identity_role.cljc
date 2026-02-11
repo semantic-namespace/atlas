@@ -2,38 +2,21 @@
   "Identity-role ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/identity-role
-   :ontology/keys [:identity-role/description
-                   :identity-role/cannot-access
-                   :identity-role/responsibilities
-                   :identity-role/expectations
-                   :identity-role/data-access
-                   :identity-role/granted-by
-                   :identity-role/security-requirement
-                   :identity-role/audit-logged
-                   :identity-role/typical-users
-                   :identity-role/privacy-constraint]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for identity-role properties."
-  {:role/data-access {:db/cardinality :db.cardinality/many}
-   :role/granted-by {:db/cardinality :db.cardinality/one}
-   :role/audit-logged {:db/cardinality :db.cardinality/one}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
 (registry/register!
  :atlas/identity-role
  :atlas/ontology
  #{:atlas/identity-role}
- ontology-definition)
+ {:ontology/for :atlas/identity-role
+  :ontology/keys [:identity-role/description
+                  :identity-role/cannot-access
+                  :identity-role/responsibilities
+                  :identity-role/expectations
+                  :identity-role/data-access
+                  :identity-role/granted-by
+                  :identity-role/security-requirement
+                  :identity-role/audit-logged
+                  :identity-role/typical-users
+                  :identity-role/privacy-constraint]})
 
 ;; Datalog extractor
 (registry/register!
@@ -60,4 +43,6 @@
                                 ;; Audit logged (boolean)
                                 audit-logged
                                 (conj [:db/add dev-id :role/audit-logged audit-logged])))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:role/data-access {:db/cardinality :db.cardinality/many}
+                             :role/granted-by {:db/cardinality :db.cardinality/one}
+                             :role/audit-logged {:db/cardinality :db.cardinality/one}}})

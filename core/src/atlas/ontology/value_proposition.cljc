@@ -2,8 +2,11 @@
   "Value-proposition ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/value-proposition
+(registry/register!
+ :atlas/value-proposition
+ :atlas/ontology
+ #{:atlas/value-proposition}
+ {:ontology/for :atlas/value-proposition
    :ontology/keys [:value-proposition/business-problem
                    :value-proposition/before-state
                    :value-proposition/after-state
@@ -18,27 +21,6 @@
                    :value-proposition/trust-factors
                    :value-proposition/risk-mitigation
                    :value-proposition/compliance-benefit]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for value-proposition properties."
-  {:value-proposition/implements-pattern {:db/cardinality :db.cardinality/one}
-   :value-proposition/metrics-improved {:db/cardinality :db.cardinality/many}
-   :value-proposition/user-segment {:db/cardinality :db.cardinality/many}
-   :value-proposition/trust-factors {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
-(registry/register!
- :atlas/value-proposition
- :atlas/ontology
- #{:atlas/value-proposition}
- ontology-definition)
 
 ;; Datalog extractor
 (registry/register!
@@ -74,4 +56,7 @@
                                 (concat (map (fn [factor]
                                                [:db/add dev-id :value-proposition/trust-factors factor])
                                              (if (coll? trust) trust [trust])))))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:value-proposition/implements-pattern {:db/cardinality :db.cardinality/one}
+   :value-proposition/metrics-improved {:db/cardinality :db.cardinality/many}
+   :value-proposition/user-segment {:db/cardinality :db.cardinality/many}
+   :value-proposition/trust-factors {:db/cardinality :db.cardinality/many}}})

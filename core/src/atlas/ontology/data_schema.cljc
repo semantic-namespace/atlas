@@ -2,27 +2,12 @@
   "Data-schema ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/data-schema
-   :ontology/keys [:data-schema/fields]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for data-schema properties."
-  {:schema/field {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
 (registry/register!
  :atlas/data-schema
  :atlas/ontology
  #{:atlas/data-schema}
- ontology-definition)
+ {:ontology/for :atlas/data-schema
+   :ontology/keys [:data-schema/fields]})
 
 ;; Datalog extractor
 (registry/register!
@@ -37,4 +22,4 @@
                                 (map (fn [field]
                                        [:db/add dev-id :schema/field field])
                                      fields)))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:schema/field {:db/cardinality :db.cardinality/many}}})

@@ -12,51 +12,7 @@
             [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
-
-
-;; =============================================================================
-;; SPECS
-;; =============================================================================
-
 (s/def :structure-component/deps (s/coll-of :atlas/dev-id))
-
-;; =============================================================================
-;; TEMPLATES - Reducing boilerplate
-;; =============================================================================
-
-(defn template:foundation-component
-  "Template for foundation-tier components.
-
-   Usage:
-     (template:foundation-component :domain/db
-       :external? true :async? true :traced? true)"
-  [domain & {:keys [external? async? traced?]
-             :or {external? false async? false traced? false}}]
-  (cond-> #{:atlas/structure-component
-            :semantic/docs
-            :tier/foundation
-            :effect/read}
-    domain (conj domain)
-    external? (conj :integration/external)
-    (not external?) (conj :integration/internal)
-    async? (conj :temporal/async :temporal/timeout-configured)
-    traced? (conj :observability/traced)
-    (not traced?) (conj :observability/metered)))
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for structure-component properties."
-  {:entity/depends {:db/cardinality :db.cardinality/many}
-   :component/consumes {:db/cardinality :db.cardinality/many}
-   :component/emits {:db/cardinality :db.cardinality/many}
-   :component/provides {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; PROTOCOL HELPERS
-;; =============================================================================
 
 (defn- registered-protocol-ids
   "Return protocol dev-ids registered as :atlas/interface-protocol."
@@ -81,93 +37,6 @@
      {:declared declared
       :known known
       :unknown unknown})))
-
-;; =============================================================================
-;; INVARIANTS - Structure-component specific rules
-;; =============================================================================
-
-(defn invariant-components-are-foundation
-  "Components should be :tier/foundation."
-  []
-  (let [components (entity/all-with-aspect :atlas/structure-component)
-
-        violations (remove #(or (entity/has-aspect? % :atlas/ontology)
-                                (entity/has-aspect? % :tier/foundation)) components)]
-    (when (seq violations)
-      {:invariant :components-are-foundation
-       :violation :wrong-tier
-       :components violations
-       :severity :error
-       :message (str "Components should be :tier/foundation: " (pr-str violations))})))
-
-(defn invariant-protocol-exists
-  "Components that declare protocol aspects must have those protocols registered."
-  []
-  (let [known-protocols (registered-protocol-ids)
-        components-with-protocols (->> @registry/registry
-                                       (filter (fn [[id _]]
-                                                 (and (contains? id :atlas/structure-component)
-                                                      (seq (:declared (get-protocol-aspects id known-protocols))))))
-                                       (map (fn [[id v]]
-                                              (let [{:keys [declared unknown]} (get-protocol-aspects id known-protocols)]
-                                                {:dev-id (:atlas/dev-id v)
-                                                 :protocols declared
-                                                 :missing unknown}))))
-        violations (for [{:keys [dev-id missing]} components-with-protocols
-                         protocol missing]
-                     {:component dev-id :missing-protocol protocol})]
-    (when (seq violations)
-      {:invariant :protocol-exists
-       :violation :missing-protocol-definition
-       :details violations
-       :severity :error
-       :message (str "Components reference undefined protocols: "
-                     (set (map :missing-protocol violations)))})))
-
-(defn invariant-protocol-conformance
-  "Components implementing a protocol must provide all required protocol functions.
-
-   Checks that component's implementation map contains all methods declared
-   in the protocol's :protocol/functions."
-  []
-  (let [protocols (->> @registry/registry
-                       (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
-                       (map (fn [[_ v]]
-                              {:protocol-id (:atlas/dev-id v)
-                               :required-fns (set (:interface-protocol/functions v))}))
-                       (remove #(empty? (:required-fns %))))
-
-        violations (for [{:keys [protocol-id required-fns]} protocols
-                         :when required-fns
-                         [compound-id value] @registry/registry
-                         :when (and (contains? compound-id :atlas/structure-component)
-                                    (contains? compound-id protocol-id))
-                         :let [dev-id (:atlas/dev-id value)
-                               provided-methods (when (map? value)
-                                                  (set (filter #(namespace %) (keys value))))
-                               missing (when provided-methods
-                                         (set/difference required-fns provided-methods))]
-                         :when (and missing (seq missing))]
-                     {:component dev-id
-                      :protocol protocol-id
-                      :missing-methods (vec missing)})]
-    (when (seq violations)
-      {:invariant :protocol-conformance
-       :violation :incomplete-protocol-implementation
-       :details violations
-       :severity :warning
-       :message (str "Components don't implement all protocol methods. "
-                     "This is a warning because implementations may be provided at runtime.")})))
-
-(def invariants
-  "All invariants specific to structure-component ontology"
-  [invariant-components-are-foundation
-   invariant-protocol-exists
-   invariant-protocol-conformance])
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
 
 ;; Ontology
 (registry/register!
@@ -225,23 +94,92 @@
                                  (concat (map (fn [p]
                                                 [:db/add dev-id :component/provides p])
                                               provides)))))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:entity/depends {:db/cardinality :db.cardinality/many}
+   :component/consumes {:db/cardinality :db.cardinality/many}
+   :component/emits {:db/cardinality :db.cardinality/many}
+   :component/provides {:db/cardinality :db.cardinality/many}}})
 
 ;; Invariants
 (registry/register!
  :invariant/components-are-foundation
  :atlas/invariant
  #{:meta/foundation-tier-check}
- {:invariant/fn invariant-components-are-foundation})
+ {:invariant/fn (fn []
+                  ;; "Components should be :tier/foundation."
+                  (let [components (entity/all-with-aspect :atlas/structure-component)
+
+                        violations (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                                (entity/has-aspect? % :tier/foundation)) components)]
+                    (when (seq violations)
+                      {:invariant :components-are-foundation
+                       :violation :wrong-tier
+                       :components violations
+                       :severity :error
+                       :message (str "Components should be :tier/foundation: " (pr-str violations))})))})
 
 (registry/register!
  :invariant/protocol-exists
  :atlas/invariant
  #{:meta/protocol-existence-check}
- {:invariant/fn invariant-protocol-exists})
+ {:invariant/fn (fn 
+                  []
+                  ;; "Components that declare protocol aspects must have those protocols registered."
+                  (let [known-protocols (registered-protocol-ids)
+                        components-with-protocols (->> @registry/registry
+                                                       (filter (fn [[id _]]
+                                                                 (and (contains? id :atlas/structure-component)
+                                                                      (seq (:declared (get-protocol-aspects id known-protocols))))))
+                                                       (map (fn [[id v]]
+                                                              (let [{:keys [declared unknown]} (get-protocol-aspects id known-protocols)]
+                                                                {:dev-id (:atlas/dev-id v)
+                                                                 :protocols declared
+                                                                 :missing unknown}))))
+                        violations (for [{:keys [dev-id missing]} components-with-protocols
+                                         protocol missing]
+                                     {:component dev-id :missing-protocol protocol})]
+                    (when (seq violations)
+                      {:invariant :protocol-exists
+                       :violation :missing-protocol-definition
+                       :details violations
+                       :severity :error
+                       :message (str "Components reference undefined protocols: "
+                                     (set (map :missing-protocol violations)))})))})
 
 (registry/register!
  :invariant/protocol-conformance
  :atlas/invariant
  #{:meta/protocol-conformance-check}
- {:invariant/fn invariant-protocol-conformance})
+ {:invariant/fn (fn []
+                  "Components implementing a protocol must provide all required protocol functions.
+
+   Checks that component's implementation map contains all methods declared
+   in the protocol's :protocol/functions."
+
+                  (let [protocols (->> @registry/registry
+                                       (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
+                                       (map (fn [[_ v]]
+                                              {:protocol-id (:atlas/dev-id v)
+                                               :required-fns (set (:interface-protocol/functions v))}))
+                                       (remove #(empty? (:required-fns %))))
+
+                        violations (for [{:keys [protocol-id required-fns]} protocols
+                                         :when required-fns
+                                         [compound-id value] @registry/registry
+                                         :when (and (contains? compound-id :atlas/structure-component)
+                                                    (contains? compound-id protocol-id))
+                                         :let [dev-id (:atlas/dev-id value)
+                                               provided-methods (when (map? value)
+                                                                  (set (filter #(namespace %) (keys value))))
+                                               missing (when provided-methods
+                                                         (set/difference required-fns provided-methods))]
+                                         :when (and missing (seq missing))]
+                                     {:component dev-id
+                                      :protocol protocol-id
+                                      :missing-methods (vec missing)})]
+                    (when (seq violations)
+                      {:invariant :protocol-conformance
+                       :violation :incomplete-protocol-implementation
+                       :details violations
+                       :severity :warning
+                       :message (str "Components don't implement all protocol methods. "
+                                     "This is a warning because implementations may be provided at runtime.")})))})

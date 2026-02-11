@@ -2,43 +2,25 @@
   "Risk-failure-mode ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/risk-failure-mode
-   :ontology/keys [:risk-failure-mode/triggered-by
-                   :risk-failure-mode/detection
-                   :risk-failure-mode/user-experiences
-                   :risk-failure-mode/recovery-path
-                   :risk-failure-mode/recovery-steps
-                   :risk-failure-mode/data-loss
-                   :risk-failure-mode/business-impact
-                   :risk-failure-mode/frequency
-                   :risk-failure-mode/preventable
-                   :risk-failure-mode/why-not-preventable
-                   :risk-failure-mode/prevention-strategy
-                   :risk-failure-mode/security-event
-                   :risk-failure-mode/logged
-                   :risk-failure-mode/log-details]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for risk-failure-mode properties."
-  {:risk/triggered-by {:db/cardinality :db.cardinality/many}
-   :risk/preventable {:db/cardinality :db.cardinality/one}
-   :risk/security-event {:db/cardinality :db.cardinality/one}
-   :risk/logged {:db/cardinality :db.cardinality/one}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
 (registry/register!
  :atlas/risk-failure-mode
  :atlas/ontology
  #{:atlas/risk-failure-mode}
- ontology-definition)
+ {:ontology/for :atlas/risk-failure-mode
+  :ontology/keys [:risk-failure-mode/triggered-by
+                  :risk-failure-mode/detection
+                  :risk-failure-mode/user-experiences
+                  :risk-failure-mode/recovery-path
+                  :risk-failure-mode/recovery-steps
+                  :risk-failure-mode/data-loss
+                  :risk-failure-mode/business-impact
+                  :risk-failure-mode/frequency
+                  :risk-failure-mode/preventable
+                  :risk-failure-mode/why-not-preventable
+                  :risk-failure-mode/prevention-strategy
+                  :risk-failure-mode/security-event
+                  :risk-failure-mode/logged
+                  :risk-failure-mode/log-details]})
 
 ;; Datalog extractor
 (registry/register!
@@ -70,4 +52,7 @@
                                 ;; Logged (boolean)
                                 logged
                                 (conj [:db/add dev-id :risk/logged logged])))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:risk/triggered-by {:db/cardinality :db.cardinality/many}
+                             :risk/preventable {:db/cardinality :db.cardinality/one}
+                             :risk/security-event {:db/cardinality :db.cardinality/one}
+                             :risk/logged {:db/cardinality :db.cardinality/one}}})

@@ -2,8 +2,11 @@
   "Experience-journey ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/experience-journey
+(registry/register!
+ :atlas/experience-journey
+ :atlas/ontology
+ #{:atlas/experience-journey}
+ {:ontology/for :atlas/experience-journey
    :ontology/keys [:experience-journey/user-journey
                    :experience-journey/time-to-complete
                    :experience-journey/friction-points
@@ -13,27 +16,6 @@
                    :experience-journey/recovery-time
                    :experience-journey/delivers-value
                    :experience-journey/replaces]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for experience-journey properties."
-  {:journey/risk-failure-mode {:db/cardinality :db.cardinality/many}
-   :journey/delivers-value {:db/cardinality :db.cardinality/one}
-   :journey/replaces {:db/cardinality :db.cardinality/one}
-   :journey/friction-points {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
-(registry/register!
- :atlas/experience-journey
- :atlas/ontology
- #{:atlas/experience-journey}
- ontology-definition)
 
 ;; Datalog extractor
 (registry/register!
@@ -67,4 +49,7 @@
                                 (concat (map (fn [point]
                                                [:db/add dev-id :journey/friction-points point])
                                              (if (coll? friction) friction [friction])))))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:journey/risk-failure-mode {:db/cardinality :db.cardinality/many}
+   :journey/delivers-value {:db/cardinality :db.cardinality/one}
+   :journey/replaces {:db/cardinality :db.cardinality/one}
+   :journey/friction-points {:db/cardinality :db.cardinality/many}}})

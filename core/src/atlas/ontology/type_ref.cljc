@@ -12,17 +12,6 @@
             [atlas.registry.lookup :as entity]))
 
 ;; =============================================================================
-;; ONTOLOGY DEFINITION
-;; =============================================================================
-
-(def ontology-definition
-  {:ontology/for :atlas/type-ref
-   :ontology/keys [:type-ref/source        ; Source ontology (who has the ref)
-                   :type-ref/property      ; Property key in source entity
-                   :type-ref/datalog-verb  ; Datalog attribute name
-                   :type-ref/cardinality]}) ; :db.cardinality/one or /many
-
-;; =============================================================================
 ;; HELPER FUNCTIONS
 ;; =============================================================================
 
@@ -81,34 +70,17 @@
                [[:db/add dev-id datalog-verb value]]))))
        type-refs))))
 
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for type-ref properties."
-  {:type-ref/source {:db/cardinality :db.cardinality/one}
-   :type-ref/property {:db/cardinality :db.cardinality/one}
-   :type-ref/datalog-verb {:db/cardinality :db.cardinality/one}
-   :type-ref/cardinality {:db/cardinality :db.cardinality/one}})
-
-;; =============================================================================
-;; INVARIANTS
-;; =============================================================================
-
-(def invariants
-  [])
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
 
 ;; Ontology
 (registry/register!
  :atlas/type-ref
  :atlas/ontology
  #{:atlas/type-ref}
- ontology-definition)
+ {:ontology/for :atlas/type-ref
+  :ontology/keys [:type-ref/source        ; Source ontology (who has the ref)
+                  :type-ref/property      ; Property key in source entity
+                  :type-ref/datalog-verb  ; Datalog attribute name
+                  :type-ref/cardinality]})
 
 ;; Datalog extractor
 (registry/register!
@@ -134,5 +106,8 @@
 
                                 cardinality
                                 (conj [:db/add dev-id :type-ref/cardinality cardinality])))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:type-ref/source {:db/cardinality :db.cardinality/one}
+                             :type-ref/property {:db/cardinality :db.cardinality/one}
+                             :type-ref/datalog-verb {:db/cardinality :db.cardinality/one}
+                             :type-ref/cardinality {:db/cardinality :db.cardinality/one}}})
 

@@ -2,8 +2,11 @@
   "Governance-constraint ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/governance-constraint
+(registry/register!
+ :atlas/governance-constraint
+ :atlas/ontology
+ #{:atlas/governance-constraint}
+ {:ontology/for :atlas/governance-constraint
    :ontology/keys [:governance-constraint/enforced-by
                    :governance-constraint/rationale
                    :governance-constraint/compliance-requirement
@@ -18,27 +21,6 @@
                    :governance-constraint/recovery-path
                    :governance-constraint/revocable
                    :governance-constraint/revocation-path]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for governance-constraint properties."
-  {:constraint/enforced-by {:db/cardinality :db.cardinality/many}
-   :constraint/compliance-requirement {:db/cardinality :db.cardinality/many}
-   :constraint/oauth-scope {:db/cardinality :db.cardinality/many}
-   :constraint/revocable {:db/cardinality :db.cardinality/one}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
-(registry/register!
- :atlas/governance-constraint
- :atlas/ontology
- #{:atlas/governance-constraint}
- ontology-definition)
 
 ;; Datalog extractor
 (registry/register!
@@ -74,4 +56,7 @@
                                 ;; Revocable flag
                                 revocable
                                 (conj [:db/add dev-id :constraint/revocable revocable])))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:constraint/enforced-by {:db/cardinality :db.cardinality/many}
+                             :constraint/compliance-requirement {:db/cardinality :db.cardinality/many}
+                             :constraint/oauth-scope {:db/cardinality :db.cardinality/many}
+                             :constraint/revocable {:db/cardinality :db.cardinality/one}}})

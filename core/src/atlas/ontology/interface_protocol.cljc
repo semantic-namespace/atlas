@@ -2,28 +2,13 @@
   "Interface-protocol ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]))
 
-(def ontology-definition
-  {:ontology/for :atlas/interface-protocol
-   :ontology/keys [:interface-protocol/functions]})
-
-;; =============================================================================
-;; DATALOG INTEGRATION
-;; =============================================================================
-
-(def datalog-schema
-  "Datascript schema for interface-protocol properties."
-  {:protocol/function {:db/cardinality :db.cardinality/many}})
-
-;; =============================================================================
-;; AUTO-REGISTRATION (top-level, like clojure.spec)
-;; =============================================================================
-
 ;; Ontology
 (registry/register!
  :atlas/interface-protocol
  :atlas/ontology
  #{:atlas/interface-protocol}
- ontology-definition)
+ {:ontology/for :atlas/interface-protocol
+   :ontology/keys [:interface-protocol/functions]})
 
 ;; Datalog extractor
 (registry/register!
@@ -37,4 +22,4 @@
                                 (map (fn [protocol-fn]
                                        [:db/add dev-id :protocol/function protocol-fn])
                                      functions)))))
-  :datalog-extractor/schema datalog-schema})
+  :datalog-extractor/schema {:protocol/function {:db/cardinality :db.cardinality/many}}})
