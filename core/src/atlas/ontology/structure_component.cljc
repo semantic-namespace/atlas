@@ -64,40 +64,12 @@
  #{:meta/structure-component-extractor}
  {:datalog-extractor/fn (fn [compound-id props]
                           (when (contains? compound-id :atlas/structure-component)
-                            (let [dev-id (:atlas/dev-id props)
-                                  consumes (:structure-component/consumes props)
-                                  emits (:structure-component/emits props)
-                                  provides (:structure-component/provides props)]
-                              (concat
-                               ;; Automatic reference extraction via type-ref
-                               (type-ref/extract-reference-facts
-                                :atlas/structure-component
-                                compound-id
-                                props)
+                            (type-ref/extract-reference-facts
+                             :atlas/structure-component
+                             compound-id
+                             props)))
 
-                               ;; Manual extraction for non-reference properties
-                               (cond-> []
-                                 ;; Consumes (component-specific)
-                                 consumes
-                                 (concat (map (fn [c]
-                                                [:db/add dev-id :component/consumes c])
-                                              consumes))
-
-                                 ;; Emits (component-specific)
-                                 emits
-                                 (concat (map (fn [e]
-                                                [:db/add dev-id :component/emits e])
-                                              emits))
-
-                                 ;; Provides (services/capabilities)
-                                 provides
-                                 (concat (map (fn [p]
-                                                [:db/add dev-id :component/provides p])
-                                              provides)))))))
-  :datalog-extractor/schema {:entity/depends {:db/cardinality :db.cardinality/many}
-   :component/consumes {:db/cardinality :db.cardinality/many}
-   :component/emits {:db/cardinality :db.cardinality/many}
-   :component/provides {:db/cardinality :db.cardinality/many}}})
+  :datalog-extractor/schema {:entity/depends {:db/cardinality :db.cardinality/many}}})
 
 ;; Invariants
 (registry/register!
