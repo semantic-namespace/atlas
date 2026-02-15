@@ -293,7 +293,15 @@
                   (let [etype (entity-type compound-id)
                         required-keys (get ontology-specs etype)]
                     (if required-keys
-                      (s/valid? (dyn-spec required-keys) props)
+                      (if (s/valid? (dyn-spec required-keys) props)
+                        true
+                        (do (tel/log! {:level :warn}
+                                   ["NOT VALID"
+                                    {:dev-id (:atlas/dev-id props)
+                                     :compound-id compound-id
+                                     :message (s/explain-str (dyn-spec required-keys) props)
+                                     }])
+                            false))
                       true))))
             @registry)))
 
