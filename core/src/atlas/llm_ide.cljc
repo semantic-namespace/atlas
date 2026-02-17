@@ -550,6 +550,115 @@
   :atlas/impl (fn [{:keys [:entity/dev-id]}]
                 {:flow (ide/data-flow dev-id)})})
 
+;; Intent: query (data key queries)
+(registry/register!
+ :atlas.llm-ide/producers-of
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/producers-of}
+ {:execution-function/context [:data/key]
+  :execution-function/response [:dataflow/producers]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:data/key]}]
+                (let [data-key (if (keyword? key) key (keyword key))
+                      producers (vec (ide/producers-of data-key))]
+                  {:data-key data-key
+                   :producers producers
+                   :count (count producers)}))})
+
+(registry/register!
+ :atlas.llm-ide/consumers-of
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/consumers-of}
+ {:execution-function/context [:data/key]
+  :execution-function/response [:dataflow/consumers]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:data/key]}]
+                (let [data-key (if (keyword? key) key (keyword key))
+                      consumers (vec (ide/consumers-of data-key))]
+                  {:data-key data-key
+                   :consumers consumers
+                   :count (count consumers)}))})
+
+(registry/register!
+ :atlas.llm-ide/trace-data-key
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/trace :tool/trace-data-key}
+ {:execution-function/context [:data/key]
+  :execution-function/response [:dataflow/trace :dataflow/connected?]
+  :execution-function/deps #{:atlas.llm-ide/producers-of :atlas.llm-ide/consumers-of}
+  :atlas/impl (fn [{:keys [:data/key]}]
+                (let [data-key (if (keyword? key) key (keyword key))
+                      trace (ide/trace-data-flow data-key)]
+                  {:data-key (:dataflow/data-key trace)
+                   :produced-by (:dataflow/produced-by trace)
+                   :consumed-by (:dataflow/consumed-by trace)
+                   :connected? (:dataflow/connected? trace)
+                   :producers-count (count (:dataflow/produced-by trace))
+                   :consumers-count (count (:dataflow/consumed-by trace))}))})
+
+;; Intent: query (ontology/type queries)
+(registry/register!
+ :atlas.llm-ide/list-entity-types
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/list-entity-types}
+ {:execution-function/context []
+  :execution-function/response [:types/all]
+  :execution-function/deps #{}
+  :atlas/impl (fn [_]
+                {:types (vec (ide/list-entity-types))
+                 :count (count (ide/list-entity-types))})})
+
+(registry/register!
+ :atlas.llm-ide/entities-by-type
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/entities-by-type}
+ {:execution-function/context [:entity/type]
+  :execution-function/response [:entities/list :entities/count]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:entity/type]}]
+                (let [entity-type (if (keyword? type) type (keyword type))
+                      entities (vec (ide/entities-with-aspect entity-type))]
+                  {:entity-type entity-type
+                   :entities entities
+                   :count (count entities)}))})
+
+(registry/register!
+ :atlas.llm-ide/ontology-info
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/ontology-info}
+ {:execution-function/context [:entity/type]
+  :execution-function/response [:ontology/keys :ontology/metadata]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:entity/type]}]
+                (let [entity-type (if (keyword? type) type (keyword type))
+                      ontology-def (ontology/ontology-for entity-type)
+                      ontology-keys (ide/entity-type-ontology-keys entity-type)]
+                  {:entity-type entity-type
+                   :ontology-keys ontology-keys
+                   :ontology-definition ontology-def
+                   :available? (some? ontology-def)}))})
+
+(registry/register!
+ :atlas.llm-ide/entities-by-all-types
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/entities-by-all-types}
+ {:execution-function/context []
+  :execution-function/response [:entities/by-type :types/summary]
+  :execution-function/deps #{}
+  :atlas/impl (fn [_]
+                (let [all-types (ide/list-entity-types)
+                      by-type (into {}
+                                   (map (fn [entity-type]
+                                          [entity-type
+                                           {:entities (vec (ide/entities-with-aspect entity-type))
+                                            :count (count (ide/entities-with-aspect entity-type))}])
+                                        all-types))
+                      total (reduce + (map (comp :count val) by-type))]
+                  {:by-type by-type
+                   :type-count (count all-types)
+                   :total-entities total
+                   :summary (into {} (map (fn [[k v]] [k (:count v)]) by-type))}))})
+
 ;; =============================================================================
 ;; BATCH OPERATIONS
 ;; =============================================================================
