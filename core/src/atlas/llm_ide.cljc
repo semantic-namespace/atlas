@@ -44,6 +44,12 @@
                                :aspect/entry-point :layer/controller
                                :aspect/key-component :layer/repository}})
 
+   Batch operations (analyze multiple entities efficiently):
+     (handle-tool {:tool/name :atlas.llm-ide/batch-entity-detail
+                   :tool/args {:entity/dev-id-set #{:fn/foo :fn/bar :fn/baz}}})
+     (handle-tool {:tool/name :atlas.llm-ide/compare-entities
+                   :tool/args {:entity/dev-id-set #{:fn/foo :fn/bar}}})
+
    Self-registration (tools become queryable via registry):
      (register-tools!)
      (ide/entities-with-aspect :domain/llm-ide)
@@ -170,6 +176,28 @@
                  :tool/args (:execution-function/context props)
                  :tool/returns (:execution-function/response props)})))
        vec))
+
+(defn tools-by-category
+  "Categorize tools by intent and batch/single operation type."
+  []
+  (let [all-tools (available-tools)
+        by-intent (group-by (fn [tool]
+                             (let [identity (lookup/identity-for (:tool/name tool))
+                                   intent (first (filter #(= "intent" (namespace %)) identity))]
+                               intent))
+                           all-tools)
+        batch-tools (filter (fn [tool]
+                             (or (re-find #"batch|compare|aggregate" (name (:tool/name tool)))
+                                 (some #(re-find #"dev-id-set" (name %)) (:tool/args tool))))
+                           all-tools)
+        single-tools (remove (set batch-tools) all-tools)]
+    {:by-intent by-intent
+     :batch-tools batch-tools
+     :single-tools single-tools
+     :summary {:total (count all-tools)
+              :batch (count batch-tools)
+              :single (count single-tools)
+              :intents (keys by-intent)}}))
 
 ;; =============================================================================
 ;; LLM CONTEXT EXPORT
@@ -521,4 +549,231 @@
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id]}]
                 {:flow (ide/data-flow dev-id)})})
+
+;; =============================================================================
+;; BATCH OPERATIONS
+;; =============================================================================
+
+(registry/register!
+ :atlas.llm-ide/batch-entity-detail
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/batch-entity-detail}
+ {:execution-function/context [:entity/dev-id-set]
+  :execution-function/response [:batch/results :batch/summary]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:entity/dev-id-set]}]
+                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                      results (mapv (fn [entity-id]
+                                     {:entity entity-id
+                                      :info (ide/entity-info entity-id)
+                                      :exists? (lookup/exists? entity-id)})
+                                   entity-set)
+                      existing (filter :exists? results)
+                      missing (remove :exists? results)]
+                  {:results (vec existing)
+                   :missing (mapv :entity missing)
+                   :summary {:total (count entity-set)
+                            :found (count existing)
+                            :missing (count missing)}}))})
+
+(registry/register!
+ :atlas.llm-ide/compare-entities
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/compare-entities}
+ {:execution-function/context [:entity/dev-id-set]
+  :execution-function/response [:comparison/entities
+                                :comparison/common-aspects
+                                :comparison/unique-aspects
+                                :comparison/metrics]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:entity/dev-id-set]}]
+                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+
+                      ;; Gather entity data
+                      entities (mapv (fn [id]
+                                      (when (lookup/exists? id)
+                                        {:entity id
+                                         :props (lookup/props-for id)
+                                         :identity (lookup/identity-for id)
+                                         :type (first (extract-aspects id "atlas"))
+                                         :domains (vec (extract-aspects id "domain"))
+                                         :tiers (vec (extract-aspects id "tier"))
+                                         :in-degree (in-degree id)
+                                         :out-degree (out-degree id)}))
+                                    entity-set)
+                      valid-entities (filterv some? entities)
+
+                      ;; Find common and unique aspects
+                      all-identities (map (comp set :identity) valid-entities)
+                      common-aspects (when (seq all-identities)
+                                      (apply set/intersection all-identities))
+                      unique-per-entity (mapv (fn [e]
+                                               {:entity (:entity e)
+                                                :unique-aspects (vec (set/difference
+                                                                      (set (:identity e))
+                                                                      (or common-aspects #{})))})
+                                             valid-entities)
+
+                      ;; Calculate metrics
+                      metrics {:avg-in-degree (when (seq valid-entities)
+                                               (/ (reduce + (map :in-degree valid-entities))
+                                                  (count valid-entities)))
+                              :avg-out-degree (when (seq valid-entities)
+                                               (/ (reduce + (map :out-degree valid-entities))
+                                                  (count valid-entities)))
+                              :types (frequencies (map :type valid-entities))
+                              :domains (frequencies (mapcat :domains valid-entities))
+                              :tiers (frequencies (mapcat :tiers valid-entities))}]
+
+                  {:entities valid-entities
+                   :common-aspects (vec (or common-aspects #{}))
+                   :unique-aspects unique-per-entity
+                   :metrics metrics
+                   :summary {:requested (count entity-set)
+                            :found (count valid-entities)
+                            :missing (- (count entity-set) (count valid-entities))}}))})
+
+(registry/register!
+ :atlas.llm-ide/batch-blast-radius
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/trace :tool/batch-blast-radius}
+ {:execution-function/context [:entity/dev-id-set :query/max-hops]
+  :execution-function/response [:batch/results :batch/aggregate]
+  :execution-function/deps #{:atlas.llm-ide/blast-radius}
+  :atlas/impl (fn [{:keys [:entity/dev-id-set :query/max-hops]}]
+                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                      max-hops (or max-hops 3)
+
+                      ;; Run blast-radius for each entity
+                      results (mapv (fn [entity-id]
+                                     (let [result (handle-tool
+                                                   {:tool/name :atlas.llm-ide/blast-radius
+                                                    :tool/args {:entity/dev-id-or-set entity-id
+                                                               :query/max-hops max-hops}})]
+                                       {:entity entity-id
+                                        :blast-radius (:data result)
+                                        :success? (:success? result)}))
+                                   entity-set)
+
+                      successful (filter :success? results)
+
+                      ;; Aggregate results
+                      all-affected (set (mapcat #(map :entity (get-in % [:blast-radius :affected]))
+                                               successful))
+                      all-tiers (set (mapcat #(get-in % [:blast-radius :tiers-hit])
+                                            successful))
+                      all-domains (set (mapcat #(get-in % [:blast-radius :domains-hit])
+                                              successful))
+
+                      ;; Find overlaps
+                      overlap-map (reduce (fn [acc entity-id]
+                                           (let [affected (set (map :entity
+                                                                   (get-in (first (filter #(= entity-id (:entity %)) successful))
+                                                                          [:blast-radius :affected])))]
+                                             (assoc acc entity-id affected)))
+                                         {}
+                                         entity-set)
+                      overlapping-affected (filter (fn [affected-id]
+                                                    (> (count (filter #(contains? (val %) affected-id)
+                                                                     overlap-map))
+                                                       1))
+                                                  all-affected)]
+
+                  {:results (vec successful)
+                   :aggregate {:total-affected (count all-affected)
+                              :tiers-hit all-tiers
+                              :domains-hit all-domains
+                              :overlapping-entities (vec overlapping-affected)
+                              :overlap-count (count overlapping-affected)}
+                   :summary {:entities-analyzed (count entity-set)
+                            :successful (count successful)
+                            :combined-blast-radius (count all-affected)}}))})
+
+(registry/register!
+ :atlas.llm-ide/aggregate-by-aspect
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/query :tool/aggregate-by-aspect}
+ {:execution-function/context [:query/aspect]
+  :execution-function/response [:aggregate/by-type
+                                :aggregate/by-tier
+                                :aggregate/by-domain
+                                :aggregate/metrics]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:query/aspect]}]
+                (let [entities (vec (ide/entities-with-aspect aspect))
+
+                      ;; Group by type
+                      by-type (group-by (fn [id]
+                                         (first (extract-aspects id "atlas")))
+                                       entities)
+
+                      ;; Group by tier
+                      by-tier (group-by (fn [id]
+                                         (first (extract-aspects id "tier")))
+                                       entities)
+
+                      ;; Group by domain
+                      by-domain (group-by (fn [id]
+                                           (first (extract-aspects id "domain")))
+                                         entities)
+
+                      ;; Calculate metrics
+                      in-degrees (map in-degree entities)
+                      out-degrees (map out-degree entities)]
+
+                  {:total (count entities)
+                   :entities entities
+                   :by-type (into {} (map (fn [[k v]] [k (count v)]) by-type))
+                   :by-tier (into {} (map (fn [[k v]] [k (count v)]) by-tier))
+                   :by-domain (into {} (map (fn [[k v]] [k (count v)]) by-domain))
+                   :metrics {:avg-in-degree (when (seq in-degrees)
+                                             (/ (reduce + in-degrees) (count in-degrees)))
+                            :avg-out-degree (when (seq out-degrees)
+                                             (/ (reduce + out-degrees) (count out-degrees)))
+                            :max-in-degree (when (seq in-degrees) (apply max in-degrees))
+                            :max-out-degree (when (seq out-degrees) (apply max out-degrees))}}))})
+
+(registry/register!
+ :atlas.llm-ide/batch-change-risk
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/trace :tool/batch-change-risk}
+ {:execution-function/context [:entity/dev-id-set
+                               :risk/centrality-threshold
+                               :aspect/domain-namespace
+                               :aspect/high-risk
+                               :aspect/external-integration]
+  :execution-function/response [:batch/results :batch/aggregate-risk]
+  :execution-function/deps #{:atlas.llm-ide/change-risk}
+  :atlas/impl (fn [{:keys [:entity/dev-id-set] :as args}]
+                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+
+                      ;; Individual risk assessments
+                      individual-results (mapv (fn [entity-id]
+                                                {:entity entity-id
+                                                 :risk (handle-tool
+                                                        {:tool/name :atlas.llm-ide/change-risk
+                                                         :tool/args (assoc args :entity/dev-id-set #{entity-id})})})
+                                              entity-set)
+
+                      ;; Combined risk assessment
+                      combined-risk (handle-tool
+                                     {:tool/name :atlas.llm-ide/change-risk
+                                      :tool/args args})
+
+                      ;; Sort by risk score
+                      sorted-by-risk (vec (sort-by #(get-in % [:risk :data :risk-score] 0) >
+                                                  individual-results))
+
+                      high-risk (filter #(> (get-in % [:risk :data :risk-score] 0) 0.5)
+                                       individual-results)]
+
+                  {:individual-results sorted-by-risk
+                   :combined-risk (:data combined-risk)
+                   :high-risk-entities (mapv :entity high-risk)
+                   :summary {:total-entities (count entity-set)
+                            :high-risk-count (count high-risk)
+                            :combined-risk-score (get-in combined-risk [:data :risk-score] 0)
+                            :recommendation (if (> (count high-risk) (/ (count entity-set) 2))
+                                             "High proportion of risky changes - consider smaller increments"
+                                             "Risk is manageable - proceed with appropriate testing")}}))})
 
