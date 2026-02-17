@@ -21,6 +21,7 @@
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (require 'atlas.ontology.interface-protocol :reload)
+    (require 'atlas.invariant.dsl.operators :reload)
     ;; Validate registry before running tests
     (assert (registry/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
@@ -34,8 +35,7 @@
 
 (defn- seed-basic-registry!
   "Basic registry for dataflow tests."
-  []
-  (dsl.operators/register-operators)
+  []  
   ;; Endpoint depends on downstream functions
   (registry/register!
 
