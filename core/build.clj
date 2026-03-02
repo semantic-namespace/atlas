@@ -4,7 +4,7 @@
             [clojure.java.io :as io]))
 
 (def lib 'io.github.semantic-namespace/atlas)
-(def version "0.1.3-SNAPSHOT")
+(def version "0.1.4-SNAPSHOT")
 (def class-dir "target/classes")
 (def basis (b/create-basis {:project "deps.edn"}))
 (def jar-file (format "target/%s-%s.jar" (name lib) version))

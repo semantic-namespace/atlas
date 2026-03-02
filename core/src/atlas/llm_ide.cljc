@@ -87,6 +87,8 @@
 (s/def :risk/reasons string?)
 (s/def  :risk/suggestions string?)
 
+(s/def :data/key qualified-keyword?)
+(s/def :entity/type qualified-keyword?)
 (s/def :entity/intended-aspects (s/coll-of qualified-keyword?))
 
 (s/def :dataflow/consumes (s/coll-of qualified-keyword?))
@@ -675,8 +677,8 @@
                       results (mapv (fn [entity-id]
                                      {:entity entity-id
                                       :info (ide/entity-info entity-id)
-                                      :exists? (lookup/exists? entity-id)})
-                                   entity-set)
+                                      :exists? (some? (lookup/identity-for entity-id))})
+                                   (mapv keyword entity-set)) 
                       existing (filter :exists? results)
                       missing (remove :exists? results)]
                   {:results (vec existing)
@@ -700,7 +702,7 @@
 
                       ;; Gather entity data
                       entities (mapv (fn [id]
-                                      (when (lookup/exists? id)
+                                      (when (some? (lookup/identity-for id))
                                         {:entity id
                                          :props (lookup/props-for id)
                                          :identity (lookup/identity-for id)

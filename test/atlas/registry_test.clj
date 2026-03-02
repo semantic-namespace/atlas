@@ -21,20 +21,6 @@
     (f)
     (reset! id/registry {})))
 
-;; ---------------------------------------------------------------------------
-;; ✅ Validation Rules
-;; ---------------------------------------------------------------------------
-
-(deftest validity-rules
-  "The `valid?` function defines what a well-formed compound identity is:
-   - It must be a set (not a vector, list, or nil)
-   - It must contain ≥2 elements
-   - All elements must be qualified keywords (`:ns/name`)."
-  (testing "valid? enforces structure"
-    (is (false? (id/valid? nil)))
-    (is (false? (id/valid? #{:a})))
-    (is (false? (id/valid? #{:a/b :c})))  ; contains unqualified keyword
-    (is (true?  (id/valid? #{:foo/a :foo/b})))))
 
 
 ;; ---------------------------------------------------------------------------

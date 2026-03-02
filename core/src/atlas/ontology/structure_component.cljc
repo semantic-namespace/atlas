@@ -153,5 +153,4 @@
                        :violation :incomplete-protocol-implementation
                        :details violations
                        :severity :warning
-                       :message (str "Components don't implement all protocol methods. "
-                                     "This is a warning because implementations may be provided at runtime.")})))})
+                       :message "This is a warning because implementations may be provided at runtime."})))})

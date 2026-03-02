@@ -52,17 +52,6 @@
         :else v))
     m))
 
-(defn valid?
-  "Returns true if `id` is a valid compound identity.
-   A valid identity is a set of at least 1 qualified keyword."
-  ([id]
-   (valid? id false))
-  ([id verbose?]
-   (cond
-     (not (set? id)) (if verbose? [:error "not-a-set"] false)
-     (not-every? qualified-keyword? id) (if verbose? [:error "unqualified-keywords"] false)
-     :else true)))
-
 (defn fetch
   "Fetch the value associated with a compound identity."
   [identity]
@@ -80,15 +69,6 @@
   "Remove a compound identity from the registry."
   [compound-identity]
   (swap! registry dissoc compound-identity))
-
-(defn- find-by-dev-id
-  "Find the compound identity that has the given dev-id.
-   Returns [compound-id value] or nil if not found.
-   PRIVATE: Used internally by register! for dev-id uniqueness checking."
-  [dev-id]
-  (when dev-id
-    (first (filter (fn [[_k v]] (= (:atlas/dev-id v) dev-id))
-                   @registry))))
 
 (defn generate-dev-id
   "Generate a deterministic dev-id from a compound identity (aspect set).
@@ -123,6 +103,38 @@
   (let [not-serialisable-keys (get-not-serialisable-keys compound-id)]
     (apply dissoc value not-serialisable-keys)))
 
+(def ^:dynamic *error-on-register* false)
+
+(defn value-changed? [dev-id compound-id enriched-value]
+  (when (contains? @registry compound-id)
+    (let [existing-value (get @registry compound-id)
+          existing-serialisable (serialisable-value compound-id existing-value)
+          new-serialisable (serialisable-value compound-id enriched-value)]
+      (when-let [error (and (not= existing-serialisable new-serialisable)
+                            [(format* "%s entity value v0 v1 conflict" dev-id)
+                             {:compound-id compound-id
+                              :dev-id dev-id
+                              :error-type :compound-id
+                              :v0 existing-serialisable
+                              :v1 new-serialisable}])]
+        (if *error-on-register*
+          (tel/log! {:level :warn} error)
+          (ex-info (first error) (last error)))))))
+
+(defn compound-id-changed? [dev-id compound-id _enriched-value]
+  (when-let [[existing-compound-id _existing-value]
+             (first (filter (fn [[_k v]] (= (:atlas/dev-id v) dev-id))
+                            @registry))]
+    (when-let [error (and (not= existing-compound-id compound-id)
+                          [(format* "%s compound-id v0 v1 conflict" dev-id)
+                           {:dev-id dev-id
+                            :error-type :dev-id
+                            :v0 existing-compound-id
+                            :v1 compound-id}])]
+      (if *error-on-register*
+        (tel/log! {:level :warn} error)
+        (ex-info (first error) (last error))))))
+
 (defn register!
   "Register a new compound identity with explicit entity type and aspects.
 
@@ -144,36 +156,15 @@
    ;; 4-arity: (register! dev-id type aspects value) with explicit dev-id
    (assert (qualified-keyword? type)
            (format* "Entity type must be a qualified keyword, got: %s" type))
-   (assert (set? aspects)
-           (format* "Aspects must be a set, got: %s" aspects))
-   (let [id (conj aspects type)
+   (assert (and (set? aspects) (every? qualified-keyword? aspects))
+           (format* "Aspects must be a set of qualified kws got: %s" aspects))
+   (let [compound-id (conj aspects type)
          value-with-meta (assoc value :atlas/dev-id dev-id :atlas/type type)]
-     (assert (valid? id) (format* "Invalid compound identity: %s" id))
-
-     ;; Check for duplicate compound-id with different serialisable values
-     (when (contains? @registry id)
-       (let [existing-value (get @registry id)
-             existing-serialisable (serialisable-value id existing-value)
-             new-serialisable (serialisable-value id value-with-meta)]
-         (when (not= existing-serialisable new-serialisable)
-           (tel/log! {:level :warn}
-                     ["Compound identity already exists with different serialisable values"
-                      {:compound-id id
-                       :dev-id dev-id
-                       :existing-serialisable existing-serialisable
-                       :attempted-serialisable new-serialisable}]))))
-
-     ;; Check for duplicate dev-id with different compound-id
-     (when-let [[existing-id existing-value] (find-by-dev-id dev-id)]
-       (when (not= existing-id id)
-         (tel/log! {:level :warn}
-                   ["dev-id already exists with different compound identity"
-                    {:dev-id dev-id
-                     :existing-compound-id existing-id
-                     :attempted-compound-id id}])))
-
-     (swap! registry assoc id value-with-meta)
-     id))) 
+     (when-let [e  (and *error-on-register* (or (compound-id-changed? dev-id compound-id value-with-meta)
+                                                (value-changed? dev-id compound-id value-with-meta)))]
+       (throw e))
+     (swap! registry assoc compound-id value-with-meta)
+     compound-id))) 
 
 ;; =============================================================================
 ;; Entity Type Helpers
