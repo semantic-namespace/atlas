@@ -1,0 +1,3 @@
+{
+  "plugins": ["js-qualified-keywords/babel-plugin"]
+}

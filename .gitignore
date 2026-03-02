@@ -31,6 +31,17 @@ profiles.clj
 node_modules/
 package-lock.json
 
+# JS package (js/)
+/js/node_modules/
+/js/package-lock.json
+/js/dist/
+/js/dist-slim/
+/js/dist-dev/
+/js/dist-slim-dev/
+/js/.shadow-cljs/
+/js/example/node_modules/
+/js/example/package-lock.json
+
 # Shadow-CLJS
 .shadow-cljs/
 ui/resources/public/js/

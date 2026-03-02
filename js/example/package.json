@@ -1,0 +1,16 @@
+{
+  "name": "atlas-example",
+  "version": "0.0.1",
+  "description": "Example using :ns/name qualified keyword syntax with @semantic-namespace/atlas",
+  "scripts": {
+    "start": "babel-node index.js"
+  },
+  "dependencies": {
+    "@semantic-namespace/atlas": "file:..",
+    "js-qualified-keywords": "^0.1.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/node": "^7.29.0"
+  }
+}

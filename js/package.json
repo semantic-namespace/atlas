@@ -1,0 +1,36 @@
+{
+  "name": "@semantic-namespace/atlas",
+  "version": "0.1.0-alpha",
+  "description": "Atlas semantic registry for JavaScript — query, analyze, and reason about software architecture",
+  "type": "module",
+  "main": "dist/atlas.js",
+  "module": "dist/atlas.js",
+  "exports": {
+    ".": "./dist/atlas.js",
+    "./slim": "./dist-slim/atlas.js"
+  },
+  "files": [
+    "dist/",
+    "dist-slim/"
+  ],
+  "scripts": {
+    "build": "npx shadow-cljs release atlas-js",
+    "build:slim": "npx shadow-cljs release atlas-js-slim",
+    "build:all": "npx shadow-cljs release atlas-js atlas-js-slim",
+    "dev": "npx shadow-cljs watch atlas-js-dev",
+    "dev:slim": "npx shadow-cljs watch atlas-js-slim-dev",
+    "clean": "rm -rf dist dist-dev dist-slim dist-slim-dev"
+  },
+  "dependencies": {
+    "js-qualified-keywords": "^0.1.1",
+    "shadow-cljs": "^2.27.5"
+  },
+  "keywords": [
+    "atlas",
+    "semantic",
+    "registry",
+    "architecture",
+    "ontology"
+  ],
+  "license": "MIT"
+}

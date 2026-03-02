@@ -1,0 +1,221 @@
+{:source-paths ["src" "../core/src"]
+
+ :dependencies
+ [[datascript "1.6.5"]
+  [com.taoensso/telemere "1.2.1"]]
+
+ :builds
+ {;; ─── Full build (registry + query + datalog + invariants) ───
+  :atlas-js
+  {:target :esm
+   :output-dir "dist"
+   :modules {:atlas {:exports {loadRegistry        atlas-js.core/load-registry!
+                               getRegistry         atlas-js.core/get-registry
+                               register            atlas-js.core/register!
+                               resetRegistry       atlas-js.core/reset-registry!
+
+                               ;; Query
+                               findByAspect        atlas-js.core/find-by-aspect
+                               findByDevId         atlas-js.core/find-by-dev-id
+                               findDevIdsWithAspect atlas-js.core/find-dev-ids-with-aspect
+                               findExact           atlas-js.core/find-exact
+                               where               atlas-js.core/where-js
+                               allIdentities       atlas-js.core/all-identities
+
+                               ;; Scoring & Matching
+                               matchScore          atlas-js.core/match-score
+                               queryMatches        atlas-js.core/query-matches?
+                               semanticSimilarity  atlas-js.core/semantic-similarity
+
+                               ;; Analytics
+                               aspectFrequency     atlas-js.core/aspect-frequency
+                               relatedAspects      atlas-js.core/related-aspects
+                               identityStats       atlas-js.core/identity-stats
+
+                               ;; Architecture
+                               dependencyGraph     atlas-js.core/dependency-graph
+                               byTier              atlas-js.core/by-tier
+                               domainCoupling      atlas-js.core/domain-coupling
+                               impactOfChange      atlas-js.core/impact-of-change
+
+                               ;; Data Flow
+                               findProducers       atlas-js.core/find-producers
+                               findConsumers       atlas-js.core/find-consumers
+                               traceDataFlow       atlas-js.core/trace-data-flow
+
+                               ;; Set Algebra
+                               queryAlgebra        atlas-js.core/query-algebra
+
+                               ;; Registry introspection
+                               registeredTypes     atlas-js.core/registered-types
+                               entityType          atlas-js.core/entity-type
+                               aspects             atlas-js.core/aspects
+                               summary             atlas-js.core/summary
+                               validateTypes       atlas-js.core/validate-types
+
+                               ;; Invariants
+                               checkInvariants     atlas-js.core/check-invariants
+
+                               ;; Ontology
+                               allOntologies       atlas-js.core/all-ontologies
+                               ontologyFor         atlas-js.core/ontology-for
+
+                               ;; Datalog
+                               queryEntitiesWithAspect  atlas-js.core/query-entities-with-aspect
+                               queryDependencies        atlas-js.core/query-dependencies
+                               queryReverseDependencies atlas-js.core/query-reverse-dependencies
+                               queryUpstreamClosure     atlas-js.core/query-upstream-closure
+                               queryDownstreamClosure   atlas-js.core/query-downstream-closure
+                               queryProducersOf         atlas-js.core/query-producers-of
+                               queryConsumersOf         atlas-js.core/query-consumers-of
+                               rebuildDatalog           atlas-js.core/rebuild-datalog!
+
+                               ;; Conversion helpers
+                               toJS                atlas-js.core/to-js
+                               toClj               atlas-js.core/to-clj}}}
+   :compiler-options {:optimizations :advanced}}
+
+  ;; ─── Slim build (registry + query + ontology, NO datascript) ───
+  :atlas-js-slim
+  {:target :esm
+   :output-dir "dist-slim"
+   :modules {:atlas {:exports {loadRegistry        atlas-js.core-slim/load-registry!
+                               getRegistry         atlas-js.core-slim/get-registry
+                               register            atlas-js.core-slim/register!
+                               resetRegistry       atlas-js.core-slim/reset-registry!
+
+                               ;; Query
+                               findByAspect        atlas-js.core-slim/find-by-aspect
+                               findByDevId         atlas-js.core-slim/find-by-dev-id
+                               findDevIdsWithAspect atlas-js.core-slim/find-dev-ids-with-aspect
+                               findExact           atlas-js.core-slim/find-exact
+                               where               atlas-js.core-slim/where-js
+                               allIdentities       atlas-js.core-slim/all-identities
+
+                               ;; Scoring & Matching
+                               matchScore          atlas-js.core-slim/match-score
+                               queryMatches        atlas-js.core-slim/query-matches?
+                               semanticSimilarity  atlas-js.core-slim/semantic-similarity
+
+                               ;; Analytics
+                               aspectFrequency     atlas-js.core-slim/aspect-frequency
+                               relatedAspects      atlas-js.core-slim/related-aspects
+                               identityStats       atlas-js.core-slim/identity-stats
+
+                               ;; Architecture
+                               dependencyGraph     atlas-js.core-slim/dependency-graph
+                               byTier              atlas-js.core-slim/by-tier
+                               domainCoupling      atlas-js.core-slim/domain-coupling
+                               impactOfChange      atlas-js.core-slim/impact-of-change
+
+                               ;; Data Flow
+                               findProducers       atlas-js.core-slim/find-producers
+                               findConsumers       atlas-js.core-slim/find-consumers
+                               traceDataFlow       atlas-js.core-slim/trace-data-flow
+
+                               ;; Set Algebra
+                               queryAlgebra        atlas-js.core-slim/query-algebra
+
+                               ;; Registry introspection
+                               registeredTypes     atlas-js.core-slim/registered-types
+                               entityType          atlas-js.core-slim/entity-type
+                               aspects             atlas-js.core-slim/aspects
+                               summary             atlas-js.core-slim/summary
+                               validateTypes       atlas-js.core-slim/validate-types
+
+                               ;; Ontology
+                               allOntologies       atlas-js.core-slim/all-ontologies
+                               ontologyFor         atlas-js.core-slim/ontology-for
+
+                               ;; Conversion helpers
+                               toJS                atlas-js.core-slim/to-js
+                               toClj               atlas-js.core-slim/to-clj}}}
+   :compiler-options {:optimizations :advanced}}
+
+  ;; ─── Dev builds (source maps, simple optimizations) ───
+  :atlas-js-dev
+  {:target :esm
+   :output-dir "dist-dev"
+   :modules {:atlas {:exports {loadRegistry        atlas-js.core/load-registry!
+                               getRegistry         atlas-js.core/get-registry
+                               register            atlas-js.core/register!
+                               resetRegistry       atlas-js.core/reset-registry!
+                               findByAspect        atlas-js.core/find-by-aspect
+                               findByDevId         atlas-js.core/find-by-dev-id
+                               findDevIdsWithAspect atlas-js.core/find-dev-ids-with-aspect
+                               findExact           atlas-js.core/find-exact
+                               where               atlas-js.core/where-js
+                               allIdentities       atlas-js.core/all-identities
+                               matchScore          atlas-js.core/match-score
+                               queryMatches        atlas-js.core/query-matches?
+                               semanticSimilarity  atlas-js.core/semantic-similarity
+                               aspectFrequency     atlas-js.core/aspect-frequency
+                               relatedAspects      atlas-js.core/related-aspects
+                               identityStats       atlas-js.core/identity-stats
+                               dependencyGraph     atlas-js.core/dependency-graph
+                               byTier              atlas-js.core/by-tier
+                               domainCoupling      atlas-js.core/domain-coupling
+                               impactOfChange      atlas-js.core/impact-of-change
+                               findProducers       atlas-js.core/find-producers
+                               findConsumers       atlas-js.core/find-consumers
+                               traceDataFlow       atlas-js.core/trace-data-flow
+                               queryAlgebra        atlas-js.core/query-algebra
+                               registeredTypes     atlas-js.core/registered-types
+                               entityType          atlas-js.core/entity-type
+                               aspects             atlas-js.core/aspects
+                               summary             atlas-js.core/summary
+                               validateTypes       atlas-js.core/validate-types
+                               checkInvariants     atlas-js.core/check-invariants
+                               allOntologies       atlas-js.core/all-ontologies
+                               ontologyFor         atlas-js.core/ontology-for
+                               queryEntitiesWithAspect  atlas-js.core/query-entities-with-aspect
+                               queryDependencies        atlas-js.core/query-dependencies
+                               queryReverseDependencies atlas-js.core/query-reverse-dependencies
+                               queryUpstreamClosure     atlas-js.core/query-upstream-closure
+                               queryDownstreamClosure   atlas-js.core/query-downstream-closure
+                               queryProducersOf         atlas-js.core/query-producers-of
+                               queryConsumersOf         atlas-js.core/query-consumers-of
+                               rebuildDatalog           atlas-js.core/rebuild-datalog!
+                               toJS                atlas-js.core/to-js
+                               toClj               atlas-js.core/to-clj}}}
+   :compiler-options {:optimizations :simple
+                      :source-map true}}
+
+  :atlas-js-slim-dev
+  {:target :esm
+   :output-dir "dist-slim-dev"
+   :modules {:atlas {:exports {loadRegistry        atlas-js.core-slim/load-registry!
+                               getRegistry         atlas-js.core-slim/get-registry
+                               register            atlas-js.core-slim/register!
+                               resetRegistry       atlas-js.core-slim/reset-registry!
+                               findByAspect        atlas-js.core-slim/find-by-aspect
+                               findByDevId         atlas-js.core-slim/find-by-dev-id
+                               findDevIdsWithAspect atlas-js.core-slim/find-dev-ids-with-aspect
+                               findExact           atlas-js.core-slim/find-exact
+                               where               atlas-js.core-slim/where-js
+                               allIdentities       atlas-js.core-slim/all-identities
+                               matchScore          atlas-js.core-slim/match-score
+                               queryMatches        atlas-js.core-slim/query-matches?
+                               semanticSimilarity  atlas-js.core-slim/semantic-similarity
+                               aspectFrequency     atlas-js.core-slim/aspect-frequency
+                               relatedAspects      atlas-js.core-slim/related-aspects
+                               identityStats       atlas-js.core-slim/identity-stats
+                               dependencyGraph     atlas-js.core-slim/dependency-graph
+                               byTier              atlas-js.core-slim/by-tier
+                               domainCoupling      atlas-js.core-slim/domain-coupling
+                               impactOfChange      atlas-js.core-slim/impact-of-change
+                               findProducers       atlas-js.core-slim/find-producers
+                               findConsumers       atlas-js.core-slim/find-consumers
+                               traceDataFlow       atlas-js.core-slim/trace-data-flow
+                               queryAlgebra        atlas-js.core-slim/query-algebra
+                               registeredTypes     atlas-js.core-slim/registered-types
+                               entityType          atlas-js.core-slim/entity-type
+                               aspects             atlas-js.core-slim/aspects
+                               summary             atlas-js.core-slim/summary
+                               validateTypes       atlas-js.core-slim/validate-types
+                               allOntologies       atlas-js.core-slim/all-ontologies
+                               ontologyFor         atlas-js.core-slim/ontology-for
+                               toJS                atlas-js.core-slim/to-js
+                               toClj               atlas-js.core-slim/to-clj}}}
+   :compiler-options {:optimizations :simple
+                      :source-map true}}}}
