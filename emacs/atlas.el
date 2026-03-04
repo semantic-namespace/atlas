@@ -52,6 +52,7 @@
 (require 'atlas-authoring)
 (require 'atlas-interactive)
 (require 'atlas-history)
+(require 'atlas-lens)
 
 ;;; Explorer Transient Menu
 
@@ -113,6 +114,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("c" "Check invariants" atlas-browse-check-invariants)
     ("G" "Refresh cache" atlas--invalidate-cache)
     ("!" "Toggle debug" atlas-toggle-debug)]
+   ["Source"
+    ("L" "Toggle lens mode" atlas-lens-mode)]
    ["History"
     ("h" "History menu →" atlas-history)]
    ["Navigation"

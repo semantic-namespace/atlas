@@ -376,6 +376,14 @@
          :execution-function/deps (vec (sort (ot/deps-for dev-id-kw)))
          :atlas/fields (vec (sort (fields-for props)))}))))
 
+(defn entities-info
+  "Batch fetch entity-info for multiple dev-ids. Returns map of dev-id → info."
+  [dev-ids]
+  (into {} (keep (fn [id]
+                   (when-let [info (entity-info id)]
+                     [(:entity/dev-id info) info])))
+        (map ensure-keyword dev-ids)))
+
 (defn data-flow [dev-id]
   "Get data flow info for a function."
   (->> (ot/trace-data-flow (ensure-keyword dev-id))
