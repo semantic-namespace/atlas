@@ -204,6 +204,22 @@ Handles both string and symbol inputs, ensuring proper : prefix."
         str
       (concat ":" str))))
 
+(defun atlas--keyword-at-point ()
+  "Return the Clojure keyword at point as a string (e.g., \":ns/name\"), or nil.
+Works in both Atlas result buffers (reads entity from button) and Clojure
+source files (uses thing-at-point 'symbol, which clojure-mode includes ':' in
+symbol syntax).  Only returns namespaced keywords (must contain '/')."
+  (or
+   ;; Atlas result buffers: entity stored as button property (without leading :)
+   (when-let* ((button (button-at (point)))
+               (entity (button-get button 'entity)))
+     (atlas--to-keyword entity))
+   ;; Clojure source files: thing-at-point includes : in symbol syntax
+   (when-let* ((sym (thing-at-point 'symbol t))
+               (kw  (if (string-prefix-p ":" sym) sym (concat ":" sym))))
+     (when (string-match-p "^:[a-zA-Z][a-zA-Z0-9_.-]*/[a-zA-Z]" kw)
+       kw))))
+
 ;;; CIDER Evaluation
 
 (defconst atlas--non-ide-forms

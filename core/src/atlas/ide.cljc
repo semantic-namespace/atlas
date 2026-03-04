@@ -9,6 +9,7 @@
             [atlas.ontology :as ot]
             [atlas.query :as query]
             [atlas.datalog :as datalog]
+            [atlas.history :as history]
             [atlas.cljc.platform :as platform]
             [clojure.string :as str]
             [clojure.set :as set]))
@@ -156,10 +157,84 @@
   []
   (vec (sort (cid/registered-types))))
 
+(defn list-entity-types-with-counts
+  "List all entity types present in the registry with entity counts.
+   Discovers types from compound identities (keywords in atlas/* namespace),
+   so works with both register!-built and raw EDN-loaded registries.
+   Returns [{:entity-type/type :atlas/execution-function :entity-type/count 5} ...]"
+  []
+  (let [registry @cid/registry]
+    (->> registry
+         (group-by (fn [[id _]] (first (filter #(= "atlas" (namespace %)) id))))
+         (remove (fn [[type _]] (nil? type)))
+         (map (fn [[type entries]]
+                {:entity-type/type  type
+                 :entity-type/count (count entries)}))
+         (sort-by (comp str :entity-type/type))
+         vec)))
+
+(defn list-entities-of-type
+  "List dev-ids of all entities whose compound identity contains entity-type.
+   entity-type - keyword like :atlas/execution-function"
+  [entity-type]
+  (let [entity-type-kw (ensure-keyword entity-type)]
+    (->> @cid/registry
+         (filter (fn [[id _props]] (contains? id entity-type-kw)))
+         (map (fn [[_id props]] (:atlas/dev-id props)))
+         (remove nil?)
+         sort
+         vec)))
+
+(defn registered-entity?
+  "Returns true if kw is a registered entity (has an identity in the registry)."
+  [kw]
+  (boolean (rt/identity-for (ensure-keyword kw))))
+
 (defn entity-type-ontology-keys
   "Get ontology keys for a given entity type."
   [entity-type]
   (vec (or (ot/ontology-keys-for (ensure-keyword entity-type)) [])))
+
+(defn entity-prop-keys
+  "Get the navigable prop keys for an entity.
+   Returns sorted keyword vector, excluding :atlas/dev-id and :atlas/type
+   (those are metadata, not navigable semantic props).
+   Returns nil if dev-id is not found in registry."
+  [dev-id]
+  (let [dev-id-kw (ensure-keyword dev-id)
+        id        (rt/identity-for dev-id-kw)
+        props     (rt/props-for dev-id-kw)]
+    (when (and id props)
+      (->> (filter-non-serialisable id props)
+           keys
+           (remove #{:atlas/dev-id :atlas/type})
+           sort
+           vec))))
+
+(defn entity-prop-items
+  "Get the items of a prop value, each annotated with :item/is-dev-id?.
+   Supports single keywords, collections (vec/set), and maps (returns keys).
+   Returns [{:item/value kw :item/is-dev-id? bool}] for interactive navigation."
+  [dev-id prop-key]
+  (let [dev-id-kw  (ensure-keyword dev-id)
+        prop-kw    (ensure-keyword prop-key)
+        props      (rt/props-for dev-id-kw)
+        value      (get props prop-kw)
+        annotate   (fn [v]
+                     {:item/value      v
+                      :item/is-dev-id? (boolean (and (keyword? v)
+                                                     (rt/identity-for v)))})]
+    (cond
+      (or (sequential? value) (set? value))
+      (mapv annotate (sort-by pr-str value))
+
+      (map? value)
+      (mapv (fn [[k _]] (annotate k)) (sort-by (comp pr-str first) value))
+
+      (some? value)
+      [(annotate value)]
+
+      :else [])))
 
 (defn list-all-entities
   "List all registered entities with their type classification.
@@ -375,6 +450,38 @@
    Uses effective dependencies (explicit deps + dataflow-derived deps)."
   [dev-id]
   (vec (sort (effective-dependencies-for (ensure-keyword dev-id)))))
+
+(defn recursive-dependencies-of
+  "Get all transitive dependencies for an entity, recursively.
+   Traverses execution-function/deps, structure-component/deps, and endpoint/deps.
+   Returns flat vector in BFS order, excluding the root entity itself.
+   Each entry: {:dep/dev-id kw :dep/type kw :dep/depth int :dep/via kw}
+   Handles cycles via visited set."
+  [dev-id]
+  (let [dev-id-kw (ensure-keyword dev-id)
+        entity-type-for (fn [id]
+                          (when-let [identity (rt/identity-for id)]
+                            (some #(when (= "atlas" (namespace %)) %) identity)))]
+    (loop [queue (mapv #(vector % 1 dev-id-kw)
+                       (sort (effective-dependencies-for dev-id-kw)))
+           visited #{dev-id-kw}
+           result []]
+      (if (empty? queue)
+        result
+        (let [[current depth via] (first queue)
+              rest-queue (subvec queue 1)]
+          (if (contains? visited current)
+            (recur rest-queue visited result)
+            (let [deps (sort (effective-dependencies-for current))
+                  new-deps (remove visited deps)
+                  entry {:dep/dev-id current
+                         :dep/type (entity-type-for current)
+                         :dep/depth depth
+                         :dep/via via}]
+              (recur
+               (into rest-queue (map #(vector % (inc depth) current) new-deps))
+               (conj visited current)
+               (conj result entry)))))))))
 
 (defn producers-of
   "Find functions that produce a data key."
@@ -958,3 +1065,107 @@
   "Get full documentation context optimized for LLM consumption."
   []
   (docs/llm-documentation-context))
+
+;; =============================================================================
+;; HISTORY API
+;; =============================================================================
+
+(def ^:private history-conn (atom nil))
+
+(defn- ensure-history-conn
+  "Return the history db value, or throw if not initialized."
+  []
+  (or (some-> @history-conn deref)
+      (throw (ex-info "History not initialized. Call (atlas.ide/history-init!) first." {}))))
+
+(defn- normalize-sets
+  "Walk a data structure converting sets to sorted vectors for Emacs consumption."
+  [x]
+  (cond
+    (set? x)        (sorted-vec x)
+    (map? x)        (reduce-kv (fn [m k v] (assoc m k (normalize-sets v))) {} x)
+    (sequential? x) (mapv normalize-sets x)
+    :else           x))
+
+(defn history-init!
+  "Initialize the history db. Returns status map."
+  []
+  (reset! history-conn (history/create-conn))
+  {:history/status :initialized})
+
+(defn history-versions
+  "All version strings in the history db, sorted."
+  []
+  (history/versions (ensure-history-conn)))
+
+(defn history-entity-timeline
+  "All versions of a single entity under one dev-id, sorted by version."
+  [dev-id]
+  (->> (history/entity-timeline (ensure-history-conn) (ensure-keyword dev-id))
+       normalize-sets))
+
+(defn history-full-timeline
+  "Complete history of an entity across dev-id renames."
+  [dev-id]
+  (->> (history/full-timeline (ensure-history-conn) (ensure-keyword dev-id))
+       normalize-sets))
+
+(defn history-version-diff
+  "All entities that changed in a given version."
+  [version]
+  (->> (history/version-diff (ensure-history-conn) version)
+       normalize-sets))
+
+(defn history-version-summary
+  "Aggregate change counts per entity type for a version."
+  [version]
+  (history/version-summary (ensure-history-conn) version))
+
+(defn history-vocabulary-diff
+  "Aspects whose entity count changed between two versions."
+  [v-old v-new]
+  (->> (history/vocabulary-diff (ensure-history-conn) v-old v-new)
+       normalize-sets))
+
+(defn history-edges-at
+  "All edges for a given entity at a given version."
+  [version dev-id]
+  (->> (history/edges-at (ensure-history-conn) version (ensure-keyword dev-id))
+       normalize-sets))
+
+(defn history-dependents-of
+  "Entities that reference a given target at a version (reverse lookup)."
+  [version dev-id]
+  (->> (history/dependents-of (ensure-history-conn) version (ensure-keyword dev-id))
+       normalize-sets))
+
+(defn history-edge-diff
+  "Edges added or removed between two versions."
+  [v-old v-new]
+  (->> (history/edge-diff (ensure-history-conn) v-old v-new)
+       normalize-sets))
+
+(defn history-edge-summary
+  "Count edges by verb at a version."
+  [version]
+  (history/edge-summary (ensure-history-conn) version))
+
+(defn history-snapshot!
+  "Snapshot the current registry state with a version label.
+   Auto-initializes history conn if needed.
+   prev-registry: optional previous registry state for diffing (nil for first snapshot).
+   Returns snapshot result map."
+  ([version-label]
+   (history-snapshot! version-label nil))
+  ([version-label prev-registry]
+   (when-not @history-conn
+     (history-init!))
+   (let [reg @cid/registry
+         result (history/snapshot-version! @history-conn reg version-label prev-registry nil)]
+     (history/snapshot-edges! @history-conn reg version-label)
+     result)))
+
+(defn history-get-conn
+  "Return the raw history conn atom (for tools that need direct access)."
+  []
+  @history-conn)

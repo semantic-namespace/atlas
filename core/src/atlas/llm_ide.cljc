@@ -18,6 +18,7 @@
    - :intent/suggest - suggest-placement
    - :intent/diagnose - orphans, islands, bottlenecks, anomalies, structural-gaps
    - :intent/query   - by-aspect, entity-detail, data-flow
+   - :intent/history  - snapshot-registry, diff-versions, version-summary, entity-timeline, snapshot-and-diff
 
    ## Ontology-Agnostic Design
 
@@ -64,6 +65,7 @@
             [atlas.ide :as ide]
             [atlas.invariant :as inv]
             [atlas.datalog :as datalog]
+            [atlas.history :as history]
             [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
@@ -887,4 +889,154 @@
                             :recommendation (if (> (count high-risk) (/ (count entity-set) 2))
                                              "High proportion of risky changes - consider smaller increments"
                                              "Risk is manageable - proceed with appropriate testing")}}))})
+
+;; =============================================================================
+;; HISTORY SPECS
+;; =============================================================================
+
+(s/def :history/version-label string?)
+(s/def :history/version-old string?)
+(s/def :history/version-new string?)
+
+;; =============================================================================
+;; Intent: history — snapshot, diff, and timeline tools
+;; =============================================================================
+;;
+;; Workflow: Developer works on their project, periodically snapshots the registry.
+;; Later, asks the LLM "what changed?" — LLM uses these tools via MCP to report.
+;;
+;; Typical flow:
+;;   1. snapshot-registry "start"         — baseline
+;;   2. ... developer works for an hour ...
+;;   3. snapshot-registry "after-refactor" — new state
+;;   4. diff-versions "start" "after-refactor" — what changed
+;;   5. version-summary "after-refactor"  — aggregate view
+
+;; Stores the registry state at the time of the last snapshot.
+;; Used as prev-registry when computing aspect diffs on the next snapshot.
+(def ^:private last-snapshot-registry (atom nil))
+
+(defn history-reset!
+  "Reset history — reinitializes conn and clears cached previous registry.
+   Call this between tests or when starting a fresh history session."
+  []
+  (ide/history-init!)
+  (reset! last-snapshot-registry nil))
+
+(defn- ensure-history-conn!
+  "Auto-initialize history conn if needed. Returns the conn (for snapshot-version!)."
+  []
+  (when-not (ide/history-get-conn)
+    (history-reset!))
+  (ide/history-get-conn))
+
+(defn- history-db
+  "Get the current history db value (for query functions)."
+  []
+  @(ensure-history-conn!))
+
+(defn- take-snapshot!
+  "Snapshot the current registry. Saves previous registry for diff computation.
+   Returns {:snapshot ... :versions [...]}."
+  [label]
+  (let [prev-reg @last-snapshot-registry
+        conn (ensure-history-conn!)
+        reg @registry/registry
+        result (history/snapshot-version! conn reg label prev-reg nil)]
+    (history/snapshot-edges! conn reg label)
+    (reset! last-snapshot-registry reg)
+    {:snapshot result
+     :versions (history/versions @conn)}))
+
+(registry/register!
+ :atlas.llm-ide/snapshot-registry
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/snapshot-registry}
+ {:execution-function/context [:history/version-label]
+  :execution-function/response [:history/snapshot-result :history/versions]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:history/version-label]}]
+                (let [label (or version-label
+                                (str "snap-" #?(:clj (System/currentTimeMillis)
+                                                :cljs (.now js/Date))))]
+                  (take-snapshot! label)))})
+
+(registry/register!
+ :atlas.llm-ide/history-versions
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/history-versions}
+ {:execution-function/context []
+  :execution-function/response [:history/versions]
+  :execution-function/deps #{}
+  :atlas/impl (fn [_]
+                {:versions (history/versions (history-db))})})
+
+(registry/register!
+ :atlas.llm-ide/diff-versions
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/diff-versions}
+ {:execution-function/context [:history/version-old :history/version-new]
+  :execution-function/response [:history/snap-diff :history/edge-diff :history/vocabulary-diff :history/summary]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:history/version-old :history/version-new]}]
+                (let [db (history-db)]
+                  {:snap-changes {:old (history/version-diff db version-old)
+                                  :new (history/version-diff db version-new)}
+                   :edge-diff (history/edge-diff db version-old version-new)
+                   :vocabulary-diff (history/vocabulary-diff db version-old version-new)
+                   :summary {:old (history/version-summary db version-old)
+                             :new (history/version-summary db version-new)}}))})
+
+(registry/register!
+ :atlas.llm-ide/version-summary
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/version-summary}
+ {:execution-function/context [:history/version-label]
+  :execution-function/response [:history/summary :history/diff :history/renames]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:history/version-label]}]
+                (let [db (history-db)]
+                  {:summary (history/version-summary db version-label)
+                   :diff (history/version-diff db version-label)
+                   :renames (history/version-renames db version-label)}))})
+
+(registry/register!
+ :atlas.llm-ide/entity-timeline
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/entity-timeline}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:history/timeline]
+  :execution-function/deps #{}
+  :atlas/impl (fn [{:keys [:entity/dev-id]}]
+                {:timeline (history/full-timeline (history-db) dev-id)})})
+
+(registry/register!
+ :atlas.llm-ide/snapshot-and-diff
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/snapshot-and-diff}
+ {:execution-function/context [:history/version-label]
+  :execution-function/response [:history/snapshot-result :history/diff :history/vocabulary-diff
+                                :history/summary :history/invariants]
+  :execution-function/deps #{:atlas.llm-ide/snapshot-registry}
+  :atlas/impl (fn [{:keys [:history/version-label]}]
+                (let [label (or version-label
+                                (str "snap-" #?(:clj (System/currentTimeMillis)
+                                                :cljs (.now js/Date))))
+                      prev-versions (history/versions (history-db))
+                      prev-version (last prev-versions)
+                      {:keys [snapshot versions]} (take-snapshot! label)
+                      db-after (history-db)
+                      diff-data (when prev-version
+                                  {:snap-changes (history/version-diff db-after label)
+                                   :edge-diff (history/edge-diff db-after prev-version label)
+                                   :vocabulary-diff (history/vocabulary-diff db-after prev-version label)
+                                   :summary {:old (history/version-summary db-after prev-version)
+                                             :new (history/version-summary db-after label)}})
+                      invariants (ide/check-invariants)]
+                  (cond-> {:snapshot snapshot
+                           :version label
+                           :previous-version prev-version
+                           :invariants invariants
+                           :versions versions}
+                    diff-data (assoc :diff diff-data))))})
 

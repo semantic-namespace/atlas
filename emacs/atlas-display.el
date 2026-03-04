@@ -20,6 +20,7 @@
 (declare-function atlas-browse-find-by-aspect "atlas-browse")
 (declare-function atlas-browse-producers "atlas-browse")
 (declare-function atlas-business-info "atlas-business")
+(declare-function atlas-drill-entity-at-point "atlas-browse")
 
 ;;; Major Mode
 
@@ -32,6 +33,7 @@
     (define-key map (kbd "TAB") 'forward-button)
     (define-key map (kbd "<backtab>") 'backward-button)
     (define-key map (kbd "d") 'atlas-jump-to-definition-at-point)
+    (define-key map (kbd "f") 'atlas-drill-entity-at-point)
     (define-key map (kbd "i") 'atlas-browse-entity-info)
     (define-key map (kbd "a") 'atlas-browse-find-by-aspect)
     map)

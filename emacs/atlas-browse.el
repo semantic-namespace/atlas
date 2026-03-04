@@ -136,6 +136,47 @@
     (pop-to-buffer buf)))
 
 ;;;###autoload
+(defun atlas-browse-by-type ()
+  "Browse entities by type: select type → select entity → show info.
+Step 1: completing-read over ontology types (with entity counts as annotations).
+Step 2: completing-read over entities of the selected type.
+Step 3: display entity info for the selected entity."
+  (interactive)
+  ;; Step 1: fetch types with counts and completing-read
+  (let* ((types-raw  (atlas--eval-safe "(list-entity-types-with-counts)" []))
+         (types-list (atlas--to-list types-raw))
+         (type->count (let ((tbl (make-hash-table :test 'equal)))
+                        (dolist (entry types-list)
+                          (let* ((type  (atlas--get entry 'entity-type/type))
+                                 (count (atlas--get entry 'entity-type/count))
+                                 (s     (if (symbolp type) (symbol-name type) (format "%s" type)))
+                                 (key   (if (string-prefix-p ":" s) (substring s 1) s)))
+                            (puthash key count tbl)))
+                        tbl))
+         (type-strs   (sort (hash-table-keys type->count) #'string<))
+         (annotate-type (lambda (candidate)
+                          (when-let ((n (gethash candidate type->count)))
+                            (propertize (format " (%d)" n) 'face 'atlas-annotation-face))))
+         (selected-type
+          (let ((completion-extra-properties `(:annotation-function ,annotate-type)))
+            (completing-read "Entity type: " type-strs nil t)))
+         (selected-type-kw (atlas--to-keyword selected-type))
+
+         ;; Step 2: fetch entities of that type and completing-read
+         (entities-raw  (atlas--eval-safe
+                         (format "(list-entities-of-type %s)" selected-type-kw) []))
+         (entities-list (atlas--to-list entities-raw))
+         (entity-strs   (mapcar (lambda (e)
+                                  (let ((s (if (symbolp e) (symbol-name e) (format "%s" e))))
+                                    (if (string-prefix-p ":" s) (substring s 1) s)))
+                                entities-list))
+         (selected-entity
+          (completing-read (format "[%s] Entity: " selected-type) entity-strs nil t)))
+
+    ;; Step 3: display entity info
+    (atlas-browse-entity-info selected-entity)))
+
+;;;###autoload
 (defun atlas-browse-entity-info (entity)
   "Show detailed info for ENTITY."
   (interactive
@@ -302,6 +343,49 @@
     (pop-to-buffer buf)))
 
 ;;;###autoload
+(defun atlas-browse-recursive-deps (entity)
+  "Show all transitive (recursive) dependencies for ENTITY.
+Traverses execution-functions, structure-components and their deps recursively.
+Displays results in BFS order with indentation showing dependency depth."
+  (interactive
+   (list (atlas--completing-read-entity "Entity: ")))
+  (let* ((entity-kw (atlas--to-keyword entity))
+         (deps (atlas--eval-safe (format "(recursive-dependencies-of %s)" entity-kw) []))
+         (buf (atlas--buffer (format "rdeps:%s" entity))))
+    (with-current-buffer buf
+      (setq atlas--last-command (lambda () (atlas-browse-recursive-deps entity)))
+      (atlas--insert-header (format "Recursive Dependencies of %s" entity))
+      (insert (propertize "All transitive dependencies (BFS order):\n\n"
+                          'face 'font-lock-comment-face))
+      (let ((deps-list (atlas--to-list deps)))
+        (if (and deps-list (> (length deps-list) 0))
+            (dolist (dep deps-list)
+              (let* ((dep-id    (atlas--get dep 'dep/dev-id))
+                     (dep-type  (atlas--get dep 'dep/type))
+                     (depth     (or (atlas--get dep 'dep/depth) 1))
+                     (via       (atlas--get dep 'dep/via))
+                     (indent    (make-string (* 2 (1- depth)) ?\s))
+                     (type-str  (when dep-type
+                                  (let ((s (if (symbolp dep-type)
+                                              (symbol-name dep-type)
+                                            (format "%s" dep-type))))
+                                    (replace-regexp-in-string "^:?atlas/" "" s)))))
+                (insert indent)
+                (insert (propertize "→ " 'face 'atlas-annotation-face))
+                (atlas--insert-entity dep-id)
+                (when type-str
+                  (insert (propertize (format " [%s]" type-str)
+                                      'face 'atlas-annotation-face)))
+                (when (and via (> depth 1))
+                  (insert (propertize (format "  ← %s" via)
+                                      'face 'font-lock-comment-face)))
+                (insert "\n")))
+          (insert "  (no dependencies)\n")))
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
+;;;###autoload
 (defun atlas-browse-producers (data-key)
   "Find functions that produce DATA-KEY."
   (interactive
@@ -405,6 +489,91 @@
         (markdown-mode))
       (read-only-mode 1))
     (pop-to-buffer buf)))
+
+;;; Prop drilling - follow references interactively
+
+(defun atlas--drill-entity (start-dev-id)
+  "Iteratively navigate entity props starting from START-DEV-ID.
+Loop: select prop → select value → if value is an entity, repeat with it.
+Exit with C-g at any completing-read, or when a non-entity value is selected."
+  (let ((current start-dev-id))
+    (catch 'done
+      (while t
+        ;; Fetch prop keys for the current entity
+        (let* ((raw-keys  (atlas--eval-safe
+                           (format "(entity-prop-keys %s)" (atlas--to-keyword current)) []))
+               (keys-list (atlas--to-list raw-keys)))
+          (unless keys-list
+            (message "No props found for %s" current)
+            (throw 'done nil))
+
+          ;; Step 1: completing-read over prop keys
+          (let* ((key-strs (mapcar (lambda (k)
+                                     (let ((s (if (symbolp k) (symbol-name k) (format "%s" k))))
+                                       (if (string-prefix-p ":" s) (substring s 1) s)))
+                                   keys-list))
+                 (selected-key (completing-read
+                                (format "[%s] prop: " current)
+                                key-strs nil t))
+                 (selected-key-kw (atlas--to-keyword selected-key))
+
+                 ;; Fetch items of selected prop
+                 (raw-items  (atlas--eval-safe
+                              (format "(entity-prop-items %s %s)"
+                                      (atlas--to-keyword current) selected-key-kw) []))
+                 (items-list (atlas--to-list raw-items)))
+
+            (unless items-list
+              (message "[%s › %s] (empty)" current selected-key)
+              (throw 'done nil))
+
+            ;; Step 2: completing-read over prop values, annotated with [entity]
+            (let* ((item-strs  (mapcar (lambda (item)
+                                         (let* ((val (atlas--get item 'item/value))
+                                                (s   (if (symbolp val) (symbol-name val)
+                                                       (format "%s" val))))
+                                           (if (string-prefix-p ":" s) (substring s 1) s)))
+                                       items-list))
+                   (item-flags (mapcar (lambda (item)
+                                         (atlas--get item 'item/is-dev-id?))
+                                       items-list))
+                   (annotate-fn
+                    (lambda (candidate)
+                      (let* ((idx  (seq-position item-strs candidate #'equal))
+                             (flag (and idx (nth item-flags idx))))
+                        (when flag
+                          (propertize " [entity]" 'face 'atlas-annotation-face)))))
+                   (completion-extra-properties `(:annotation-function ,annotate-fn))
+                   (selected-val (completing-read
+                                  (format "[%s › %s] value: " current selected-key)
+                                  item-strs nil t))
+                   (selected-idx       (seq-position item-strs selected-val #'equal))
+                   (selected-is-entity (and selected-idx (nth item-flags selected-idx))))
+
+              (if selected-is-entity
+                  ;; It's a registered entity — drill into it
+                  (setq current selected-val)
+                ;; Leaf value — show info for current entity and stop
+                (message "[%s › %s] = :%s  (not an entity — showing %s)"
+                         current selected-key selected-val current)
+                (atlas-browse-entity-info current)
+                (throw 'done nil)))))))))
+
+;;;###autoload
+(defun atlas-drill-entity-at-point ()
+  "Drill into props of the dev-id keyword at point.
+Reads the keyword under cursor, checks it's a registered entity, then
+opens an interactive prop navigator: select prop → select value → follow
+entity references recursively.  C-g exits at any step."
+  (interactive)
+  (let ((kw (atlas--keyword-at-point)))
+    (if (not kw)
+        (message "No namespaced keyword at point (need :ns/name)")
+      (let* ((is-entity (atlas--eval-safe (format "(registered-entity? %s)" kw))))
+        (if (not is-entity)
+            (message "%s is not a registered entity" kw)
+          ;; Strip leading colon for display / internal use
+          (atlas--drill-entity (if (string-prefix-p ":" kw) (substring kw 1) kw)))))))
 
 (provide 'atlas-browse)
 ;;; atlas-browse.el ends here

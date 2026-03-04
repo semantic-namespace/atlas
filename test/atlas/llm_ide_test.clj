@@ -5,6 +5,7 @@
             [atlas.ontology :as ontology]
             [atlas.ontology.execution-function :as ef]
             [atlas.ontology.interface-endpoint :as ie]
+            [atlas.ide :as ide]
             [atlas.datalog :as datalog]))
 
 (use-fixtures :each
@@ -338,3 +339,153 @@
       (is (vector? (:atlas/tools ctx)))
       (is (vector? (:atlas/types ctx)))
       (is (number? (:atlas/entity-count ctx))))))
+
+;; =============================================================================
+;; HISTORY TOOL TESTS
+;; =============================================================================
+
+(deftest test-history-snapshot-registry
+  (llm-ide/history-reset!)
+  (setup-test-registry!)
+  (testing "Snapshots current registry state"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/snapshot-registry
+                   :tool/args {:history/version-label "v1"}})]
+      (is (true? (:success? result)))
+      (let [data (:data result)]
+        (is (map? (:snapshot data)))
+        (is (pos? (get-in data [:snapshot :entities])))
+        (is (= ["v1"] (:versions data))))))
+  (testing "Second snapshot appears in versions list"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/snapshot-registry
+                   :tool/args {:history/version-label "v2"}})]
+      (is (true? (:success? result)))
+      (is (= ["v1" "v2"] (get-in result [:data :versions]))))))
+
+(deftest test-history-versions
+  (llm-ide/history-reset!)
+  (testing "Empty history returns empty list"
+    (let [result (llm-ide/handle-tool {:tool/name :atlas.llm-ide/history-versions :tool/args {}})]
+      (is (true? (:success? result)))
+      (is (= [] (get-in result [:data :versions])))))
+  (testing "Lists versions after snapshots"
+    (setup-test-registry!)
+    (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                          :tool/args {:history/version-label "morning"}})
+    (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                          :tool/args {:history/version-label "afternoon"}})
+    (let [result (llm-ide/handle-tool {:tool/name :atlas.llm-ide/history-versions :tool/args {}})]
+      (is (true? (:success? result)))
+      (is (= ["afternoon" "morning"] (get-in result [:data :versions]))))))
+
+(deftest test-history-diff-versions
+  (llm-ide/history-reset!)
+  (setup-test-registry!)
+  ;; Snapshot baseline
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "before"}})
+  ;; Simulate developer adding new entities
+  (registry/register!
+   :fn/new-feature
+   :atlas/execution-function
+   #{:tier/service :domain/users :operation/create}
+   {:execution-function/context [:user/data]
+    :execution-function/response [:user/id]
+    :execution-function/deps #{:component/db}})
+  ;; Snapshot after
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "after"}})
+  (testing "Diff detects new entity"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/diff-versions
+                   :tool/args {:history/version-old "before"
+                               :history/version-new "after"}})]
+      (is (true? (:success? result)))
+      (let [data (:data result)]
+        (is (map? (:snap-changes data)))
+        (is (map? (:edge-diff data)))
+        (is (map? (:vocabulary-diff data)))
+        ;; "after" has a new entity (fn/new-feature) with added aspects
+        (is (some #(= :fn/new-feature (:snap/dev-id %))
+                  (get-in data [:snap-changes :new])))))))
+
+(deftest test-history-version-summary
+  (llm-ide/history-reset!)
+  (setup-test-registry!)
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "base"}})
+  (registry/register!
+   :fn/extra
+   :atlas/execution-function
+   #{:tier/service :domain/auth :operation/refresh}
+   {:execution-function/context [:auth/refresh-token]
+    :execution-function/response [:auth/token]
+    :execution-function/deps #{}})
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "extended"}})
+  (testing "Version summary shows changed entities per type"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/version-summary
+                   :tool/args {:history/version-label "extended"}})]
+      (is (true? (:success? result)))
+      (let [data (:data result)]
+        (is (sequential? (:summary data)))
+        (is (sequential? (:diff data)))
+        (is (sequential? (:renames data)))
+        ;; fn/extra is a new execution-function, should appear in diff
+        (is (some #(= :fn/extra (:snap/dev-id %)) (:diff data)))))))
+
+(deftest test-history-entity-timeline
+  (llm-ide/history-reset!)
+  (setup-test-registry!)
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "snap-1"}})
+  (llm-ide/handle-tool {:tool/name :atlas.llm-ide/snapshot-registry
+                        :tool/args {:history/version-label "snap-2"}})
+  (testing "Entity timeline shows all snapshots for a dev-id"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/entity-timeline
+                   :tool/args {:entity/dev-id :fn/get-user}})]
+      (is (true? (:success? result)))
+      (let [timeline (get-in result [:data :timeline])]
+        (is (seq timeline))
+        (is (every? #(= :fn/get-user (:snap/dev-id %)) timeline))
+        (is (= 2 (count timeline)))))))
+
+(deftest test-history-snapshot-and-diff
+  (llm-ide/history-reset!)
+  (setup-test-registry!)
+  (testing "First snapshot has no diff (no previous version)"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/snapshot-and-diff
+                   :tool/args {:history/version-label "first"}})]
+      (is (true? (:success? result)))
+      (let [data (:data result)]
+        (is (= "first" (:version data)))
+        (is (nil? (:previous-version data)))
+        (is (map? (:invariants data)))
+        (is (not (contains? data :diff))))))
+  (testing "Second snapshot includes diff against previous"
+    (registry/register!
+     :fn/new-endpoint-fn
+     :atlas/execution-function
+     #{:tier/service :domain/auth :operation/logout}
+     {:execution-function/context [:auth/token]
+      :execution-function/response [:auth/logged-out?]
+      :execution-function/deps #{}})
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/snapshot-and-diff
+                   :tool/args {:history/version-label "second"}})]
+      (is (true? (:success? result)))
+      (let [data (:data result)]
+        (is (= "second" (:version data)))
+        (is (= "first" (:previous-version data)))
+        (is (map? (:invariants data)))
+        (is (contains? data :diff))
+        ;; New entity should appear in snap-changes
+        (is (some #(= :fn/new-endpoint-fn (:snap/dev-id %))
+                  (get-in data [:diff :snap-changes]))))))
+  (testing "History intent is discoverable in tools-by-category"
+    (let [cats (llm-ide/tools-by-category)]
+      (is (contains? (set (map str (keys (:by-intent cats)))) ":intent/history")))))

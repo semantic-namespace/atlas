@@ -51,6 +51,7 @@
 (require 'atlas-explorer)
 (require 'atlas-authoring)
 (require 'atlas-interactive)
+(require 'atlas-history)
 
 ;;; Explorer Transient Menu
 
@@ -76,13 +77,16 @@
 This is the main menu for daily use. Press 'z' for advanced features."
   [["Browse"
     ("e" "List entities" atlas-browse-list-entities)
+    ("t" "By type →entity →info" atlas-browse-by-type)
     ("a" "Find by aspect" atlas-browse-find-by-aspect)
     ("A" "List aspects" atlas-browse-list-aspects)
     ("X" "Explorer (v2)" atlas-explorer)]
    ["Entity Details"
     ("i" "Entity info" atlas-browse-entity-info)
+    ("f" "Follow props at point" atlas-drill-entity-at-point)
     ("D" "Dependencies" atlas-browse-dependencies)
-    ("R" "Dependents" atlas-browse-dependents)]
+    ("R" "Dependents" atlas-browse-dependents)
+    ("T" "Transitive deps" atlas-browse-recursive-deps)]
    ["Authoring"
     ("N" "New entity (interactive)" atlas-interactive-author-entity)
     ("+" "Add aspect to set at point" atlas-interactive-add-aspect-to-set)
@@ -109,6 +113,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("c" "Check invariants" atlas-browse-check-invariants)
     ("G" "Refresh cache" atlas--invalidate-cache)
     ("!" "Toggle debug" atlas-toggle-debug)]
+   ["History"
+    ("h" "History menu →" atlas-history)]
    ["Navigation"
     ("z" "Advanced tools →" atlas-advanced)]])
 
