@@ -53,6 +53,7 @@
 (require 'atlas-interactive)
 (require 'atlas-history)
 (require 'atlas-lens)
+(require 'atlas-at-point)
 
 ;;; Explorer Transient Menu
 
@@ -87,7 +88,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("f" "Follow props at point" atlas-drill-entity-at-point)
     ("D" "Dependencies" atlas-browse-dependencies)
     ("R" "Dependents" atlas-browse-dependents)
-    ("T" "Transitive deps" atlas-browse-recursive-deps)]
+    ("T" "Transitive deps" atlas-browse-recursive-deps)
+    ("W" "What do I need?" atlas-browse-deps-summary)]
    ["Authoring"
     ("N" "New entity (interactive)" atlas-interactive-author-entity)
     ("+" "Add aspect to set at point" atlas-interactive-add-aspect-to-set)

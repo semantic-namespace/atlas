@@ -18,9 +18,19 @@
 ;; Forward declarations for functions defined in other modules
 (declare-function atlas-browse-entity-info "atlas-browse")
 (declare-function atlas-browse-find-by-aspect "atlas-browse")
+(declare-function atlas-browse-check-invariants "atlas-browse")
+(declare-function atlas-browse-execution-order "atlas-browse")
 (declare-function atlas-browse-producers "atlas-browse")
 (declare-function atlas-business-info "atlas-business")
 (declare-function atlas-drill-entity-at-point "atlas-browse")
+(declare-function atlas-history "atlas-history")
+(declare-function atlas-at-point-info "atlas-at-point")
+(declare-function atlas-at-point-deps "atlas-at-point")
+(declare-function atlas-at-point-transitive-deps "atlas-at-point")
+(declare-function atlas-at-point-deps-summary "atlas-at-point")
+(declare-function atlas-at-point-dependents "atlas-at-point")
+(declare-function atlas-at-point-producers "atlas-at-point")
+(declare-function atlas-at-point-consumers "atlas-at-point")
 
 ;;; Major Mode
 
@@ -32,12 +42,22 @@
     (define-key map (kbd "RET") 'push-button)
     (define-key map (kbd "TAB") 'forward-button)
     (define-key map (kbd "<backtab>") 'backward-button)
-    (define-key map (kbd "d") 'atlas-jump-to-definition-at-point)
+    (define-key map (kbd "i") 'atlas-at-point-info)
     (define-key map (kbd "f") 'atlas-drill-entity-at-point)
-    (define-key map (kbd "i") 'atlas-browse-entity-info)
     (define-key map (kbd "a") 'atlas-browse-find-by-aspect)
+    (define-key map (kbd "d") 'atlas-at-point-deps)
+    (define-key map (kbd "t") 'atlas-at-point-transitive-deps)
+    (define-key map (kbd "w") 'atlas-at-point-deps-summary)
+    (define-key map (kbd "r") 'atlas-at-point-dependents)
+    (define-key map (kbd "p") 'atlas-at-point-producers)
+    (define-key map (kbd "u") 'atlas-at-point-consumers)
+    (define-key map (kbd "c") 'atlas-browse-check-invariants)
+    (define-key map (kbd "x") 'atlas-browse-execution-order)
+    (define-key map (kbd "h") 'atlas-history)
     map)
   "Keymap for `atlas-mode'.")
+
+(declare-function atlas-xref-setup "atlas-at-point")
 
 (define-derived-mode atlas-mode special-mode "Atlas"
   "Major mode for Atlas semantic registry browsing.
@@ -45,7 +65,8 @@
 \\{atlas-mode-map}"
   :group 'atlas
   (setq-local revert-buffer-function #'atlas--revert-buffer)
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (atlas-xref-setup))
 
 (defvar-local atlas--last-command nil
   "Last command used to populate this buffer, for refreshing.")

@@ -376,11 +376,84 @@ Displays results in BFS order with indentation showing dependency depth."
                 (when type-str
                   (insert (propertize (format " [%s]" type-str)
                                       'face 'atlas-annotation-face)))
-                (when (and via (> depth 1))
+                (when (atlas--get dep 'dep/already-seen?)
+                  (insert (propertize " ↑" 'face 'font-lock-comment-face)))
+                (when (and via (> depth 1) (not (atlas--get dep 'dep/already-seen?)))
                   (insert (propertize (format "  ← %s" via)
                                       'face 'font-lock-comment-face)))
+                ;; Show context-deps (entities found in context/input)
+                (let ((ctx-deps (atlas--to-list (atlas--get dep 'dep/context-deps))))
+                  (when (and ctx-deps (> (length ctx-deps) 0)
+                             (not (atlas--get dep 'dep/already-seen?)))
+                    (insert "\n" indent "  ")
+                    (insert (propertize "deps via context: " 'face 'atlas-warning-face))
+                    (dolist (d ctx-deps)
+                      (atlas--insert-entity d)
+                      (insert " "))))
+                ;; Show pure input data keys
+                (let ((input (atlas--to-list (atlas--get dep 'dep/input))))
+                  (when (and input (> (length input) 0)
+                             (not (atlas--get dep 'dep/already-seen?)))
+                    (insert "\n" indent "  ")
+                    (insert (propertize "input: " 'face 'font-lock-comment-face))
+                    (insert (propertize
+                             (mapconcat (lambda (k)
+                                          (let ((s (if (symbolp k) (symbol-name k) (format "%s" k))))
+                                            (if (string-prefix-p ":" s) s (concat ":" s))))
+                                        input " ")
+                             'face 'font-lock-doc-face))))
                 (insert "\n")))
           (insert "  (no dependencies)\n")))
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
+;;;###autoload
+(defun atlas-browse-deps-summary (entity)
+  "Show flat summary of all transitive deps and data keys for ENTITY.
+What do I need to test/run this entity? Two lists:
+1. All entity deps (components, functions)
+2. All data keys needed (context/input across the full tree)"
+  (interactive
+   (list (atlas--completing-read-entity "Entity: ")))
+  (let* ((entity-kw (atlas--to-keyword entity))
+         (summary (atlas--eval-safe
+                   (format "(recursive-dependencies-summary %s)" entity-kw)))
+         (buf (atlas--buffer (format "summary:%s" entity))))
+    (with-current-buffer buf
+      (setq atlas--last-command (lambda () (atlas-browse-deps-summary entity)))
+      (atlas--insert-header (format "Test/Dev Summary: %s" entity))
+
+      ;; Root context
+      (when-let ((ctx (atlas--to-list (atlas--get summary 'summary/context))))
+        (atlas--insert-subheader (format "Root context (%d)" (length ctx)))
+        (dolist (k ctx)
+          (insert "  ")
+          (atlas--insert-data-key k)
+          (insert "\n"))
+        (insert "\n"))
+
+      ;; All entity deps
+      (let ((deps (atlas--to-list (atlas--get summary 'summary/deps))))
+        (atlas--insert-subheader (format "All entity deps (%d)" (length deps)))
+        (if deps
+            (dolist (d deps)
+              (insert "  ")
+              (atlas--insert-entity d)
+              (insert "\n"))
+          (insert "  (none)\n"))
+        (insert "\n"))
+
+      ;; All data keys
+      (let ((keys (atlas--to-list (atlas--get summary 'summary/data-keys))))
+        (atlas--insert-subheader (format "All data keys needed (%d)" (length keys)))
+        (if keys
+            (dolist (k keys)
+              (insert "  ")
+              (atlas--insert-data-key k)
+              (insert "\n"))
+          (insert "  (none)\n")))
+
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))

@@ -459,12 +459,29 @@
   [dev-id]
   (vec (sort (effective-dependencies-for (ensure-keyword dev-id)))))
 
+(defn- dep-entity?
+  "Returns true if kw is a registered execution-function or structure-component."
+  [kw]
+  (when-let [identity (rt/identity-for kw)]
+    (or (contains? identity :atlas/execution-function)
+        (contains? identity :atlas/structure-component))))
+
+(defn- classify-context
+  "Split context/input keys into data inputs vs entity deps.
+   Returns {:input [data-keys] :context-deps [entity-dev-ids]}."
+  [context-keys]
+  (let [{deps true data false}
+        (group-by (fn [k] (boolean (dep-entity? k))) context-keys)]
+    {:input (vec (sort (or data [])))
+     :context-deps (vec (sort (or deps [])))}))
+
 (defn recursive-dependencies-of
   "Get all transitive dependencies for an entity, recursively.
    Traverses execution-function/deps, structure-component/deps, and endpoint/deps.
+   Context/input keys that are execution-functions or structure-components are
+   classified as :dep/context-deps; the rest are :dep/input.
    Returns flat vector in BFS order, excluding the root entity itself.
-   Each entry: {:dep/dev-id kw :dep/type kw :dep/depth int :dep/via kw}
-   Handles cycles via visited set."
+   Already-seen nodes are shown inline (so all references are visible) but not recursed into."
   [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)
         entity-type-for (fn [id]
@@ -477,19 +494,53 @@
       (if (empty? queue)
         result
         (let [[current depth via] (first queue)
-              rest-queue (subvec queue 1)]
-          (if (contains? visited current)
-            (recur rest-queue visited result)
+              rest-queue (subvec queue 1)
+              already-seen? (contains? visited current)
+              {:keys [input context-deps]} (classify-context (ot/context-for current))
+              entry {:dep/dev-id current
+                     :dep/type (entity-type-for current)
+                     :dep/depth depth
+                     :dep/via via
+                     :dep/already-seen? already-seen?
+                     :dep/input input
+                     :dep/context-deps context-deps}]
+          (if already-seen?
+            (recur rest-queue visited (conj result entry))
             (let [deps (sort (effective-dependencies-for current))
-                  new-deps (remove visited deps)
-                  entry {:dep/dev-id current
-                         :dep/type (entity-type-for current)
-                         :dep/depth depth
-                         :dep/via via}]
+                  new-deps (remove visited deps)]
               (recur
                (into rest-queue (map #(vector % (inc depth) current) new-deps))
                (conj visited current)
                (conj result entry)))))))))
+
+(defn recursive-dependencies-summary
+  "Get a flat summary of all transitive dependencies for testing/development.
+   Context/input keys that are execution-functions or structure-components are
+   merged into :summary/deps; only pure data keys appear in :summary/data-keys.
+   Returns:
+     :summary/root      - the queried entity dev-id
+     :summary/context   - root entity's own pure input keys
+     :summary/deps      - distinct sorted list of all transitive entity deps
+     :summary/data-keys - distinct sorted list of all pure data keys needed"
+  [dev-id]
+  (let [dev-id-kw (ensure-keyword dev-id)
+        {:keys [input context-deps]} (classify-context (ot/context-for dev-id-kw))
+        tree (recursive-dependencies-of dev-id-kw)
+        unique-entries (remove :dep/already-seen? tree)
+        all-deps (->> unique-entries
+                      (mapcat (fn [e] (cons (:dep/dev-id e) (:dep/context-deps e))))
+                      (into (set context-deps))
+                      sort
+                      vec)
+        all-data-keys (->> unique-entries
+                           (mapcat :dep/input)
+                           (into (set input))
+                           sort
+                           vec)]
+    {:summary/root dev-id-kw
+     :summary/context input
+     :summary/deps all-deps
+     :summary/data-keys all-data-keys}))
 
 (defn producers-of
   "Find functions that produce a data key."
