@@ -103,32 +103,42 @@ Falls back to completing-read."
         (projectile-project-root))
       default-directory))
 
-(defun atlas--grep-register-locations (keyword-str)
-  "Find register! call sites for KEYWORD-STR using ripgrep or grep.
-Returns list of (file line) pairs."
-  (let* ((escaped (regexp-quote keyword-str))
-         (root (atlas--project-root))
+(defun atlas--scan-file-for-register (file keyword-str)
+  "Scan FILE for a register! call containing KEYWORD-STR.
+Returns (file line-of-register!) or nil. Handles multiline calls."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (catch 'found
+      (while (search-forward keyword-str nil t)
+        (let ((kw-line (line-number-at-pos)))
+          (save-excursion
+            (beginning-of-line)
+            (dotimes (i 4)  ; current line + up to 3 lines back
+              (when (looking-at ".*register!")
+                (throw 'found (list file (line-number-at-pos))))
+              (unless (bobp) (forward-line -1))))))
+      nil)))
+
+(defun atlas--find-register-locations (keyword-str)
+  "Find register! call sites for KEYWORD-STR.
+Uses grep/rg to find candidate files, then scans in Elisp.
+Handles same-line and multiline register! calls."
+  (let* ((root (atlas--project-root))
          (default-directory root)
+         (escaped (regexp-quote keyword-str))
          (cmd (if (executable-find "rg")
-                  ;; rg supports PCRE-like \s and \b
-                  (let ((pattern (format "register!\\s+%s\\b" escaped)))
-                    (format "rg -n --type clojure '%s' 2>/dev/null" pattern))
-                ;; Basic grep: use POSIX classes, -E for extended regex
-                (let ((pattern (format "register![[:space:]]+%s([[:space:]]|$)" escaped)))
-                  (format "grep -rEn '%s' --include='*.clj' --include='*.cljc' . 2>/dev/null"
-                          pattern))))
-         (_ (message "[atlas-xref] grep cmd: %s" cmd))
-         (_ (message "[atlas-xref] grep cwd: %s" default-directory))
-         (output (shell-command-to-string cmd))
-         (_ (message "[atlas-xref] grep output: %s" (substring output 0 (min 500 (length output)))))
-         (lines (split-string output "\n" t)))
+                  (format "rg -l --type clojure '%s' 2>/dev/null" escaped)
+                (format "grep -rlE '%s' --include='*.clj' --include='*.cljc' . 2>/dev/null" escaped)))
+         (_ (message "[atlas-xref] candidate files cmd: %s" cmd))
+         (rel-files (split-string (shell-command-to-string cmd) "\n" t)))
+    (message "[atlas-xref] candidate files: %s" rel-files)
     (delq nil
-          (mapcar (lambda (line)
-                    (when (string-match "^\\([^:]+\\):\\([0-9]+\\):" line)
-                      (let ((file (match-string 1 line))
-                            (lnum (string-to-number (match-string 2 line))))
-                        (list (expand-file-name file root) lnum))))
-                  lines))))
+          (mapcar (lambda (rel-file)
+                    (atlas--scan-file-for-register
+                     (expand-file-name rel-file root)
+                     keyword-str))
+                  rel-files))))
 
 (defun atlas-xref-backend ()
   "Atlas xref backend identifier."
@@ -154,7 +164,7 @@ Returns list of (file line) pairs."
   (message "[atlas-xref] definitions called for: %s" identifier)
   (let* ((root (atlas--project-root))
          (_ (message "[atlas-xref] project root: %s" root))
-         (locations (atlas--grep-register-locations identifier)))
+         (locations (atlas--find-register-locations identifier)))
     (message "[atlas-xref] found %d locations" (length locations))
     (dolist (loc locations)
       (message "[atlas-xref]   location: %s:%d" (nth 0 loc) (nth 1 loc)))
@@ -184,8 +194,31 @@ Ensures atlas is first by removing and re-adding at the front."
 
 ;;; atlas-clj-mode — minor mode for Clojure buffers
 
+(defun atlas-goto-definition ()
+  "Go to register! definition for Atlas keyword at point.
+Falls through to `xref-find-definitions' for non-Atlas keywords."
+  (interactive)
+  (let ((kw (atlas--keyword-at-point)))
+    (if (and kw
+             (cider-connected-p)
+             (atlas--eval-safe (format "(registered-entity? %s)" kw)))
+        (let ((locations (atlas--find-register-locations kw)))
+          (if locations
+              (let* ((loc (car locations))
+                     (file (nth 0 loc))
+                     (line (nth 1 loc)))
+                (xref-push-marker-stack)
+                (find-file file)
+                (goto-char (point-min))
+                (forward-line (1- line)))
+            (user-error "Atlas: register! call not found for %s" kw)))
+      ;; Not an Atlas entity — fall through to default M-.
+      (let ((xref-backend-functions (remq 'atlas-xref-backend xref-backend-functions)))
+        (call-interactively 'xref-find-definitions)))))
+
 (defvar atlas-clj-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "M-.") 'atlas-goto-definition)
     (define-key map (kbd "C-c a a") 'atlas)
     (define-key map (kbd "C-c a i") 'atlas-at-point-info)
     (define-key map (kbd "C-c a t") 'atlas-at-point-transitive-deps)
@@ -236,7 +269,7 @@ Falls through to CIDER/LSP for non-Atlas keywords.
   (when-let* ((kw (atlas--keyword-at-point)))
     (let ((reg (atlas--eval-safe (format "(registered-entity? %s)" kw))))
       (message "6. registered-entity? %s => %s" kw reg))
-    (let ((locs (atlas--grep-register-locations kw)))
+    (let ((locs (atlas--find-register-locations kw)))
       (message "7. grep locations: %s" locs)))
   (message "=== end diagnosis ==="))
 
