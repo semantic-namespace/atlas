@@ -205,6 +205,53 @@
        (map first)
        (sort-by :snap/dev-id)))
 
+(defn version-deleted
+  "Entities deleted in a given version (present in previous snapshot, absent now).
+   Returns seq of {:snap/dev-id ... :snap/type ...} sorted by dev-id."
+  [db version]
+  (->> (d/q '[:find (pull ?e [:snap/dev-id :snap/type])
+              :in $ ?version
+              :where
+              [?e :snap/version ?version]
+              [?e :snap/deleted true]]
+            db version)
+       (map first)
+       (sort-by :snap/dev-id)))
+
+(defn detect-renames
+  "Heuristic rename detection between two versions.
+   Pairs deleted entities in v-new with new entities that have the same type
+   and exact same aspects from v-old.
+   Returns [{:from old-dev-id :to new-dev-id :type etype :aspects #{...}}]."
+  [db v-old v-new]
+  (let [deleted (version-deleted db v-new)
+        ;; New entities: all aspects are in snap/added, no snap/removed
+        new-entities (->> (version-diff db v-new)
+                          (filter (fn [snap]
+                                    (and (:snap/added snap)
+                                         (not (:snap/removed snap))))))
+        ;; Get aspects for each deleted entity from v-old
+        deleted-with-aspects
+        (map (fn [{:snap/keys [dev-id type]}]
+               (let [aspects (->> (d/q '[:find [?a ...]
+                                         :in $ ?dev-id ?version
+                                         :where
+                                         [?e :snap/dev-id ?dev-id]
+                                         [?e :snap/version ?version]
+                                         [?e :snap/aspect ?a]]
+                                       db dev-id v-old)
+                                  set)]
+                 {:dev-id dev-id :type type :aspects aspects}))
+             deleted)]
+    ;; Exact match: same type + same aspects = rename
+    (vec
+     (for [{del-id :dev-id del-type :type del-aspects :aspects} deleted-with-aspects
+           :when (seq del-aspects)
+           {:snap/keys [added dev-id type]} new-entities
+           :when (and (= del-type type)
+                      (= del-aspects (set added)))]
+       {:from del-id :to dev-id :type del-type :aspects del-aspects}))))
+
 ;; =============================================================================
 ;; Aspect-level queries
 ;; =============================================================================

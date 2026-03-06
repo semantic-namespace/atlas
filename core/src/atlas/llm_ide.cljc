@@ -78,6 +78,24 @@
 
 (s/def :entity/dev-id-set (s/coll-of qualified-keyword?))
 
+(defn- ensure-keyword
+  "Convert string to keyword, handling colon-prefixed strings from MCP/JSON."
+  [x]
+  (cond
+    (keyword? x) x
+    (string? x)  (keyword (cond-> x (= \: (first x)) (subs 1)))
+    :else        x))
+
+(defn- ensure-keyword-set
+  "Normalize a dev-id-set argument into a set of keywords.
+   Handles: keywords, strings, colon-prefixed strings, sets, vectors."
+  [dev-id-set]
+  (let [coll (cond
+               (set? dev-id-set)        dev-id-set
+               (sequential? dev-id-set) (set dev-id-set)
+               :else                    #{dev-id-set})]
+    (set (map ensure-keyword coll))))
+
 (s/def :entity/dev-id-or-set (s/or :one qualified-keyword? :multiple :entity/dev-id-set))
 
 (s/def :query/max-hops int?)
@@ -675,12 +693,12 @@
   :execution-function/response [:batch/results :batch/summary]
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id-set]}]
-                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                (let [entity-set (ensure-keyword-set dev-id-set)
                       results (mapv (fn [entity-id]
                                      {:entity entity-id
                                       :info (ide/entity-info entity-id)
                                       :exists? (some? (lookup/identity-for entity-id))})
-                                   (mapv keyword entity-set)) 
+                                   (vec entity-set))
                       existing (filter :exists? results)
                       missing (remove :exists? results)]
                   {:results (vec existing)
@@ -700,7 +718,7 @@
                                 :comparison/metrics]
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id-set]}]
-                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                (let [entity-set (ensure-keyword-set dev-id-set)
 
                       ;; Gather entity data
                       entities (mapv (fn [id]
@@ -713,7 +731,7 @@
                                          :tiers (vec (extract-aspects id "tier"))
                                          :in-degree (in-degree id)
                                          :out-degree (out-degree id)}))
-                                    entity-set)
+                                    (vec entity-set))
                       valid-entities (filterv some? entities)
 
                       ;; Find common and unique aspects
@@ -754,7 +772,7 @@
   :execution-function/response [:batch/results :batch/aggregate]
   :execution-function/deps #{:atlas.llm-ide/blast-radius}
   :atlas/impl (fn [{:keys [:entity/dev-id-set :query/max-hops]}]
-                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                (let [entity-set (ensure-keyword-set dev-id-set)
                       max-hops (or max-hops 3)
 
                       ;; Run blast-radius for each entity
@@ -766,7 +784,7 @@
                                        {:entity entity-id
                                         :blast-radius (:data result)
                                         :success? (:success? result)}))
-                                   entity-set)
+                                   (vec entity-set))
 
                       successful (filter :success? results)
 
@@ -858,7 +876,7 @@
   :execution-function/response [:batch/results :batch/aggregate-risk]
   :execution-function/deps #{:atlas.llm-ide/change-risk}
   :atlas/impl (fn [{:keys [:entity/dev-id-set] :as args}]
-                (let [entity-set (if (set? dev-id-set) dev-id-set #{dev-id-set})
+                (let [entity-set (ensure-keyword-set dev-id-set)
 
                       ;; Individual risk assessments
                       individual-results (mapv (fn [entity-id]
@@ -866,7 +884,7 @@
                                                  :risk (handle-tool
                                                         {:tool/name :atlas.llm-ide/change-risk
                                                          :tool/args (assoc args :entity/dev-id-set #{entity-id})})})
-                                              entity-set)
+                                              (vec entity-set))
 
                       ;; Combined risk assessment
                       combined-risk (handle-tool
@@ -897,6 +915,7 @@
 (s/def :history/version-label string?)
 (s/def :history/version-old string?)
 (s/def :history/version-new string?)
+(s/def :history/renames (s/map-of qualified-keyword? qualified-keyword?))
 
 ;; =============================================================================
 ;; Intent: history — snapshot, diff, and timeline tools
@@ -912,16 +931,11 @@
 ;;   4. diff-versions "start" "after-refactor" — what changed
 ;;   5. version-summary "after-refactor"  — aggregate view
 
-;; Stores the registry state at the time of the last snapshot.
-;; Used as prev-registry when computing aspect diffs on the next snapshot.
-(def ^:private last-snapshot-registry (atom nil))
-
 (defn history-reset!
-  "Reset history — reinitializes conn and clears cached previous registry.
+  "Reset history — reinitializes conn and clears snapshot chain.
    Call this between tests or when starting a fresh history session."
   []
-  (ide/history-init!)
-  (reset! last-snapshot-registry nil))
+  (ide/history-init!))
 
 (defn- ensure-history-conn!
   "Auto-initialize history conn if needed. Returns the conn (for snapshot-version!)."
@@ -936,30 +950,28 @@
   @(ensure-history-conn!))
 
 (defn- take-snapshot!
-  "Snapshot the current registry. Saves previous registry for diff computation.
+  "Snapshot the current registry via ide/history-snapshot! (which maintains the chain).
+   rename-map: optional {old-dev-id new-dev-id} for explicit rename tracking.
    Returns {:snapshot ... :versions [...]}."
-  [label]
-  (let [prev-reg @last-snapshot-registry
-        conn (ensure-history-conn!)
-        reg @registry/registry
-        result (history/snapshot-version! conn reg label prev-reg nil)]
-    (history/snapshot-edges! conn reg label)
-    (reset! last-snapshot-registry reg)
-    {:snapshot result
-     :versions (history/versions @conn)}))
+  ([label] (take-snapshot! label nil))
+  ([label rename-map]
+   (let [result (ide/history-snapshot! label rename-map)
+         conn   (ensure-history-conn!)]
+     {:snapshot result
+      :versions (history/versions @conn)})))
 
 (registry/register!
  :atlas.llm-ide/snapshot-registry
  :atlas/execution-function
  #{:tier/tooling :domain/llm-ide :intent/history :tool/snapshot-registry}
- {:execution-function/context [:history/version-label]
+ {:execution-function/context [:history/version-label :history/renames]
   :execution-function/response [:history/snapshot-result :history/versions]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:history/version-label]}]
+  :atlas/impl (fn [{:keys [:history/version-label :history/renames]}]
                 (let [label (or version-label
                                 (str "snap-" #?(:clj (System/currentTimeMillis)
                                                 :cljs (.now js/Date))))]
-                  (take-snapshot! label)))})
+                  (take-snapshot! label renames)))})
 
 (registry/register!
  :atlas.llm-ide/history-versions
@@ -982,6 +994,8 @@
                 (let [db (history-db)]
                   {:snap-changes {:old (history/version-diff db version-old)
                                   :new (history/version-diff db version-new)}
+                   :deleted (history/version-deleted db version-new)
+                   :renames (history/version-renames db version-new)
                    :edge-diff (history/edge-diff db version-old version-new)
                    :vocabulary-diff (history/vocabulary-diff db version-old version-new)
                    :summary {:old (history/version-summary db version-old)
@@ -1028,6 +1042,8 @@
                       db-after (history-db)
                       diff-data (when prev-version
                                   {:snap-changes (history/version-diff db-after label)
+                                   :deleted (history/version-deleted db-after label)
+                                   :renames (history/version-renames db-after label)
                                    :edge-diff (history/edge-diff db-after prev-version label)
                                    :vocabulary-diff (history/vocabulary-diff db-after prev-version label)
                                    :summary {:old (history/version-summary db-after prev-version)

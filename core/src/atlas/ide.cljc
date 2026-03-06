@@ -18,10 +18,14 @@
 ;; HELPERS
 ;; =============================================================================
 
-(defn- ensure-keyword 
-  "Convert string to keyword, or return as-is if already a keyword."
+(defn- ensure-keyword
+  "Convert string to keyword, or return as-is if already a keyword.
+   Handles colon-prefixed strings from MCP/JSON (e.g. \":fn/foo\" → :fn/foo)."
   [x]
-  (if (string? x) (keyword x) x))
+  (cond
+    (keyword? x) x
+    (string? x)  (keyword (cond-> x (= \: (first x)) (subs 1)))
+    :else        x))
 
 (defn- sorted-vec
   "Return a sorted vector from a collection (defaults to ascending compare)."
@@ -1129,7 +1133,12 @@
 ;; HISTORY API
 ;; =============================================================================
 
-(def ^:private history-conn (atom nil))
+(defonce ^:private history-conn (atom nil))
+
+;; Stores the registry state at the time of the last snapshot.
+;; Used as prev-registry when computing aspect diffs on the next snapshot.
+;; Maintained automatically by history-snapshot! — callers don't need to manage it.
+(defonce ^:private last-snapshot-registry (atom nil))
 
 (defn- ensure-history-conn
   "Return the history db value, or throw if not initialized."
@@ -1147,9 +1156,11 @@
     :else           x))
 
 (defn history-init!
-  "Initialize the history db. Returns status map."
+  "Initialize (or reset) the history db. Clears the snapshot chain.
+   Call this to start fresh tracking. Returns status map."
   []
   (reset! history-conn (history/create-conn))
+  (reset! last-snapshot-registry nil)
   {:history/status :initialized})
 
 (defn history-versions
@@ -1212,17 +1223,41 @@
 (defn history-snapshot!
   "Snapshot the current registry state with a version label.
    Auto-initializes history conn if needed.
-   prev-registry: optional previous registry state for diffing (nil for first snapshot).
-   Returns snapshot result map."
+   Automatically chains snapshots for diff computation — no manual prev-registry needed.
+
+   Optional rename-map: {old-dev-id new-dev-id} to declare explicit renames so
+   entity-timeline can follow the rename chain.
+
+   Returns {:version ... :entities ... :changed ... :deleted ...}."
   ([version-label]
    (history-snapshot! version-label nil))
-  ([version-label prev-registry]
+  ([version-label rename-map]
    (when-not @history-conn
      (history-init!))
-   (let [reg @cid/registry
-         result (history/snapshot-version! @history-conn reg version-label prev-registry nil)]
+   (let [prev-reg @last-snapshot-registry
+         reg      @cid/registry
+         result   (history/snapshot-version! @history-conn reg version-label prev-reg rename-map)]
      (history/snapshot-edges! @history-conn reg version-label)
+     (reset! last-snapshot-registry reg)
      result)))
+
+(defn history-version-diff-full
+  "Full version diff: changes + deleted + detected renames.
+   Auto-detects the previous version for rename heuristics.
+   Returns {:changes [...] :deleted [...] :renames [...]}."
+  [version]
+  (let [db       (ensure-history-conn)
+        changes  (normalize-sets (history/version-diff db version))
+        deleted  (normalize-sets (history/version-deleted db version))
+        versions (history/versions db)
+        idx      (.indexOf (vec versions) version)
+        prev-v   (when (pos? idx) (nth versions (dec idx)))
+        renames  (if prev-v
+                   (normalize-sets (history/detect-renames db prev-v version))
+                   [])]
+    {:changes changes
+     :deleted deleted
+     :renames renames}))
 
 (defn history-get-conn
   "Return the raw history conn atom (for tools that need direct access)."

@@ -155,3 +155,64 @@
                        :orphans orphans
                        :severity :warning
                        :message (str "Internal function outputs not consumed: " orphans)})))})
+
+(registry/register!
+ :invariant/deps-reference-valid-types
+ :atlas/invariant
+ #{:meta/deps-type-check}
+ {:invariant/fn (fn []
+                  "Execution-function deps should only reference entities of type
+                   :atlas/execution-function or :atlas/structure-component.
+
+                   Deps model runtime dependencies — either calling another function
+                   or using an infrastructure component. Any other entity type in deps
+                   is a structural mistake."
+                  (let [exec-fns (entity/all-with-aspect :atlas/execution-function)
+                        allowed-types #{:atlas/execution-function :atlas/structure-component}
+                        violations
+                        (for [fn-id exec-fns
+                              :let [deps (ontology/deps-for fn-id)
+                                    bad  (for [dep deps
+                                              :let [cid (entity/identity-for dep)]
+                                              :when cid
+                                              :let [dep-type (some allowed-types cid)]
+                                              :when (not dep-type)]
+                                           dep)]
+                              :when (seq bad)]
+                          {:fn fn-id :invalid-deps (vec bad)})]
+                    (when (seq violations)
+                      {:invariant :deps-reference-valid-types
+                       :violation :deps-wrong-type
+                       :details (vec violations)
+                       :severity :error
+                       :message "Deps should only reference execution-functions or structure-components"})))})
+
+(registry/register!
+ :invariant/context-not-entity-refs
+ :atlas/invariant
+ #{:meta/context-not-entity-check}
+ {:invariant/fn (fn []
+                  "Execution-function context keys should be data descriptors, not references
+                   to execution-functions or structure-components.
+
+                   Context describes the data a function needs (:pet/id, :user/email),
+                   not the entities it depends on. Entity dependencies belong in deps."
+                  (let [exec-fns (entity/all-with-aspect :atlas/execution-function)
+                        forbidden-types #{:atlas/execution-function :atlas/structure-component}
+                        violations
+                        (for [fn-id exec-fns
+                              :let [ctx (ontology/context-for fn-id)
+                                    bad (for [k ctx
+                                             :let [cid (entity/identity-for k)]
+                                             :when cid
+                                             :let [ref-type (some forbidden-types cid)]
+                                             :when ref-type]
+                                          k)]
+                              :when (seq bad)]
+                          {:fn fn-id :invalid-context-keys (vec bad)})]
+                    (when (seq violations)
+                      {:invariant :context-not-entity-refs
+                       :violation :context-references-entities
+                       :details (vec violations)
+                       :severity :warning
+                       :message "Context keys should be data descriptors, not entity references"})))})
