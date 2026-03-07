@@ -42,7 +42,6 @@
         facts (atom [])]
     (doseq [[compound-id props] @registry/registry
             extractor extractors]
-;;      (println "trying  " extractor "with " compound-id "------"props)
       (when-let [extracted (seq (extractor compound-id props))]
         (swap! facts concat extracted)))
     @facts))
@@ -315,45 +314,10 @@
       (collect-reachable ep))
     (remove @reachable all-fns)))
 
-(defn query-protocol-functions
-  "Find all functions declared by a protocol."
-  [db protocol-id]
-  (d/q '[:find [?fn ...]
-         :in $ ?protocol-id
-         :where
-         [?e :atlas/dev-id ?protocol-id]
-         [?e :protocol/function ?fn]]
-       db protocol-id))
-
-(defn query-components-implementing-protocol
-  "Find all components that declare they implement a specific protocol."
-  [db protocol-aspect]
-  (d/q '[:find [?dev-id ...]
-         :in $ ?protocol-aspect
-         :where
-         [?e :atlas/dev-id ?dev-id]
-         [?e :entity/aspect :atlas/structure-component]
-         [?e :entity/aspect ?protocol-aspect]]
-       db protocol-aspect))
-
-(defn query-undefined-protocols
-  "Find protocol aspects referenced by components but not registered as protocols."
-  [db]
-  (let [;; Get all protocol aspects (keywords with 'protocol' namespace)
-        all-protocol-aspects (d/q '[:find [?aspect ...]
-                                    :where
-                                    [?e :entity/aspect ?aspect]
-                                    [(namespace ?aspect) ?ns]
-                                    [(= ?ns "protocol")]]
-                                  db)
-        ;; Get protocol aspects that have protocol definitions
-        defined-protocols (set (d/q '[:find [?dev-id ...]
-                                      :where
-                                      [?e :atlas/dev-id ?dev-id]
-                                      [?e :entity/aspect :atlas/interface-protocol]]
-                                    db))]
-    ;; Protocol aspects used but not defined
-    (remove defined-protocols all-protocol-aspects)))
+;; Delegation stubs — protocol queries moved to atlas.datalog.protocol
+(defn query-protocol-functions          [db protocol-id]    ((requiring-resolve 'atlas.datalog.protocol/query-protocol-functions) db protocol-id))
+(defn query-components-implementing-protocol [db protocol-aspect] ((requiring-resolve 'atlas.datalog.protocol/query-components-implementing-protocol) db protocol-aspect))
+(defn query-undefined-protocols         [db]                ((requiring-resolve 'atlas.datalog.protocol/query-undefined-protocols) db))
 
 
 ;; =============================================================================
@@ -484,144 +448,18 @@
          [?e :entity/aspect ?aspect]]
        db))
 
-(defn query-entities-by-multiple-aspects
-  "Find entities that have ANY of the specified aspects (OR semantics).
-   Note: Despite the name, this is OR not AND. Use query-entities-with-all-aspects for AND."
-  [db aspects]
-  (let [aspect-list (vec aspects)]
-    (d/q {:find ['?dev-id]
-          :in ['$ '[[?aspect ...]]]
-          :where [['?e :atlas/dev-id '?dev-id]
-                  ['?e :entity/aspect '?aspect]]}
-         db [aspect-list])))
 
-;; =============================================================================
-;; EXPLORER QUERIES (aspect filtering and similarity)
-;; =============================================================================
-
-(defn query-entity-aspects
-  "Get all aspects for a specific entity."
-  [db dev-id]
-  (set (d/q '[:find [?aspect ...]
-              :in $ ?dev-id
-              :where
-              [?e :atlas/dev-id ?dev-id]
-              [?e :entity/aspect ?aspect]]
-            db dev-id)))
-
-;; TODO this should be dynamic
-(defn query-entity-type
-  "Get the entity type (e.g., :atlas/execution-function) for a dev-id."
-  [db dev-id]
-  (let [aspects (query-entity-aspects db dev-id)
-        type-aspects #{:atlas/execution-function
-                       :atlas/interface-endpoint
-                       :atlas/structure-component
-                       :atlas/interface-protocol
-                       :atlas/data-schema}]
-    (first (filter type-aspects aspects))))
-
-(defn query-entities-with-all-aspects
-  "Find entities that have ALL of the specified aspects (AND semantics).
-   Returns set of dev-ids."
-  [db aspects]
-  (when (seq aspects)
-    (let [aspect-vec (vec aspects)
-          ;; Start with entities having the first aspect
-          initial-set (set (query-entities-with-aspect db (first aspect-vec)))]
-      ;; Intersect with entities having each subsequent aspect
-      (reduce (fn [acc aspect]
-                (clojure.set/intersection acc (set (query-entities-with-aspect db aspect))))
-              initial-set
-              (rest aspect-vec)))))
-
-(defn query-entities-with-any-aspect
-  "Find entities that have ANY of the specified aspects (OR semantics).
-   Returns set of dev-ids."
-  [db aspects]
-  (when (seq aspects)
-    (->> aspects
-         (mapcat #(query-entities-with-aspect db %))
-         set)))
-
-(defn query-all-entities
-  "Get all entity dev-ids in the database."
-  [db]
-  (d/q '[:find [?dev-id ...]
-         :where
-         [?e :atlas/dev-id ?dev-id]]
-       db))
-
-(defn query-explorer-filter
-  "Filter entities by AND/OR aspect criteria.
-   Returns set of dev-ids matching:
-   - ALL aspects in aspects-and (if provided), OR
-   - ANY aspect in aspects-or (if provided)
-
-   Args:
-     db          - Datascript database
-     aspects-and - Collection of aspects (entity must have ALL)
-     aspects-or  - Collection of aspects (entity must have ANY)
-
-   Returns set of matching dev-ids."
-  [db aspects-and aspects-or]
-  (let [and-matches (when (seq aspects-and)
-                      (query-entities-with-all-aspects db aspects-and))
-        or-matches (when (seq aspects-or)
-                     (query-entities-with-any-aspect db aspects-or))]
-    (cond
-      (and and-matches or-matches) (clojure.set/union and-matches or-matches)
-      and-matches and-matches
-      or-matches or-matches
-      :else #{})))
-
+;; Delegation stubs — explorer queries moved to atlas.datalog.explorer
+(defn query-entity-aspects             [db dev-id]                     ((requiring-resolve 'atlas.datalog.explorer/query-entity-aspects) db dev-id))
+(defn query-entity-type                [db dev-id]                     ((requiring-resolve 'atlas.datalog.explorer/query-entity-type) db dev-id))
+(defn query-entities-with-all-aspects  [db aspects]                    ((requiring-resolve 'atlas.datalog.explorer/query-entities-with-all-aspects) db aspects))
+(defn query-entities-with-any-aspect   [db aspects]                    ((requiring-resolve 'atlas.datalog.explorer/query-entities-with-any-aspect) db aspects))
+(defn query-all-entities               [db]                            ((requiring-resolve 'atlas.datalog.explorer/query-all-entities) db))
+(defn query-explorer-filter            [db aspects-and aspects-or]     ((requiring-resolve 'atlas.datalog.explorer/query-explorer-filter) db aspects-and aspects-or))
 (defn query-structural-gaps
-  "Find entity pairs that are semantically similar but not connected.
-
-   A 'structural gap' is when two entities:
-   - Have high aspect similarity (Jaccard > min-similarity)
-   - Are NOT connected via dependencies (neither depends on the other)
-
-   This can indicate missing relationships or architectural inconsistencies.
-
-   Args:
-     db             - Datascript database
-     min-similarity - Minimum Jaccard similarity threshold (default 0.5)
-     max-results    - Maximum number of gaps to return (default 20)
-
-   Returns vector of {:a dev-id :b dev-id :similarity n :shared-aspects [...]}
-   sorted by similarity descending."
-  ([db] (query-structural-gaps db 0.5 20))
-  ([db min-similarity] (query-structural-gaps db min-similarity 20))
-  ([db min-similarity max-results]
-   (let [all-dev-ids (vec (query-all-entities db))
-         ;; Precompute aspects and deps for all entities (batch efficiency)
-         aspects-map (into {} (map (fn [id] [id (query-entity-aspects db id)]) all-dev-ids))
-         deps-map (into {} (map (fn [id] [id (set (query-dependencies db id))]) all-dev-ids))
-         n (count all-dev-ids)
-         ;; O(n²) comparison but with precomputed data
-         gaps (for [i (range n)
-                    j (range (inc i) n)
-                    :let [dev-a (nth all-dev-ids i)
-                          dev-b (nth all-dev-ids j)
-                          aspects-a (get aspects-map dev-a #{})
-                          aspects-b (get aspects-map dev-b #{})
-                          shared (clojure.set/intersection aspects-a aspects-b)
-                          union (clojure.set/union aspects-a aspects-b)
-                          similarity (if (seq union)
-                                       (/ (count shared) (count union))
-                                       0)
-                          deps-a (get deps-map dev-a #{})
-                          deps-b (get deps-map dev-b #{})
-                          connected? (or (contains? deps-a dev-b)
-                                         (contains? deps-b dev-a))]
-                    :when (and (> similarity min-similarity)
-                               (not connected?))]
-                {:a dev-a
-                 :b dev-b
-                 :similarity (double similarity)
-                 :shared-aspects (vec (sort shared))})]
-     (vec (take max-results (sort-by (comp - :similarity) gaps))))))
+  ([db]                       ((requiring-resolve 'atlas.datalog.explorer/query-structural-gaps) db))
+  ([db min-similarity]        ((requiring-resolve 'atlas.datalog.explorer/query-structural-gaps) db min-similarity))
+  ([db min-similarity max-r]  ((requiring-resolve 'atlas.datalog.explorer/query-structural-gaps) db min-similarity max-r)))
 
 ;; =============================================================================
 ;; DSL COMPILATION
@@ -742,351 +580,34 @@
 
 
 
-;; =============================================================================
-;; PROTOCOL-ORIENTED QUERIES
-;; =============================================================================
+;; Delegation stubs — protocol-oriented queries moved to atlas.datalog.protocol
+(defn query-protocol-implementers-by-domain [db]             ((requiring-resolve 'atlas.datalog.protocol/query-protocol-implementers-by-domain) db))
+(defn query-functions-using-protocol        [db protocol-kw] ((requiring-resolve 'atlas.datalog.protocol/query-functions-using-protocol) db protocol-kw))
+(defn query-protocol-usage-matrix           [db]             ((requiring-resolve 'atlas.datalog.protocol/query-protocol-usage-matrix) db))
+(defn query-integration-points              [db]             ((requiring-resolve 'atlas.datalog.protocol/query-integration-points) db))
+(defn query-pure-vs-impure-functions        [db]             ((requiring-resolve 'atlas.datalog.protocol/query-pure-vs-impure-functions) db))
+(defn query-protocol-dependency-graph       [db]             ((requiring-resolve 'atlas.datalog.protocol/query-protocol-dependency-graph) db))
+(defn query-aspect-co-occurrence            [db]             ((requiring-resolve 'atlas.datalog.protocol/query-aspect-co-occurrence) db))
+(defn query-endpoint-protocol-coverage      [db]             ((requiring-resolve 'atlas.datalog.protocol/query-endpoint-protocol-coverage) db))
 
-(defn query-protocol-implementers-by-domain
-  "Find all protocol implementers grouped by domain.
-   Returns map of domain -> {:components [...] :protocols [...]}"
-  [db]
-  (let [components (query-entities-with-aspect db :atlas/structure-component)
-        get-domain (fn [comp-id]
-                     (first (d/q '[:find [?domain ...]
-                                   :in $ ?comp-id
-                                   :where
-                                   [?e :atlas/dev-id ?comp-id]
-                                   [?e :entity/aspect ?domain]
-                                   [(namespace ?domain) ?ns]
-                                   [(= ?ns "domain")]]
-                                 db comp-id)))
-        get-protocols (fn [comp-id]
-                        (d/q '[:find [?proto ...]
-                               :in $ ?comp-id
-                               :where
-                               [?e :atlas/dev-id ?comp-id]
-                               [?e :entity/aspect ?proto]
-                               [(namespace ?proto) ?ns]
-                               [(= ?ns "protocol")]]
-                             db comp-id))]
-    (->> components
-         (map (fn [comp-id]
-                (let [domain (get-domain comp-id)
-                      protocols (vec (get-protocols comp-id))]
-                  (when domain
-                    {:component comp-id
-                     :domain domain
-                     :protocols protocols}))))
-         (remove nil?)
-         (group-by :domain)
-         (map (fn [[domain items]]
-                [domain {:components (mapv :component items)
-                        :protocols (vec (distinct (mapcat :protocols items)))}]))
-         (into {}))))
+;; Delegation stubs — error impact queries moved to atlas.datalog.impact
+(defn query-transitive-reverse-dependencies [db dev-id]      ((requiring-resolve 'atlas.datalog.impact/query-transitive-reverse-dependencies) db dev-id))
+(defn query-affected-endpoints              [db entity-id]   ((requiring-resolve 'atlas.datalog.impact/query-affected-endpoints) db entity-id))
+(defn query-protocol-error-impact           [db protocol-id] ((requiring-resolve 'atlas.datalog.impact/query-protocol-error-impact) db protocol-id))
+(defn query-function-error-impact           [db function-id] ((requiring-resolve 'atlas.datalog.impact/query-function-error-impact) db function-id))
+(defn query-component-error-impact          [db component-id] ((requiring-resolve 'atlas.datalog.impact/query-component-error-impact) db component-id))
 
-(defn query-functions-using-protocol
-  "Find all functions that depend on components implementing a specific protocol.
-   Example: (query-functions-using-protocol db :protocol/oauth)
-   Returns functions that use OAuth through component dependencies."
-  [db protocol-kw]
-  (let [implementers (query-components-implementing-protocol db protocol-kw)]
-    (d/q '[:find [?fn-id ...]
-           :in $ [?comp-id ...]
-           :where
-           [?e :atlas/dev-id ?fn-id]
-           [?e :entity/aspect :atlas/execution-function]
-           [?e :entity/depends ?comp-id]]
-         db implementers)))
-
-(defn query-protocol-usage-matrix
-  "Build a matrix showing which functions use which protocols.
-   Returns: [{:function :fn/foo :protocols [:protocol/oauth :protocol/db]}]"
-  [db]
-  (let [all-fns (query-entities-with-aspect db :atlas/execution-function)
-        get-component-protocols (fn [comp-id]
-                                 (d/q '[:find [?proto ...]
-                                        :in $ ?comp-id
-                                        :where
-                                        [?e :atlas/dev-id ?comp-id]
-                                        [?e :entity/aspect ?proto]
-                                        [(namespace ?proto) ?ns]
-                                        [(= ?ns "protocol")]]
-                                      db comp-id))
-        get-fn-protocols (fn [fn-id]
-                          (->> (query-dependencies db fn-id)
-                               (mapcat #(get-component-protocols %))
-                               distinct
-                               vec))]
-    (->> all-fns
-         (map (fn [fn-id]
-                (let [protocols (get-fn-protocols fn-id)]
-                  (when (seq protocols)
-                    {:function fn-id
-                     :protocols protocols}))))
-         (remove nil?)
-         vec)))
-
-(defn query-integration-points
-  "Find all external integration points with their protocols.
-   Useful for understanding system boundaries and dependencies on external services."
-  [db]
-  (d/q '[:find ?comp-id ?domain ?proto
-         :where
-         [?e :atlas/dev-id ?comp-id]
-         [?e :entity/aspect :atlas/structure-component]
-         [?e :entity/aspect :integration/external]
-         [?e :entity/aspect ?domain]
-         [(namespace ?domain) ?ns-domain]
-         [(= ?ns-domain "domain")]
-         [?e :entity/aspect ?proto]
-         [(namespace ?proto) ?ns-proto]
-         [(= ?ns-proto "protocol")]]
-       db))
-
-(defn query-pure-vs-impure-functions
-  "Categorize functions by purity based on component dependencies.
-   Pure functions have no component deps, impure ones do."
-  [db]
-  (let [all-fns (query-entities-with-aspect db :atlas/execution-function)]
-    {:pure (->> all-fns
-                (filter #(empty? (query-dependencies db %)))
-                vec)
-     :impure (->> all-fns
-                  (remove #(empty? (query-dependencies db %)))
-                  vec)}))
-
-(defn query-protocol-dependency-graph
-  "Build a graph showing which protocols depend on which other protocols.
-   A protocol A depends on B if any component implementing A also depends on
-   a component implementing B."
-  [db]
-  (let [all-protocols (query-entities-with-aspect db :atlas/interface-protocol)]
-    (->> all-protocols
-         (map (fn [proto]
-                (let [implementers (query-components-implementing-protocol db proto)
-                      ;; Get all components that implementers depend on
-                      dep-components (mapcat #(query-dependencies db %) implementers)
-                      ;; Find protocols of those dep components
-                      dep-protocols (->> dep-components
-                                        (mapcat (fn [comp]
-                                                 (d/q '[:find [?p ...]
-                                                        :in $ ?comp
-                                                        :where
-                                                        [?e :atlas/dev-id ?comp]
-                                                        [?e :entity/aspect ?p]
-                                                        [(namespace ?p) ?ns]
-                                                        [(= ?ns "protocol")]]
-                                                      db comp)))
-                                        distinct
-                                        vec)]
-                  (when (seq dep-protocols)
-                    {:protocol proto
-                     :depends-on dep-protocols}))))
-         (remove nil?)
-         vec)))
-
-(defn query-aspect-co-occurrence
-  "Find aspects that commonly appear together.
-   Returns pairs of aspects and how often they co-occur.
-   Useful for identifying architectural patterns."
-  [db]
-  (let [all-entities (d/q '[:find ?e
-                            :where [?e :atlas/dev-id _]]
-                          db)
-        entity-aspects (fn [entity-id]
-                        (d/q '[:find [?aspect ...]
-                               :in $ ?e
-                               :where [?e :entity/aspect ?aspect]]
-                             db entity-id))
-        ;; Generate pairs of aspects from each entity
-        aspect-pairs (mapcat (fn [[entity-id]]
-                              (let [aspects (entity-aspects entity-id)]
-                                (for [a aspects
-                                      b aspects
-                                      :when (not= a b)]
-                                  (if (neg? (compare (str a) (str b)))
-                                    [a b]
-                                    [b a]))))
-                            all-entities)
-        ;; Count frequencies
-        freq-map (frequencies aspect-pairs)]
-    (->> freq-map
-         (map (fn [[[a b] count]] {:aspect-a a :aspect-b b :count count}))
-         (sort-by :count >)
-         vec)))
-
-(defn query-endpoint-protocol-coverage
-  "For each endpoint, show which protocols are used in its dependency tree.
-   Useful for understanding what external services each API endpoint depends on."
-  [db]
-  (let [endpoints (query-entities-with-aspect db :atlas/interface-endpoint)
-        get-all-deps (fn get-deps [id visited]
-                      (if (contains? visited id)
-                        visited
-                        (let [deps (query-dependencies db id)
-                              new-visited (conj visited id)]
-                          (reduce #(get-deps %2 %1) new-visited deps))))
-        get-protocols-in-tree (fn [endpoint-id]
-                               (let [all-deps (get-all-deps endpoint-id #{})
-                                     protocols (mapcat
-                                               (fn [dep-id]
-                                                 (d/q '[:find [?proto ...]
-                                                        :in $ ?dep
-                                                        :where
-                                                        [?e :atlas/dev-id ?dep]
-                                                        [?e :entity/aspect ?proto]
-                                                        [(namespace ?proto) ?ns]
-                                                        [(= ?ns "protocol")]]
-                                                      db dep-id))
-                                               all-deps)]
-                                 (distinct protocols)))]
-    (->> endpoints
-         (map (fn [ep-id]
-                {:endpoint ep-id
-                 :protocols (vec (get-protocols-in-tree ep-id))}))
-         vec)))
-
-;; =============================================================================
-;; ERROR IMPACT ANALYSIS QUERIES
-;; =============================================================================
-
-(defn query-transitive-reverse-dependencies
-  "Find all entities that depend on the given entity, transitively.
-   Returns a set of all dependents up the dependency tree."
-  [db dev-id]
-  (loop [to-visit [dev-id]
-         visited #{}
-         dependents #{}]
-    (if (empty? to-visit)
-      dependents
-      (let [current (first to-visit)
-            current-dependents (query-reverse-dependencies db current)
-            new-dependents (remove visited current-dependents)]
-        (recur (concat (rest to-visit) new-dependents)
-               (conj visited current)
-               (into dependents new-dependents))))))
-
-(defn query-affected-endpoints
-  "Find all endpoints affected by an error in a given entity.
-   Returns endpoints with their dependency paths to the broken entity.
-
-   Example: (query-affected-endpoints db :fn/refresh-oauth-token)
-   => [{:endpoint :endpoint/query-availability
-        :path [:endpoint/query-availability :fn/collect-available-users :fn/refresh-oauth-token]}]"
-  [db broken-entity-id]
-  (let [all-dependents (query-transitive-reverse-dependencies db broken-entity-id)
-        get-aspects (fn [dev-id]
-                     (d/q '[:find [?aspect ...]
-                            :in $ ?id
-                            :where
-                            [?e :atlas/dev-id ?id]
-                            [?e :entity/aspect ?aspect]]
-                          db dev-id))
-        endpoints (filter #(contains? (set (get-aspects %)) :atlas/interface-endpoint)
-                         all-dependents)
-        ;; Build path from endpoint to broken entity
-        build-path (fn build-path [from to visited]
-                    (if (= from to)
-                      [to]
-                      (let [deps (query-dependencies db from)]
-                        ;; Find which dependency leads to target
-                        (some (fn [dep]
-                               (when-not (contains? visited dep)
-                                 (when-let [path (build-path dep to (conj visited from))]
-                                   (cons from path))))
-                             deps))))]
-    (->> endpoints
-         (map (fn [ep-id]
-                {:endpoint ep-id
-                 :path (vec (build-path ep-id broken-entity-id #{}))}))
-         vec)))
-
-(defn query-protocol-error-impact
-  "Given a protocol with an error, find all affected endpoints and functions.
-   Shows the complete blast radius of a protocol failure.
-
-   Example: (query-protocol-error-impact db :protocol/oauth)
-   => {:protocol :protocol/oauth
-       :broken-components [:component/google-oauth]
-       :broken-functions [:fn/refresh-oauth-token]
-       :affected-endpoints [{:endpoint :endpoint/query-availability
-                             :why \"depends on :fn/refresh-oauth-token\"}]}"
-  [db protocol-id]
-  (let [implementers (query-components-implementing-protocol db protocol-id)
-        get-aspects (fn [dev-id]
-                     (d/q '[:find [?aspect ...]
-                            :in $ ?id
-                            :where
-                            [?e :atlas/dev-id ?id]
-                            [?e :entity/aspect ?aspect]]
-                          db dev-id))
-        ;; Find all functions that depend on these components
-        broken-functions (->> implementers
-                             (mapcat #(query-reverse-dependencies db %))
-                             (filter #(contains? (set (get-aspects %)) :atlas/execution-function))
-                             distinct
-                             vec)
-        ;; Find all affected endpoints (transitively)
-        all-broken (concat implementers broken-functions)
-        affected-endpoints (->> all-broken
-                               (mapcat #(query-affected-endpoints db %))
-                               (map :endpoint)
-                               distinct
-                               vec)]
-    {:protocol protocol-id
-     :broken-components (vec implementers)
-     :broken-functions broken-functions
-     :affected-endpoints affected-endpoints
-     :total-impact (+ (count implementers) (count broken-functions) (count affected-endpoints))}))
-
-(defn query-function-error-impact
-  "Given a function with an error, show all affected endpoints with dependency paths.
-
-   Example: (query-function-error-impact db :fn/refresh-oauth-token)
-   => {:function :fn/refresh-oauth-token
-       :affected-endpoints [{:endpoint :endpoint/query-availability
-                             :path [:endpoint/query-availability -> :fn/collect-available-users -> :fn/refresh-oauth-token]}]
-       :affected-count 1}"
-  [db function-id]
-  (let [affected (query-affected-endpoints db function-id)]
-    {:function function-id
-     :affected-endpoints affected
-     :affected-count (count affected)}))
-
-(defn query-component-error-impact
-  "Given a component with an error, show all affected functions and endpoints.
-
-   Example: (query-component-error-impact db :component/google-oauth)
-   => {:component :component/google-oauth
-       :protocols [:protocol/oauth]
-       :broken-functions [:fn/refresh-oauth-token]
-       :affected-endpoints [:endpoint/query-availability]}"
-  [db component-id]
-  (let [;; Get protocols this component implements
-        protocols (d/q '[:find [?proto ...]
-                        :in $ ?comp-id
-                        :where
-                        [?e :atlas/dev-id ?comp-id]
-                        [?e :entity/aspect ?proto]
-                        [(namespace ?proto) ?ns]
-                        [(= ?ns "protocol")]]
-                      db component-id)
-        ;; Find functions that depend on this component
-        broken-functions (vec (query-reverse-dependencies db component-id))
-        ;; Find all affected endpoints
-        affected-endpoints (->> broken-functions
-                               (mapcat #(query-affected-endpoints db %))
-                               (map :endpoint)
-                               distinct
-                               vec)]
-    {:component component-id
-     :protocols (vec protocols)
-     :broken-functions broken-functions
-     :affected-endpoints affected-endpoints
-     :total-impact (+ 1 (count broken-functions) (count affected-endpoints))}))
+(comment
+  (reset-db-cache!)
 
 
-;; - Protocol usage analysis (who uses what protocols)
-;; - Integration point mapping (external service dependencies)
-;; - Architectural pattern detection (aspect co-occurrence)
-;; - Error impact analysis (what breaks when X fails)
+
+  (query-consumes (get-db) :mcp-api.endpoint/bank-fees-search)
+  (query-produces (get-db) :mcp-api.endpoint/inbox-provider)
+  (query-consumes (get-db) :endpoint/subscription)
+  (query-dependencies (get-db) :endpoint/subscription)
+  (query-dependencies (get-db) :endpoint/subscription)
+  (query-entity-aspects (get-db) :endpoint/subscription)
+  (query-produces (get-db) :endpoint/subscription)
+
+  )
