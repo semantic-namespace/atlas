@@ -9,10 +9,11 @@
             [atlas.ontology.execution-function :as ef]
             [atlas.ontology.structure-component :as sc]
             [atlas.ontology.interface-endpoint :as ie]
-            [atlas.ide :as ide]))
+            [atlas.ide :as ide]
+            [atlas.ide.trace :as ide.trace]))
 
 ;; ---------------------------------------------------------------------------
-;; ⚙️ Test Fixture — reset registry and caches for isolation
+;; Test Fixture — reset registry and caches for isolation
 ;; ---------------------------------------------------------------------------
 
 (use-fixtures :each
@@ -23,15 +24,15 @@
     (require 'atlas.ontology.structure-component :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (ot/register-entity-types!)
-    (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
-    (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
+    (reset! @#'ide.trace/reverse-deps-cache {:time 0 :data {}})
+    (reset! @#'ide.trace/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     ;; Validate registry before running tests
     (assert (cid/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
     (reset! cid/registry {})
-    (reset! @#'ide/reverse-deps-cache {:time 0 :data {}})
-    (reset! @#'ide/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})))
+    (reset! @#'ide.trace/reverse-deps-cache {:time 0 :data {}})
+    (reset! @#'ide.trace/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})))
 
 (defn- seed-registry! []
   ;; Components

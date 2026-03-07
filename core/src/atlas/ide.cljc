@@ -3,14 +3,13 @@
    Returns EDN that editors can parse and display."
   (:require [atlas.registry :as cid]
             [atlas.registry.lookup :as rt]
-            [atlas.registry.graph :as graph]
             [atlas.invariant :as ax]
             [atlas.docs :as docs]
             [atlas.ontology :as ot]
             [atlas.query :as query]
             [atlas.datalog :as datalog]
-            [atlas.history :as history]
-            [atlas.cljc.platform :as platform]
+            [atlas.ide.history :as ide.history]
+            [atlas.ide.trace :as ide.trace]
             [clojure.string :as str]
             [clojure.set :as set]))
 
@@ -70,87 +69,6 @@
         (reduce dissoc m not-serialisable-keys)
         m))
     m))
-
-;; Cache for reverse dependency index (for performance optimization)
-(def ^:private reverse-deps-cache (atom {:time 0 :data {}}))
-(def ^:private data-key-cache (atom {:time 0 :entity/produces {} :entity/consumes {}}))
-(def ^:private cache-ttl-ms 5000)
-
-(defn- build-data-key-cache []
-  "Build indexes for producers/consumers keyed by data-key."
-  (reduce (fn [acc [_ props]]
-            (let [id (:atlas/dev-id props)
-                  context (ot/context-for id)
-                  response (ot/response-for id)
-                  produces (:entity/produces acc)
-                  consumes (:entity/consumes acc)
-                  producer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) produces response)
-                  consumer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) consumes context)]
-              (assoc acc :entity/produces producer-updated :entity/consumes consumer-updated)))
-          {:entity/produces {} :entity/consumes {}}
-          @cid/registry))
-
-(defn- get-data-key-cache []
-  "Get cached producers/consumers by data-key, rebuilding when stale."
-  (let [now (platform/now-ms)
-        cache @data-key-cache
-        time (:time cache)
-        produces (:entity/produces cache)
-        consumes (:entity/consumes cache)]
-    (if (and (pos? time) (< (- now time) cache-ttl-ms))
-      {:entity/produces produces :entity/consumes consumes}
-      (let [new-cache (build-data-key-cache)
-            new-produces (:entity/produces new-cache)
-            new-consumes (:entity/consumes new-cache)]
-        (swap! data-key-cache assoc :time now :entity/produces new-produces :entity/consumes new-consumes)
-        {:entity/produces new-produces :entity/consumes new-consumes}))))
-
-(defn- dataflow-dependencies-for
-  "Compute implicit dependencies via dataflow (producer/consumer matching).
-   Returns set of dev-ids that this entity depends on based on data keys it consumes."
-  [dev-id]
-  (let [context-keys (ot/context-for dev-id)
-        cache (get-data-key-cache)
-        produces-map (:entity/produces cache)]
-    ;; For each key this entity consumes, find who produces it
-    (set (mapcat (fn [ctx-key]
-                   (get produces-map ctx-key #{}))
-                 context-keys))))
-
-(defn- effective-dependencies-for
-  "Compute effective dependencies: explicit deps + dataflow deps.
-
-   This allows the system to work with different modeling approaches:
-   - Systems with explicit :execution-function/deps use those
-   - Systems with only dataflow (context/response) derive deps from producer/consumer matching
-   - Hybrid systems get both"
-  [dev-id]
-  (let [explicit-deps (ot/deps-for dev-id)
-        dataflow-deps (dataflow-dependencies-for dev-id)]
-    (set/union explicit-deps dataflow-deps)))
-
-(defn- build-reverse-deps []
-  "Build reverse dependency index: maps dev-id to set of dependents.
-   Uses effective dependencies (explicit + dataflow) for comprehensive graph."
-  (let [all-ids (ax/all-dev-ids)]
-    (reduce (fn [acc dev-id]
-              (let [deps (effective-dependencies-for dev-id)]
-                (reduce (fn [inner dep]
-                          (update inner dep (fnil conj #{}) dev-id))
-                        acc
-                        deps)))
-            {}
-            all-ids)))
-
-(defn- get-reverse-deps []
-  "Get reverse deps cache, rebuilding if stale."
-  (let [now (platform/now-ms)
-        {:keys [time data]} @reverse-deps-cache]
-    (if (and (pos? time) (< (- now time) cache-ttl-ms))
-      data
-      (let [new-data (build-reverse-deps)]
-        (swap! reverse-deps-cache assoc :time now :data new-data)
-        new-data))))
 
 ;; =============================================================================
 ;; QUERY API
@@ -388,18 +306,20 @@
                      [(:entity/dev-id info) info])))
         (map ensure-keyword dev-ids)))
 
-(defn data-flow [dev-id]
-  "Get data flow info for a function."
-  (->> (ot/trace-data-flow (ensure-keyword dev-id))
-       (map (fn [{:keys [needs produced-by satisfied?]}]
-              {:dataflow/needs needs
-               :dataflow/produced-by (sorted-vec produced-by)
-               :dataflow/satisfied? (boolean satisfied?)}))
-       vec))
+;; =============================================================================
+;; TRACE API — delegated to atlas.ide.trace
+;; =============================================================================
 
-(defn execution-order []
-  "Get topologically sorted execution order."
-  (graph/topo-sort-by-data (rt/all-with-aspect :atlas/execution-function)))
+(defn data-flow              [dev-id]   (ide.trace/data-flow dev-id))
+(defn execution-order        []         (ide.trace/execution-order))
+(defn dependents-of          [dev-id]   (ide.trace/dependents-of dev-id))
+(defn dependencies-of        [dev-id]   (ide.trace/dependencies-of dev-id))
+(defn recursive-dependencies-of      [dev-id] (ide.trace/recursive-dependencies-of dev-id))
+(defn recursive-dependencies-summary [dev-id] (ide.trace/recursive-dependencies-summary dev-id))
+(defn producers-of           [data-key] (ide.trace/producers-of data-key))
+(defn consumers-of           [data-key] (ide.trace/consumers-of data-key))
+(defn trace-data-flow        [data-key] (ide.trace/trace-data-flow data-key))
+(defn impact-of-change       [entity-id] (ide.trace/impact-of-change entity-id))
 
 ;; =============================================================================
 ;; VALIDATION API
@@ -445,124 +365,6 @@
   (docs/generate-markdown))
 
 ;; =============================================================================
-;; NAVIGATION API
-;; =============================================================================
-
-(defn dependents-of
-    "Find what depends on this entity. Uses cached reverse dependency index for O(1) lookup."
-  [dev-id]
-
-  (let [dev-id-kw (ensure-keyword dev-id)
-        reverse-deps (get-reverse-deps)
-        dependents (get reverse-deps dev-id-kw #{})]
-    (vec (sort dependents))))
-
-(defn dependencies-of
-  "Find what this entity depends on.
-   Uses effective dependencies (explicit deps + dataflow-derived deps)."
-  [dev-id]
-  (vec (sort (effective-dependencies-for (ensure-keyword dev-id)))))
-
-(defn- dep-entity?
-  "Returns true if kw is a registered execution-function or structure-component."
-  [kw]
-  (when-let [identity (rt/identity-for kw)]
-    (or (contains? identity :atlas/execution-function)
-        (contains? identity :atlas/structure-component))))
-
-(defn- classify-context
-  "Split context/input keys into data inputs vs entity deps.
-   Returns {:input [data-keys] :context-deps [entity-dev-ids]}."
-  [context-keys]
-  (let [{deps true data false}
-        (group-by (fn [k] (boolean (dep-entity? k))) context-keys)]
-    {:input (vec (sort (or data [])))
-     :context-deps (vec (sort (or deps [])))}))
-
-(defn recursive-dependencies-of
-  "Get all transitive dependencies for an entity, recursively.
-   Traverses execution-function/deps, structure-component/deps, and endpoint/deps.
-   Context/input keys that are execution-functions or structure-components are
-   classified as :dep/context-deps; the rest are :dep/input.
-   Returns flat vector in BFS order, excluding the root entity itself.
-   Already-seen nodes are shown inline (so all references are visible) but not recursed into."
-  [dev-id]
-  (let [dev-id-kw (ensure-keyword dev-id)
-        entity-type-for (fn [id]
-                          (when-let [identity (rt/identity-for id)]
-                            (some #(when (= "atlas" (namespace %)) %) identity)))]
-    (loop [queue (mapv #(vector % 1 dev-id-kw)
-                       (sort (effective-dependencies-for dev-id-kw)))
-           visited #{dev-id-kw}
-           result []]
-      (if (empty? queue)
-        result
-        (let [[current depth via] (first queue)
-              rest-queue (subvec queue 1)
-              already-seen? (contains? visited current)
-              {:keys [input context-deps]} (classify-context (ot/context-for current))
-              entry {:dep/dev-id current
-                     :dep/type (entity-type-for current)
-                     :dep/depth depth
-                     :dep/via via
-                     :dep/already-seen? already-seen?
-                     :dep/input input
-                     :dep/context-deps context-deps}]
-          (if already-seen?
-            (recur rest-queue visited (conj result entry))
-            (let [deps (sort (effective-dependencies-for current))
-                  new-deps (remove visited deps)]
-              (recur
-               (into rest-queue (map #(vector % (inc depth) current) new-deps))
-               (conj visited current)
-               (conj result entry)))))))))
-
-(defn recursive-dependencies-summary
-  "Get a flat summary of all transitive dependencies for testing/development.
-   Context/input keys that are execution-functions or structure-components are
-   merged into :summary/deps; only pure data keys appear in :summary/data-keys.
-   Returns:
-     :summary/root      - the queried entity dev-id
-     :summary/context   - root entity's own pure input keys
-     :summary/deps      - distinct sorted list of all transitive entity deps
-     :summary/data-keys - distinct sorted list of all pure data keys needed"
-  [dev-id]
-  (let [dev-id-kw (ensure-keyword dev-id)
-        {:keys [input context-deps]} (classify-context (ot/context-for dev-id-kw))
-        tree (recursive-dependencies-of dev-id-kw)
-        unique-entries (remove :dep/already-seen? tree)
-        all-deps (->> unique-entries
-                      (mapcat (fn [e] (cons (:dep/dev-id e) (:dep/context-deps e))))
-                      (into (set context-deps))
-                      sort
-                      vec)
-        all-data-keys (->> unique-entries
-                           (mapcat :dep/input)
-                           (into (set input))
-                           sort
-                           vec)]
-    {:summary/root dev-id-kw
-     :summary/context input
-     :summary/deps all-deps
-     :summary/data-keys all-data-keys}))
-
-(defn producers-of
-  "Find functions that produce a data key."
-  [data-key]
-  (let [data-key-kw (ensure-keyword data-key)
-        cache (get-data-key-cache)
-        produces (:entity/produces cache)]
-    (sorted-vec (get produces data-key-kw #{}))))
-
-(defn consumers-of
-  "Find functions that consume a data key."
-  [data-key]
-  (let [data-key-kw (ensure-keyword data-key)
-        cache (get-data-key-cache)
-        consumes (:entity/consumes cache)]
-    (sorted-vec (get consumes data-key-kw #{}))))
-
-;; =============================================================================
 ;; COMPLETION API
 ;; =============================================================================
 
@@ -602,32 +404,6 @@
          (filter #(str/starts-with? % prefix-str))
          sort
          vec)))
-
-;; =============================================================================
-;; ADVANCED QUERIES API
-;; =============================================================================
-
-(defn trace-data-flow
-  "Trace how a data key flows through the system."
-  [data-key]
-  (let [data-key-kw (ensure-keyword data-key)
-        produced-by (producers-of data-key-kw)
-        consumed-by (consumers-of data-key-kw)]
-    {:dataflow/data-key data-key-kw
-     :dataflow/produced-by produced-by
-     :dataflow/consumed-by consumed-by
-     :dataflow/connected? (boolean (and (seq produced-by) (seq consumed-by)))}))
-
-(defn impact-of-change
-  "Show what would be affected if an entity changes."
-  [entity-id]
-  (let [result (query/impact-of-change @cid/registry (ensure-keyword entity-id) :atlas/dev-id :execution-function/deps :interface-endpoint/response)
-        entity (:entity result)
-        produces (:entity/produces result)
-        direct-dependents (:direct-dependents result)]
-    {:impact/entity entity
-     :impact/produces (sorted-vec produces)
-     :impact/direct-dependents (sorted-vec direct-dependents)}))
 
 (defn domain-coupling
   "Analyze inter-domain dependencies."
@@ -1130,136 +906,542 @@
   (docs/llm-documentation-context))
 
 ;; =============================================================================
-;; HISTORY API
+;; HISTORY API — delegated to atlas.ide.history
 ;; =============================================================================
 
-(defonce ^:private history-conn (atom nil))
-
-;; Stores the registry state at the time of the last snapshot.
-;; Used as prev-registry when computing aspect diffs on the next snapshot.
-;; Maintained automatically by history-snapshot! — callers don't need to manage it.
-(defonce ^:private last-snapshot-registry (atom nil))
-
-(defn- ensure-history-conn
-  "Return the history db value, or throw if not initialized."
-  []
-  (or (some-> @history-conn deref)
-      (throw (ex-info "History not initialized. Call (atlas.ide/history-init!) first." {}))))
-
-(defn- normalize-sets
-  "Walk a data structure converting sets to sorted vectors for Emacs consumption."
-  [x]
-  (cond
-    (set? x)        (sorted-vec x)
-    (map? x)        (reduce-kv (fn [m k v] (assoc m k (normalize-sets v))) {} x)
-    (sequential? x) (mapv normalize-sets x)
-    :else           x))
-
-(defn history-init!
-  "Initialize (or reset) the history db. Clears the snapshot chain.
-   Call this to start fresh tracking. Returns status map."
-  []
-  (reset! history-conn (history/create-conn))
-  (reset! last-snapshot-registry nil)
-  {:history/status :initialized})
-
-(defn history-versions
-  "All version strings in the history db, sorted."
-  []
-  (history/versions (ensure-history-conn)))
-
-(defn history-entity-timeline
-  "All versions of a single entity under one dev-id, sorted by version."
-  [dev-id]
-  (->> (history/entity-timeline (ensure-history-conn) (ensure-keyword dev-id))
-       normalize-sets))
-
-(defn history-full-timeline
-  "Complete history of an entity across dev-id renames."
-  [dev-id]
-  (->> (history/full-timeline (ensure-history-conn) (ensure-keyword dev-id))
-       normalize-sets))
-
-(defn history-version-diff
-  "All entities that changed in a given version."
-  [version]
-  (->> (history/version-diff (ensure-history-conn) version)
-       normalize-sets))
-
-(defn history-version-summary
-  "Aggregate change counts per entity type for a version."
-  [version]
-  (history/version-summary (ensure-history-conn) version))
-
-(defn history-vocabulary-diff
-  "Aspects whose entity count changed between two versions."
-  [v-old v-new]
-  (->> (history/vocabulary-diff (ensure-history-conn) v-old v-new)
-       normalize-sets))
-
-(defn history-edges-at
-  "All edges for a given entity at a given version."
-  [version dev-id]
-  (->> (history/edges-at (ensure-history-conn) version (ensure-keyword dev-id))
-       normalize-sets))
-
-(defn history-dependents-of
-  "Entities that reference a given target at a version (reverse lookup)."
-  [version dev-id]
-  (->> (history/dependents-of (ensure-history-conn) version (ensure-keyword dev-id))
-       normalize-sets))
-
-(defn history-edge-diff
-  "Edges added or removed between two versions."
-  [v-old v-new]
-  (->> (history/edge-diff (ensure-history-conn) v-old v-new)
-       normalize-sets))
-
-(defn history-edge-summary
-  "Count edges by verb at a version."
-  [version]
-  (history/edge-summary (ensure-history-conn) version))
-
+(defn history-init!          [] (ide.history/init!))
+(defn history-versions       [] (ide.history/versions))
+(defn history-entity-timeline [dev-id] (ide.history/entity-timeline dev-id))
+(defn history-full-timeline  [dev-id] (ide.history/full-timeline dev-id))
+(defn history-version-diff   [version] (ide.history/version-diff version))
+(defn history-version-diff-full [version] (ide.history/version-diff-full version))
+(defn history-version-summary [version] (ide.history/version-summary version))
+(defn history-vocabulary-diff [v-old v-new] (ide.history/vocabulary-diff v-old v-new))
+(defn history-edges-at       [version dev-id] (ide.history/edges-at version dev-id))
+(defn history-dependents-of  [version dev-id] (ide.history/dependents-of version dev-id))
+(defn history-edge-diff      [v-old v-new] (ide.history/edge-diff v-old v-new))
+(defn history-edge-summary   [version] (ide.history/edge-summary version))
 (defn history-snapshot!
-  "Snapshot the current registry state with a version label.
-   Auto-initializes history conn if needed.
-   Automatically chains snapshots for diff computation — no manual prev-registry needed.
+  ([version-label] (ide.history/snapshot! version-label))
+  ([version-label rename-map] (ide.history/snapshot! version-label rename-map)))
+(defn history-get-conn       [] (ide.history/get-conn))
 
-   Optional rename-map: {old-dev-id new-dev-id} to declare explicit renames so
-   entity-timeline can follow the rename chain.
+;; =============================================================================
+;; SELF-REGISTRATION — IDE functions as execution-functions
+;; =============================================================================
 
-   Returns {:version ... :entities ... :changed ... :deleted ...}."
-  ([version-label]
-   (history-snapshot! version-label nil))
-  ([version-label rename-map]
-   (when-not @history-conn
-     (history-init!))
-   (let [prev-reg @last-snapshot-registry
-         reg      @cid/registry
-         result   (history/snapshot-version! @history-conn reg version-label prev-reg rename-map)]
-     (history/snapshot-edges! @history-conn reg version-label)
-     (reset! last-snapshot-registry reg)
-     result)))
+;; Intent: query (registry browsing)
 
-(defn history-version-diff-full
-  "Full version diff: changes + deleted + detected renames.
-   Auto-detects the previous version for rename heuristics.
-   Returns {:changes [...] :deleted [...] :renames [...]}."
-  [version]
-  (let [db       (ensure-history-conn)
-        changes  (normalize-sets (history/version-diff db version))
-        deleted  (normalize-sets (history/version-deleted db version))
-        versions (history/versions db)
-        idx      (.indexOf (vec versions) version)
-        prev-v   (when (pos? idx) (nth versions (dec idx)))
-        renames  (if prev-v
-                   (normalize-sets (history/detect-renames db prev-v version))
-                   [])]
-    {:changes changes
-     :deleted deleted
-     :renames renames}))
+(cid/register!
+ :fn.ide/list-entity-types :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-entity-types}
+ {:execution-function/context []
+  :execution-function/response [:entity-type/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all registered entity types (e.g. :atlas/execution-function, :atlas/data-schema). Use this to discover what kinds of entities exist in the registry."
+  :atlas/impl (fn [_] (list-entity-types))})
 
-(defn history-get-conn
-  "Return the raw history conn atom (for tools that need direct access)."
+(cid/register!
+ :fn.ide/list-entity-types-with-counts :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-entity-types-with-counts}
+ {:execution-function/context []
+  :execution-function/response [:entity-type/type :entity-type/count]
+  :execution-function/deps #{}
+  :atlas/docs "List all entity types with how many entities of each type are registered. Gives a quick overview of registry composition."
+  :atlas/impl (fn [_] (list-entity-types-with-counts))})
+
+(cid/register!
+ :fn.ide/list-entities-of-type :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-entities-of-type}
+ {:execution-function/context [:entity-type/type]
+  :execution-function/response [:entity/dev-id-list]
+  :execution-function/deps #{}
+  :atlas/docs "List all dev-ids of entities matching a given entity type (e.g. all :atlas/execution-function entities). Use this to enumerate entities of a specific kind."
+  :atlas/impl #(list-entities-of-type (:entity-type/type %))})
+
+(cid/register!
+ :fn.ide/registered-entity? :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-registered-entity?}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:entity/exists?]
+  :execution-function/deps #{}
+  :atlas/docs "Check whether an entity with the given dev-id exists in the registry. Returns boolean."
+  :atlas/impl #(registered-entity? (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/entity-type-ontology-keys :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entity-type-ontology-keys}
+ {:execution-function/context [:entity-type/type]
+  :execution-function/response [:ontology/keys]
+  :execution-function/deps #{}
+  :atlas/docs "Get the ontology-defined prop keys for an entity type (e.g. :execution-function/context, :execution-function/deps for :atlas/execution-function). Use this to understand what props an entity type expects."
+  :atlas/impl #(entity-type-ontology-keys (:entity-type/type %))})
+
+(cid/register!
+ :fn.ide/entity-prop-keys :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entity-prop-keys}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:entity/prop-keys]
+  :execution-function/deps #{}
+  :atlas/docs "Get all property keys on a specific entity. Use this to see what data is stored on an entity without fetching full values."
+  :atlas/impl #(entity-prop-keys (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/entity-prop-items :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entity-prop-items}
+ {:execution-function/context [:entity/dev-id :entity/prop-key]
+  :execution-function/response [:entity/prop-items]
+  :execution-function/deps #{}
+  :atlas/docs "Get the value of a specific property key on an entity. Use this to drill into a single prop without fetching the entire entity."
+  :atlas/impl #(entity-prop-items (:entity/dev-id %) (:entity/prop-key %))})
+
+(cid/register!
+ :fn.ide/list-all-entities :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-all-entities}
+ {:execution-function/context []
+  :execution-function/response [:entity/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all entities in the registry with their dev-id, type, and aspects. Returns a compact summary of every registered entity."
+  :atlas/impl (fn [_] (list-all-entities))})
+
+(cid/register!
+ :fn.ide/list-aspects :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-aspects}
+ {:execution-function/context []
+  :execution-function/response [:aspect/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all aspects used in the registry with their usage counts. Use this to understand the semantic vocabulary of the system."
+  :atlas/impl (fn [_] (list-aspects))})
+
+(cid/register!
+ :fn.ide/list-aspect-namespaces :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-aspect-namespaces}
+ {:execution-function/context []
+  :execution-function/response [:namespace/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all aspect namespace prefixes (e.g. 'domain', 'tier', 'operation'). Use this to understand the taxonomy structure of the aspect vocabulary."
+  :atlas/impl (fn [_] (list-aspect-namespaces))})
+
+(cid/register!
+ :fn.ide/list-aspect-names-in-namespace :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-aspect-names-in-namespace}
+ {:execution-function/context [:namespace/name]
+  :execution-function/response [:aspect/names]
+  :execution-function/deps #{}
+  :atlas/docs "List all aspect names within a given namespace (e.g. all aspects in the 'domain' namespace: auth, billing, etc.). Use this to explore a specific aspect category."
+  :atlas/impl #(list-aspect-names-in-namespace (:namespace/name %))})
+
+(cid/register!
+ :fn.ide/entities-with-aspect :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entities-with-aspect}
+ {:execution-function/context [:query/aspect]
+  :execution-function/response [:entity/dev-id-list]
+  :execution-function/deps #{}
+  :atlas/docs "Find all entities that have a given aspect in their compound identity. For example, find all entities tagged :domain/auth. Use this for semantic querying."
+  :atlas/impl #(entities-with-aspect (:query/aspect %))})
+
+(cid/register!
+ :fn.ide/entity-info :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entity-info}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:entity/info]
+  :execution-function/deps #{}
+  :atlas/docs "Get comprehensive info for a single entity: dev-id, compound identity, type, aspects, and all props (with non-serializable values filtered). This is the primary entity inspection tool."
+  :atlas/impl #(entity-info (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/entities-info :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entities-info}
+ {:execution-function/context [:entity/dev-id-list]
+  :execution-function/response [:entity/info-list]
+  :execution-function/deps #{}
+  :atlas/docs "Get comprehensive info for multiple entities at once (batch version of entity-info). Pass a list of dev-ids, get back a map of dev-id to entity info."
+  :atlas/impl #(entities-info (:entity/dev-id-list %))})
+
+(cid/register!
+ :fn.ide/inspect-entity :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-inspect-entity}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:entity/inspection]
+  :execution-function/deps #{}
+  :atlas/docs "Deep inspection of an entity including raw registry data, compound identity analysis, and structural details. More verbose than entity-info — use for debugging."
+  :atlas/impl #(inspect-entity (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/entity-doc :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entity-doc}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:entity/doc]
+  :execution-function/deps #{}
+  :atlas/docs "Get documentation for an entity, enriched with auto-generated descriptions based on its type, aspects, and relationships."
+  :atlas/impl #(entity-doc (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/suggest-aspects :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-suggest-aspects}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:aspect/suggestions]
+  :execution-function/deps #{}
+  :atlas/docs "Suggest additional aspects that might apply to an entity based on patterns from similar entities. Use this to improve semantic coverage."
+  :atlas/impl #(suggest-aspects (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/semantic-similarity :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-semantic-similarity}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:similarity/results]
+  :execution-function/deps #{}
+  :atlas/docs "Find entities semantically similar to a given entity based on shared aspects. Results are ranked by similarity score. Use this to discover related functionality."
+  :atlas/impl #(semantic-similarity (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/validate-identity :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-validate-identity}
+ {:execution-function/context [:entity/identity-set]
+  :execution-function/response [:validation/result]
+  :execution-function/deps #{}
+  :atlas/docs "Validate a proposed compound identity set: check it has exactly one entity type, all keywords are qualified, and aspects follow conventions."
+  :atlas/impl #(validate-identity (:entity/identity-set %))})
+
+;; Trace registrations are in atlas.ide.trace (loaded via require)
+
+;; Intent: diagnose (system-wide analysis)
+
+(cid/register!
+ :fn.ide/check-invariants :atlas/execution-function
+ #{:domain/ide :intent/diagnose :meta/ide-check-invariants}
+ {:execution-function/context []
+  :execution-function/response [:invariant/errors :invariant/warnings]
+  :execution-function/deps #{}
+  :atlas/docs "Run all registered invariant checks against the current registry. Returns error count, warning count, and detailed violation messages. Use this to verify architectural consistency."
+  :atlas/impl (fn [_] (check-invariants))})
+
+(cid/register!
+ :fn.ide/validate-entity :atlas/execution-function
+ #{:domain/ide :intent/diagnose :meta/ide-validate-entity}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:validation/errors :validation/warnings]
+  :execution-function/deps #{}
+  :atlas/docs "Check invariants relevant to a specific entity. Filters all violations to show only those mentioning this entity. Use this to validate a single entity in isolation."
+  :atlas/impl #(validate-entity (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/domain-coupling :atlas/execution-function
+ #{:domain/ide :intent/diagnose :meta/ide-domain-coupling}
+ {:execution-function/context []
+  :execution-function/response [:coupling/matrix]
+  :execution-function/deps #{}
+  :atlas/docs "Analyze inter-domain coupling: for each domain, show which other domains it depends on and how many entities it has. Use this to detect tight coupling between domains."
+  :atlas/impl (fn [_] (domain-coupling))})
+
+(cid/register!
+ :fn.ide/pii-surface :atlas/execution-function
+ #{:domain/ide :intent/diagnose :meta/ide-pii-surface}
+ {:execution-function/context []
+  :execution-function/response [:pii/entities]
+  :execution-function/deps #{}
+  :atlas/docs "Find all entities that handle PII (personally identifiable information). Detects entities with :data/pii or :effect/pii aspects. Use this for privacy audits and compliance reviews."
+  :atlas/impl (fn [_] (pii-surface))})
+
+(cid/register!
+ :fn.ide/error-handler-coverage :atlas/execution-function
+ #{:domain/ide :intent/diagnose :meta/ide-error-handler-coverage}
+ {:execution-function/context []
+  :execution-function/response [:coverage/results]
+  :execution-function/deps #{}
+  :atlas/docs "Analyze error handler coverage: which entities have error handling aspects and which don't. Use this to find gaps in error handling across the system."
+  :atlas/impl (fn [_] (error-handler-coverage))})
+
+;; Intent: explain (documentation & views)
+
+(cid/register!
+ :fn.ide/system-summary :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-system-summary}
+ {:execution-function/context []
+  :execution-function/response [:system/summary]
+  :execution-function/deps #{}
+  :atlas/docs "Get a high-level system overview: entity counts by type, domain breakdown, and key architectural metrics. Use this as a starting point to understand a registry."
+  :atlas/impl (fn [_] (system-summary))})
+
+(cid/register!
+ :fn.ide/generate-markdown :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-generate-markdown}
+ {:execution-function/context []
+  :execution-function/response [:doc/markdown]
+  :execution-function/deps #{}
+  :atlas/docs "Generate full markdown documentation for the entire registry. Includes entity listings, aspect catalog, and architectural overview."
+  :atlas/impl (fn [_] (generate-markdown))})
+
+(cid/register!
+ :fn.ide/aspect-catalog :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-aspect-catalog}
+ {:execution-function/context []
+  :execution-function/response [:aspect/catalog]
+  :execution-function/deps #{}
+  :atlas/docs "Get a structured catalog of all aspects organized by namespace, with usage counts and example entities. Use this to understand the full semantic vocabulary."
+  :atlas/impl (fn [_] (aspect-catalog))})
+
+(cid/register!
+ :fn.ide/list-templates :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-list-templates}
+ {:execution-function/context []
+  :execution-function/response [:template/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all registered entity templates (pre-configured aspect sets for common patterns). Use this to discover reusable registration patterns."
+  :atlas/impl (fn [_] (list-templates))})
+
+(cid/register!
+ :fn.ide/by-tier :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-by-tier}
+ {:execution-function/context []
+  :execution-function/response [:tier/groups]
+  :execution-function/deps #{}
+  :atlas/docs "Group all entities by their architectural tier (service, handler, gateway, etc.). Use this to see the layered architecture of the system."
+  :atlas/impl (fn [_] (by-tier))})
+
+(cid/register!
+ :fn.ide/architecture-view :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-architecture-view}
+ {:execution-function/context []
+  :execution-function/response [:architecture/view]
+  :execution-function/deps #{}
+  :atlas/docs "Get an architectural view of the system: domains, tiers, cross-cutting concerns, and their entity counts. Use this for high-level architecture diagrams."
+  :atlas/impl (fn [_] (architecture-view))})
+
+(cid/register!
+ :fn.ide/operations-view :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-operations-view}
+ {:execution-function/context []
+  :execution-function/response [:operations/view]
+  :execution-function/deps #{}
+  :atlas/docs "Get an operations-focused view: entities grouped by operation type (validate, process, query, etc.). Use this to understand the system's behavioral surface."
+  :atlas/impl (fn [_] (operations-view))})
+
+(cid/register!
+ :fn.ide/llm-context :atlas/execution-function
+ #{:domain/ide :intent/explain :meta/ide-llm-context}
+ {:execution-function/context []
+  :execution-function/response [:atlas/ontology :atlas/tools :atlas/types :atlas/registry]
+  :execution-function/deps #{}
+  :atlas/docs "Get a comprehensive context dump designed for LLM consumption: ontology rules, available tools, entity types, and full registry. Use this to bootstrap an LLM's understanding of the system."
+  :atlas/impl (fn [_] (llm-context))})
+
+;; Intent: refactor
+
+(cid/register!
+ :fn.ide/aspect-impact :atlas/execution-function
+ #{:domain/ide :intent/refactor :meta/ide-aspect-impact}
+ {:execution-function/context [:query/aspect]
+  :execution-function/response [:aspect-impact/results]
+  :execution-function/deps #{}
+  :atlas/docs "Analyze the impact of removing or changing an aspect: how many entities use it, which domains are affected, and what compound identities would change. Use this before refactoring aspects."
+  :atlas/impl #(aspect-impact (:query/aspect %))})
+
+(cid/register!
+ :fn.ide/preview-refactor-aspect :atlas/execution-function
+ #{:domain/ide :intent/refactor :meta/ide-preview-refactor-aspect}
+ {:execution-function/context [:refactor/old-aspect :refactor/new-aspect]
+  :execution-function/response [:refactor/affected-count :refactor/conflicts :refactor/preview]
+  :execution-function/deps #{}
+  :atlas/docs "Preview renaming an aspect: shows affected entity count, potential compound-id conflicts, and a before/after preview. Use this to safely plan aspect renames."
+  :atlas/impl #(preview-refactor-aspect (:refactor/old-aspect %) (:refactor/new-aspect %))})
+
+;; Intent: query (protocols & components)
+
+(cid/register!
+ :fn.ide/list-protocols :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-protocols}
+ {:execution-function/context []
+  :execution-function/response [:protocol/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all registered interface protocols. Returns dev-ids of entities with type :atlas/interface-protocol."
+  :atlas/impl (fn [_] (list-protocols))})
+
+(cid/register!
+ :fn.ide/protocol-info :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-protocol-info}
+ {:execution-function/context [:protocol/id]
+  :execution-function/response [:protocol/info]
+  :execution-function/deps #{}
+  :atlas/docs "Get detailed information about a specific protocol: its methods, implementing components, and aspects."
+  :atlas/impl #(protocol-info (:protocol/id %))})
+
+(cid/register!
+ :fn.ide/component-protocols :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-component-protocols}
+ {:execution-function/context [:component/id]
+  :execution-function/response [:protocol/list]
+  :execution-function/deps #{}
+  :atlas/docs "List all protocols that a given component implements. Use this to understand a component's interface surface."
+  :atlas/impl #(component-protocols (:component/id %))})
+
+(cid/register!
+ :fn.ide/components-implementing :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-components-implementing}
+ {:execution-function/context [:protocol/id]
+  :execution-function/response [:component/list]
+  :execution-function/deps #{}
+  :atlas/docs "Find all components that implement a given protocol. Use this to discover available implementations."
+  :atlas/impl #(components-implementing (:protocol/id %))})
+
+;; Intent: query (business layer)
+
+(cid/register!
+ :fn.ide/list-business-entities :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-list-business-entities}
+ {:execution-function/context []
+  :execution-function/response [:business/entities]
+  :execution-function/deps #{}
+  :atlas/docs "List all business-layer entities (data schemas tagged as business entities). Use this to see the domain model."
+  :atlas/impl (fn [_] (list-business-entities))})
+
+(cid/register!
+ :fn.ide/business-entity-info :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-business-entity-info}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:business/info]
+  :execution-function/deps #{}
+  :atlas/docs "Get detailed info about a business entity: its fields, relationships, and domain aspects."
+  :atlas/impl #(business-entity-info (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/entities-implementing :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-entities-implementing}
+ {:execution-function/context [:query/aspect]
+  :execution-function/response [:entity/dev-id-list]
+  :execution-function/deps #{}
+  :atlas/docs "Find all entities that implement a given aspect (alias for entities-with-aspect, focused on business domain queries)."
+  :atlas/impl #(entities-implementing (:query/aspect %))})
+
+(cid/register!
+ :fn.ide/business-aspects-of :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-business-aspects-of}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:business/aspects]
+  :execution-function/deps #{}
+  :atlas/docs "Get the business-relevant aspects of an entity (filtering out infrastructure aspects like :meta/*, :atlas/*). Use this to see an entity's semantic meaning."
+  :atlas/impl #(business-aspects-of (:entity/dev-id %))})
+
+;; Intent: query (explorer)
+
+(cid/register!
+ :fn.ide/explorer-filter-entities :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-explorer-filter-entities}
+ {:execution-function/context [:query/aspects-and :query/aspects-or]
+  :execution-function/response [:explorer/results]
+  :execution-function/deps #{}
+  :atlas/docs "Filter entities by AND/OR aspect criteria with similarity scoring. Entities matching all AND-aspects are ranked highest, then those matching any OR-aspects. Use this for the visual explorer's faceted search."
+  :atlas/impl #(explorer-filter-entities (:query/aspects-and %) (:query/aspects-or %))})
+
+(cid/register!
+ :fn.ide/similar-with-diff :atlas/execution-function
+ #{:domain/ide :intent/query :meta/ide-similar-with-diff}
+ {:execution-function/context [:entity/compound-identity]
+  :execution-function/response [:similarity/results]
+  :execution-function/deps #{}
+  :atlas/docs "Find entities similar to a compound identity, showing which aspects are shared and which differ. Results sorted by similarity. Use this to find near-duplicates or related patterns."
+  :atlas/impl #(similar-with-diff (:entity/compound-identity %))})
+
+;; Intent: completion
+
+(cid/register!
+ :fn.ide/complete-dev-id :atlas/execution-function
+ #{:domain/ide :intent/completion :meta/ide-complete-dev-id}
+ {:execution-function/context [:completion/prefix]
+  :execution-function/response [:completion/candidates]
+  :execution-function/deps #{}
+  :atlas/docs "Autocomplete a dev-id from a prefix string. Returns matching dev-ids sorted alphabetically. Use this for IDE autocomplete in dev-id input fields."
+  :atlas/impl #(complete-dev-id (:completion/prefix %))})
+
+(cid/register!
+ :fn.ide/complete-aspect :atlas/execution-function
+ #{:domain/ide :intent/completion :meta/ide-complete-aspect}
+ {:execution-function/context [:completion/prefix]
+  :execution-function/response [:completion/candidates]
+  :execution-function/deps #{}
+  :atlas/docs "Autocomplete an aspect from a prefix string. Returns matching aspect keywords sorted alphabetically. Use this for IDE autocomplete in aspect input fields."
+  :atlas/impl #(complete-aspect (:completion/prefix %))})
+
+(cid/register!
+ :fn.ide/complete-data-key :atlas/execution-function
+ #{:domain/ide :intent/completion :meta/ide-complete-data-key}
+ {:execution-function/context [:completion/prefix]
+  :execution-function/response [:completion/candidates]
+  :execution-function/deps #{}
+  :atlas/docs "Autocomplete a data key from a prefix string. Searches across all endpoint context/response keys. Use this for IDE autocomplete in data key input fields."
+  :atlas/impl #(complete-data-key (:completion/prefix %))})
+
+;; History registrations are in atlas.ide.history (loaded via require)
+;; Trace registrations are in atlas.ide.trace (loaded via require)
+
+;; =============================================================================
+;; IDE TOOL ADAPTER — dispatch to registered :fn.ide/* functions by dev-id
+;; =============================================================================
+
+(defn handle-tool
+  "Dispatch to a registered IDE tool by dev-id.
+
+   Each :atlas/impl accepts a map keyed by :execution-function/context keywords.
+
+   Input: {:tool/name :fn.ide/entity-info
+           :tool/args {:entity/dev-id :fn/foo}}
+
+   Returns: {:success? boolean
+             :data {...} or :error {...}}"
+  [{:tool/keys [name args]}]
+  (let [dev-id (ensure-keyword name)]
+    (if-let [handler (:atlas/impl (rt/props-for dev-id))]
+      (try
+        {:success? true
+         :data (handler (or args {}))}
+        (catch #?(:clj Exception :cljs js/Error) e
+          {:success? false
+           :error {:message #?(:clj (.getMessage e) :cljs (.-message e))
+                   :tool dev-id}}))
+      {:success? false
+       :error {:message "Unknown IDE tool"
+              :tool dev-id
+              :available (vec (entities-with-aspect :domain/ide))}})))
+
+(defn available-ide-tools
+  "List all registered IDE tools with their context/response specs."
   []
-  @history-conn)
+  (->> (entities-with-aspect :domain/ide)
+       (map (fn [dev-id]
+              (let [props (rt/props-for dev-id)]
+                {:tool/name dev-id
+                 :tool/context (:execution-function/context props)
+                 :tool/response (:execution-function/response props)})))
+       vec))
+
+;; =============================================================================
+;; DEPRECATION — direct function calls are deprecated in favor of handle-tool
+;; =============================================================================
+;; Clients should use (handle-tool {:tool/name :fn.ide/entity-info :tool/args {...}})
+;; instead of calling (entity-info ...) directly.
+
+(doseq [v [#'list-entity-types #'list-entity-types-with-counts #'list-entities-of-type
+            #'registered-entity? #'entity-type-ontology-keys #'entity-prop-keys
+            #'entity-prop-items #'list-all-entities #'list-aspects #'list-aspect-namespaces
+            #'list-aspect-names-in-namespace #'entities-with-aspect #'entity-info
+            #'entities-info #'inspect-entity #'entity-doc #'suggest-aspects
+            #'semantic-similarity #'validate-identity
+            #'data-flow #'dependents-of #'dependencies-of #'recursive-dependencies-of
+            #'recursive-dependencies-summary #'producers-of #'consumers-of
+            #'trace-data-flow #'impact-of-change #'execution-order
+            #'check-invariants #'validate-entity #'domain-coupling #'pii-surface
+            #'error-handler-coverage
+            #'system-summary #'generate-markdown #'aspect-catalog #'list-templates
+            #'by-tier #'architecture-view #'operations-view #'llm-context
+            #'aspect-impact #'preview-refactor-aspect
+            #'list-protocols #'protocol-info #'component-protocols #'components-implementing
+            #'list-business-entities #'business-entity-info #'entities-implementing
+            #'business-aspects-of
+            #'explorer-filter-entities #'similar-with-diff
+            #'complete-dev-id #'complete-aspect #'complete-data-key
+            #'history-init! #'history-versions #'history-entity-timeline
+            #'history-full-timeline #'history-version-diff #'history-version-diff-full
+            #'history-version-summary #'history-vocabulary-diff #'history-edges-at
+            #'history-dependents-of #'history-edge-diff #'history-edge-summary
+            #'history-snapshot! #'history-get-conn]]
+  (alter-meta! v assoc :deprecated "Use (handle-tool {:tool/name :fn.ide/... :tool/args {...}}) instead."))
