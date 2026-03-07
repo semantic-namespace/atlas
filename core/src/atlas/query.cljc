@@ -279,52 +279,12 @@
        (sort-by :size >)))
 
 ;; =============================================================================
-;; Data Flow Queries
+;; Data Flow Queries — delegated to atlas.query.dataflow
 ;; =============================================================================
 
-(defn find-producers
-  "Find entities producing a data key.
-   property-key is the key to check (e.g., :context/response or :semantic-namespace/response).
-   Returns map of identities→values.
-
-   UNIFIES:
-   - atlas.semantic-queries/produces
-   - atlas.registry.graph/trace-data-flow (producer side)"
-  [registry data-key property-key]
-  (->> registry
-       (filter (fn [[_ v]]
-                 (some #{data-key} (get v property-key))))
-       (into {})))
-
-(defn find-consumers
-  "Find entities consuming a data key.
-   property-key is the key to check (e.g., :context/input or :semantic-namespace/context).
-   Returns map of identities→values.
-
-   UNIFIES:
-   - atlas.semantic-queries/consumes
-   - atlas.registry.graph/trace-data-flow (consumer side)"
-  [registry data-key property-key]
-  (->> registry
-       (filter (fn [[_ v]]
-                 (some #{data-key} (get v property-key))))
-       (into {})))
-
-(defn trace-data-flow
-  "Trace data flow for a key.
-   producer-key and consumer-key specify which properties to check.
-   Returns {:data-key :producers :consumers :connected?}.
-
-   UNIFIES:
-   - atlas.semantic-queries/trace-data-flow
-   - atlas.registry.graph/trace-data-flow"
-  [registry data-key producer-key consumer-key]
-  (let [producers (find-producers registry data-key producer-key)
-        consumers (find-consumers registry data-key consumer-key)]
-    {:data-key data-key
-     :producers producers
-     :consumers consumers
-     :connected? (and (seq producers) (seq consumers))}))
+(defn find-producers  [registry data-key property-key]              ((requiring-resolve 'atlas.query.dataflow/find-producers) registry data-key property-key))
+(defn find-consumers  [registry data-key property-key]              ((requiring-resolve 'atlas.query.dataflow/find-consumers) registry data-key property-key))
+(defn trace-data-flow [registry data-key producer-key consumer-key] ((requiring-resolve 'atlas.query.dataflow/trace-data-flow) registry data-key producer-key consumer-key))
 
 ;; =============================================================================
 ;; Algebraic Operations
@@ -374,144 +334,19 @@
          (vec))))
 
 ;; =============================================================================
-;; Architecture Analysis
-;; (From atlas.semantic-queries - domain-specific query patterns)
+;; Architecture Analysis — delegated to atlas.query.architecture
 ;; =============================================================================
 
-(defn dependency-graph
-  "Build dependency graph from entities with :deps key.
-   Returns seq of {:id :deps :identity} maps.
-
-   From atlas.semantic-queries/dependency-graph"
-  [registry id-key deps-key]
-  (->> registry
-       (filter (fn [[_ v]] (get v deps-key)))
-       (map (fn [[id v]]
-              {:id (get v id-key)
-               :deps (get v deps-key)
-               :identity id}))
-       (remove #(empty? (:deps %)))))
-
-(defn by-tier
-  "Group entities by architectural tier.
-   Returns map of tier→[dev-ids].
-
-   From atlas.semantic-queries/by-tier"
-  [registry id-key]
-  (let [tiers [:tier/foundation :tier/service :tier/api]]
-    (into {}
-          (for [tier tiers]
-            [tier (->> (find-by-aspect registry tier)
-                       vals
-                       (map #(get % id-key))
-                       (remove nil?)
-                       vec)]))))
-
-(defn domain-coupling
-  "Analyze inter-domain dependencies.
-   Returns seq of {:domain :depends-on :entity-count} maps.
-
-   From atlas.semantic-queries/domain-coupling"
-  [registry id-key deps-key]
-  (let [domains (->> registry
-                     keys
-                     (mapcat identity)
-                     (filter #(= "domain" (namespace %)))
-                     set)]
-    (for [domain domains
-          :let [domain-entities (find-by-aspect registry domain)
-                deps (->> domain-entities vals (mapcat #(get % deps-key)) set)
-                dep-domains (->> registry
-                                 (filter (fn [[_ v]] (some deps #{(get v id-key)})))
-                                 (mapcat (fn [[id _]]
-                                           (filter #(= "domain" (namespace %)) id)))
-                                 set)]]
-      {:domain domain
-       :depends-on (disj dep-domains domain)
-       :entity-count (count domain-entities)})))
-
-(defn impact-of-change
-  "Analyze what would be affected if entity changes.
-   Returns {:entity :entity/produces :direct-dependents}.
-
-   From atlas.semantic-queries/impact-of-change"
-  [registry entity-id id-key deps-key response-key]
-  (let [entity-entry (->> registry
-                          (filter (fn [[_ v]] (= entity-id (get v id-key))))
-                          first)
-        entity-response (get (second entity-entry) response-key)
-        direct-deps (->> registry
-                         (filter (fn [[_ v]]
-                                   (some #{entity-id} (get v deps-key))))
-                         (map (fn [[_ v]] (get v id-key))))]
-    {:entity entity-id
-     :entity/produces entity-response
-     :direct-dependents (vec direct-deps)}))
+(defn dependency-graph  [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/dependency-graph) registry id-key deps-key))
+(defn by-tier           [registry id-key]                                   ((requiring-resolve 'atlas.query.architecture/by-tier) registry id-key))
+(defn domain-coupling   [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/domain-coupling) registry id-key deps-key))
+(defn impact-of-change  [registry entity-id id-key deps-key response-key]   ((requiring-resolve 'atlas.query.architecture/impact-of-change) registry entity-id id-key deps-key response-key))
 
 ;; =============================================================================
-;; Compliance & Coverage
-;; (From atlas.semantic-queries)
+;; Compliance & Coverage — delegated to atlas.query.compliance
 ;; =============================================================================
 
-(defn pii-surface
-  "Find all entities handling PII with audit status.
-   Returns seq of {:id :audited? :context :response} maps.
-
-   From atlas.semantic-queries/pii-surface"
-  [registry id-key context-key response-key]
-  (->> (find-by-aspect registry :compliance/pii)
-       (map (fn [[id v]]
-              {:id (get v id-key)
-               :audited? (contains? id :compliance/audited)
-               :context (get v context-key)
-               :response (get v response-key)}))))
-
-(defn aspect-coverage
-  "Show which entities have specific cross-cutting concerns.
-   Returns seq of {:id :has} where :has is map of aspect→boolean.
-
-   From atlas.semantic-queries/aspect-coverage"
-  [registry entity-type id-key aspects]
-  (for [[id v] (find-by-aspect registry entity-type)]
-    {:id (get v id-key)
-     :has (into {} (for [a aspects]
-                     [a (contains? id a)]))}))
-
-(defn error-handler-coverage
-  "Check if error handlers exist for marked concerns.
-   Returns {:handlers :coverage}.
-
-   From atlas.semantic-queries/error-handler-coverage"
-  [registry id-key]
-  (let [handlers (find-by-aspect registry :semantic-namespace/error-handler)
-        needs-handling #{:protocol/http :temporal/timeout
-                         :authorization/required :capacity/rate-limited}]
-    {:handlers (map (fn [[id v]]
-                      {:id (get v id-key)
-                       :handles (set/intersection id needs-handling)})
-                    handlers)
-     :coverage (for [concern needs-handling
-                     [id v] (find-by-aspect registry concern)]
-                 {:entity (get v id-key)
-                  :concern concern
-                  :has-handler? (boolean (some #(contains? % concern) (keys handlers)))})}))
-
-;; =============================================================================
-;; Decisions & Governance
-;; (From atlas.semantic-queries)
-;; =============================================================================
-
-(defn decisions-by-category
-  "Group architectural decisions by category.
-   Returns map of category→[decision-maps].
-
-   From atlas.semantic-queries/decisions-by-category"
-  [registry id-key]
-  (->> (find-by-aspect registry :semantic-namespace/architectural-decision)
-       (map (fn [[id v]]
-              {:id (get v id-key)
-               :category (first (filter #(= "decision-category" (namespace %)) id))
-               :question (:decision/question v)
-               :chosen (:decision/chosen v)
-               :priority (:decision/priority v)}))
-       (group-by :category)))
+(defn pii-surface              [registry id-key context-key response-key]  ((requiring-resolve 'atlas.query.compliance/pii-surface) registry id-key context-key response-key))
+(defn aspect-coverage          [registry entity-type id-key aspects]       ((requiring-resolve 'atlas.query.compliance/aspect-coverage) registry entity-type id-key aspects))
+(defn error-handler-coverage   [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/error-handler-coverage) registry id-key))
+(defn decisions-by-category    [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/decisions-by-category) registry id-key))

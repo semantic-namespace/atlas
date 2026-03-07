@@ -6,7 +6,6 @@
   (:refer-clojure :exclude [exists? remove])
   (:require [clojure.string :as str]
             [clojure.set :as set]
-            [atlas.query :as query]
             [clojure.spec.alpha :as s]
             [taoensso.telemere :as tel]
             [clojure.walk :as walk]
@@ -227,7 +226,7 @@
   Call this after all code is loaded to check type consistency."
   []
   (let [types (registered-types)
-        all-identities (query/all-identities @registry)
+        all-identities (vec (keys @registry))
         violations (for [id all-identities
                          :when (not (contains? id :atlas/type))
                          :let [type (entity-type id)]
@@ -271,7 +270,7 @@
 
   Returns true if all entities are valid, false otherwise."
   []
-  (let [ontologies (query/find-by-aspect @registry :atlas/ontology)
+  (let [ontologies (into {} (filter (fn [[id _]] (contains? id :atlas/ontology)) @registry))
         ontology-specs (into {}
                              (for [[_compound-id props] ontologies
                                    :let [entity-type (:ontology/for props)
@@ -297,115 +296,16 @@
             @registry)))
 
 ;; =============================================================================
-;; Analytical Utilities (Domain-Specific to Registry)
+;; Analytical Utilities — delegated to atlas.registry.analysis
 ;; =============================================================================
+;; These require atlas.query which the kernel intentionally does not depend on.
+;; The functions are kept here as delegation stubs for backward compatibility.
+;; New code should require atlas.registry.analysis directly.
 
-(defn clusters
-  "Group identities by primary namespace, returning a map {:ns [identities]}."
-  []
-  (reduce (fn [acc id-set]
-            (reduce (fn [inner aspect]
-                      (let [ns-part (namespace aspect)]
-                        (update inner (keyword ns-part)
-                                (fnil conj #{}) id-set)))
-                    acc id-set))
-          {}
-          (query/all-identities @registry)))
-
-(defn correlation-matrix
-  "Return normalized correlation matrix of aspect co-occurrence (as 0–1 floats)."
-  []
-  (let [aspects (keys (query/aspect-frequency @registry))
-        all-ids (query/all-identities @registry)
-        total (max 1 (count all-ids))]
-    (into {}
-          (for [a1 aspects]
-            [a1 (into {}
-                      (for [a2 aspects]
-                        [a2 (/ (count (filter #(and (contains? % a1)
-                                                    (contains? % a2))
-                                              all-ids))
-                               total)]))]))))
-
-;; =============================================================================
-;; Heuristics & Diagnostics
-;; =============================================================================
-
-(defn missing-aspects
-  "Suggest aspects potentially missing from an identity based on correlation."
-  [identity-set]
-  (let [similar (query/semantic-similarity @registry identity-set 0.0)
-        all-aspects (->> similar
-                         (mapcat :identity)
-                         (frequencies)
-                         (sort-by val >))]
-    (->> all-aspects
-         (clojure.core/remove (fn [[aspect _]] (contains? identity-set aspect)))
-         (take 5)
-         (mapv (fn [[aspect freq]]
-                 {:aspect aspect
-                  :correlation (/ freq (count similar))})))))
-
-(defn find-anomalies
-  "Return list of identities that violate expected semantic constraints."
-  []
-  (let [all-ids (query/all-identities @registry)]
-    (->> all-ids
-         (filter (fn [id]
-                   (or (and (contains? id :sync/operation)
-                            (contains? id :async/operation))
-                       (and (contains? id :api/endpoint)
-                            (not (contains? id :auth/required)))))))))
-
-;; =============================================================================
-;; Visualization
-;; =============================================================================
-
-(defn to-graphviz
-  "Return a Graphviz DOT string representing compound-identity relationships."
-  []
-  (let [edges (for [id (query/all-identities @registry)
-                    aspect id]
-                [aspect id])]
-    (str "digraph CompoundIdentity {\n"
-         "  rankdir=LR;\n"
-         "  node [shape=box];\n"
-         (str/join "\n"
-                   (for [[aspect id] edges]
-                      (format* "  \"%s\" -> \"%s\";"
-                               (pr-str aspect)
-                               (pr-str id))))
-         "\n}")))
-
-(defn to-mermaid
-  "Return a Mermaid diagram (graph TD) for namespace-based clusters."
-  []
-  (let [clusters (clusters)]
-    (str "graph TD\n"
-         (str/join "\n"
-                   (for [[ns-key ids] clusters]
-                     (str "  subgraph " (name ns-key) "\n"
-                          (str/join "\n"
-                                     (for [id ids]
-                                       (format* "    %s[\"%s\"]"
-                                                (hash id)
-                                                (str/join ", " (map name id)))))
-                          "\n  end"))))))
-
-;; =============================================================================
-;; Summary
-;; =============================================================================
-
-(defn summary
-  "Return data summary of the current identity registry:
-   {:total :unique-aspects :namespaces :top-aspects :largest :anomalies}"
-  []
-  (let [ids (query/all-identities @registry)
-        aspects (query/aspect-frequency @registry)
-        clusters (clusters)]
-    {:total (count ids)
-     :unique-aspects (count aspects)
-     :namespaces (keys clusters)
-     :top-aspects (take 5 aspects)
-     :largest (take 3 (sort-by count > ids))
-     :anomalies (find-anomalies)}))
+(defn clusters           [] ((requiring-resolve 'atlas.registry.analysis/clusters)))
+(defn correlation-matrix [] ((requiring-resolve 'atlas.registry.analysis/correlation-matrix)))
+(defn missing-aspects    [identity-set] ((requiring-resolve 'atlas.registry.analysis/missing-aspects) identity-set))
+(defn find-anomalies     [] ((requiring-resolve 'atlas.registry.analysis/find-anomalies)))
+(defn to-graphviz        [] ((requiring-resolve 'atlas.registry.analysis/to-graphviz)))
+(defn to-mermaid         [] ((requiring-resolve 'atlas.registry.analysis/to-mermaid)))
+(defn summary            [] ((requiring-resolve 'atlas.registry.analysis/summary)))
