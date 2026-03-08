@@ -53,6 +53,7 @@
 (require 'atlas-interactive)
 (require 'atlas-history)
 (require 'atlas-lens)
+(require 'atlas-recent)
 (require 'atlas-at-point)
 
 ;;; Explorer Transient Menu
@@ -116,8 +117,17 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("c" "Check invariants" atlas-browse-check-invariants)
     ("G" "Refresh cache" atlas--invalidate-cache)
     ("!" "Toggle debug" atlas-toggle-debug)]
-   ["Source"
-    ("L" "Toggle lens mode" atlas-lens-mode)]
+   ["Source (Lens)"
+    ("L" "Toggle lens mode" atlas-lens-mode)
+    ("m" "Cycle lens (raw/semantic/impl)" atlas-lens-cycle-mode)
+    ("r" "Refresh lens" atlas-lens-refresh)]
+   ["Recent (git)"
+    ("g" "Recent entities" atlas-recent-entities)
+    ("G" "Recent aspects" atlas-recent-aspects)
+    ("j" "Jump to recent" atlas-recent-jump)
+    ("C" "Commit entities" atlas-recent-commit-entities)
+    ("S" "Staged entities" atlas-recent-staged-entities)
+    ("I" "Insert staged dev-ids" atlas-recent-insert-staged-entities)]
    ["History"
     ("h" "History menu →" atlas-history)]
    ["Navigation"
