@@ -69,7 +69,7 @@ clojure -M:repl
 
 ## Code Architecture
 
-This is a **monorepo** with two libraries:
+This is a **monorepo** with three libraries:
 
 ```
 atlas/
@@ -79,7 +79,12 @@ atlas/
 │   ├── build.clj
 │   ├── build-and-deploy.sh
 │   └── src/atlas/
-├── ui/                # atlas-ui - dev tool (depends on core)
+├── dev-tools/         # atlas-dev - dev tooling (depends on core)
+│   ├── deps.edn
+│   ├── build.clj
+│   ├── build-and-deploy.sh
+│   └── src/atlas/
+├── ui/                # atlas-ui - visual explorer (depends on core)
 │   ├── deps.edn
 │   ├── build.clj
 │   ├── build-and-deploy.sh
