@@ -15,8 +15,46 @@
             [clojure.tools.reader.reader-types :as rt]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.set :as set]
             [clojure.java.shell :as shell]
+            [clojure.spec.alpha :as s]
             [atlas.registry :as registry]))
+
+;; =============================================================================
+;; Specs for :git/* keywords
+;; =============================================================================
+
+;; Inputs (context keys) — git refs are non-blank strings
+(s/def :git/commit-ref  (s/nilable string?))
+(s/def :git/base-ref    string?)
+(s/def :git/head-ref    string?)
+(s/def :git/old-ref     string?)
+(s/def :git/new-ref     string?)
+(s/def :git/commit-refs (s/coll-of string? :kind sequential?))
+(s/def :git/staged      any?) ; presence flag, no meaningful value
+
+;; Outputs (response keys)
+(s/def :git/message      (s/nilable string?))
+(s/def :git/messages     (s/coll-of string? :kind sequential?))
+(s/def :git/commits      (s/coll-of string? :kind sequential?))
+(s/def :git/dates        (s/coll-of string? :kind sequential?))
+(s/def :git/authors      (s/coll-of string? :kind sequential?))
+(s/def :git/commit-count nat-int?)
+
+;; :query/* — query parameters
+(s/def :query/count  pos-int?)
+(s/def :query/ranked boolean?)
+
+;; :source/* — source scanning
+(s/def :source/dirs      (s/coll-of string? :kind sequential?))
+(s/def :source/total     nat-int?)
+(s/def :source/tracked   nat-int?)
+(s/def :source/untracked nat-int?)
+
+;; :history/* — atlas history integration
+(s/def :history/conn          any?) ; datascript conn, opaque at this layer
+(s/def :history/versions      (s/coll-of any? :kind sequential?))
+(s/def :history/entity-counts (s/map-of any? nat-int?))
 
 ;; =============================================================================
 ;; Source Scanning (internal helpers)
@@ -69,6 +107,52 @@
         ;; 4-arity: first arg is the dev-id
         first-arg))))
 
+(defn- extract-registration
+  "Extract full registration data from a register! call.
+   Returns {:dev-id :entity-type :aspects :props} or nil if not a literal call."
+  [form]
+  (let [args (rest form)
+        first-arg (first args)]
+    (when (keyword? first-arg)
+      (if (and (namespace first-arg)
+               (= "atlas" (namespace first-arg)))
+        ;; 3-arity: (register! :atlas/type #{aspects} {props})
+        (let [[entity-type aspects props] args]
+          (when (and (keyword? entity-type) (set? aspects))
+            {:entity-type entity-type
+             :aspects     aspects
+             :props       (when (map? props)
+                            (into {} (filter (fn [[k _]] (keyword? k)) props)))}))
+        ;; 4-arity: (register! :dev-id :atlas/type #{aspects} {props})
+        (let [[dev-id entity-type aspects props] args]
+          (when (and (keyword? dev-id) (keyword? entity-type) (set? aspects))
+            {:dev-id      dev-id
+             :entity-type entity-type
+             :aspects     aspects
+             :props       (when (map? props)
+                            (into {} (filter (fn [[k _]] (keyword? k)) props)))}))))))
+
+(defn- walk-find-registrations
+  "Walk a form tree and collect full registration data with metadata.
+   Returns [{:dev-id :entity-type :aspects :props :file :line :end-line} ...]"
+  [form file-path]
+  (let [calls (atom [])]
+    (letfn [(walk [x]
+              (when (register-call? x)
+                (let [m (meta x)
+                      reg (extract-registration x)]
+                  (when (and reg (:dev-id reg) m (:line m))
+                    (swap! calls conj
+                           (assoc reg
+                                  :file (str file-path)
+                                  :line (:line m)
+                                  :end-line (:end-line m))))))
+              (when (sequential? x) (doseq [child x] (walk child)))
+              (when (map? x) (doseq [[k v] x] (walk k) (walk v)))
+              (when (set? x) (doseq [child x] (walk child))))]
+      (walk form))
+    @calls))
+
 (defn- walk-find-register-calls
   "Walk a form tree and collect all register! calls with metadata.
    Uses manual recursion instead of postwalk to preserve reader metadata."
@@ -99,7 +183,7 @@
       (walk form))
     @calls))
 
-(defn- scan-file
+(defn scan-file
   "Scan a single file for register! calls.
    Returns a sequence of {:dev-id :file :line :end-line ...} maps."
   [file-path]
@@ -126,14 +210,21 @@
             forms
             (recur (conj forms form))))))))
 
-(defn- scan-string
+(defn scan-string
   "Scan a string of Clojure source for register! calls.
    Returns a sequence of {:dev-id :file :line :end-line ...} maps."
   [content file-label]
   (let [forms (read-all-forms-from-string content file-label)]
     (mapcat #(walk-find-register-calls % file-label) forms)))
 
-(defn- scan-dirs
+(defn- scan-registrations-from-string
+  "Scan a string for full registration data (dev-id, entity-type, aspects, props).
+   Returns a sequence of registration maps with source location."
+  [content file-label]
+  (let [forms (read-all-forms-from-string content file-label)]
+    (mapcat #(walk-find-registrations % file-label) forms)))
+
+(defn scan-dirs
   "Scan directories for all .clj/.cljc files containing register! calls.
    Returns a map of dev-id -> source location."
   [dirs]
@@ -234,29 +325,32 @@
 
 (defn- scan-at-commit
   "Scan source files as they existed at a specific commit.
+   When file-paths is provided, only scans those files (much faster).
    Returns a map of dev-id -> {:file :line :end-line ...}."
-  [commit-ref]
-  (let [files (clj-files-in-commit commit-ref)]
-    (when files
-      (->> files
-           (mapcat (fn [file-path]
-                     (when-let [content (file-content-at-commit commit-ref file-path)]
-                       (try
-                         (scan-string content file-path)
-                         (catch Exception e
-                           nil)))))
-           (reduce (fn [acc {:keys [dev-id] :as loc}]
-                     (assoc acc dev-id (dissoc loc :dev-id)))
-                   {})))))
+  ([commit-ref]
+   (scan-at-commit commit-ref (clj-files-in-commit commit-ref)))
+  ([commit-ref file-paths]
+   (when file-paths
+     (->> file-paths
+          (mapcat (fn [file-path]
+                    (when-let [content (file-content-at-commit commit-ref file-path)]
+                      (try
+                        (scan-string content file-path)
+                        (catch Exception e
+                          nil)))))
+          (reduce (fn [acc {:keys [dev-id] :as loc}]
+                    (assoc acc dev-id (dissoc loc :dev-id)))
+                  {})))))
 
 (defn- entities-in-commit
   "Find which entity definitions were touched in a commit.
-   Scans files AT that commit for accurate line ranges.
+   Only scans files that changed (not the whole repo).
    Returns a sequence of {:dev-id :file :line :end-line} maps."
   ([commit-ref]
    (let [diff-output (:out (shell/sh "git" "diff" (str commit-ref "~1.." commit-ref)))
          changed-ranges (parse-diff-ranges diff-output)
-         locations (scan-at-commit commit-ref)]
+         changed-clj-files (filterv #(re-matches #".*\.cljc?$" %) (keys changed-ranges))
+         locations (scan-at-commit commit-ref changed-clj-files)]
      (->> locations
           (filter (fn [[dev-id {:keys [file line end-line]}]]
                     (let [file-ranges (get changed-ranges file)]
@@ -480,3 +574,152 @@
                                      :date date
                                      :author author
                                      :message message}))))))))})
+
+;; =============================================================================
+;; Registry-at-commit (bridge to atlas.history)
+;; =============================================================================
+
+(defn- scan-registry-at-commit
+  "Build a registry-shaped map from register! forms at a given commit.
+   Scans source files as they existed at that commit, extracts full registration
+   data, and returns a map matching the shape history/snapshot-version! expects:
+     {compound-id {:atlas/dev-id dev-id :atlas/type entity-type ...props}}
+   Non-serialisable keys (fn values) are excluded since they can't be read from source."
+  ([commit-ref]
+   (scan-registry-at-commit commit-ref (clj-files-in-commit commit-ref)))
+  ([commit-ref file-paths]
+   (when file-paths
+     (->> file-paths
+          (mapcat (fn [file-path]
+                    (when-let [content (file-content-at-commit commit-ref file-path)]
+                      (try
+                        (scan-registrations-from-string content file-path)
+                        (catch Exception _ nil)))))
+          (filter :dev-id)
+          (reduce
+           (fn [acc {:keys [dev-id entity-type aspects props file line end-line]}]
+             (let [compound-id (conj (or aspects #{}) entity-type)
+                   ;; Filter out fn-valued props (not readable from source)
+                   safe-props (into {} (filter (fn [[_ v]]
+                                                 (not (or (list? v) (symbol? v)
+                                                          (and (seq? v) (symbol? (first v))))))
+                                               props))]
+               (assoc acc compound-id
+                      (merge safe-props
+                             {:atlas/dev-id dev-id
+                              :atlas/type   entity-type
+                              :atlas/source {:file file
+                                             :line line
+                                             :end-line end-line}}))))
+           {})))))
+
+(defn- registry-at-commits
+  "Build registry maps for a range of commits.
+   Returns [{:commit sha :version label :registry {compound-id props}}]."
+  [commit-refs]
+  (mapv (fn [sha]
+          (let [msg (first (git-command "log" "-1" "--format=%s" sha))
+                changed-files (let [diff (:out (shell/sh "git" "diff" (str sha "~1.." sha)))]
+                                (filterv #(re-matches #".*\.cljc?$" %)
+                                         (keys (parse-diff-ranges diff))))
+                ;; For accuracy, scan all clj files at this commit
+                ;; (changed-files only tells us what changed, not full state)
+                reg (scan-registry-at-commit sha)]
+            {:commit sha
+             :version (subs sha 0 (min 8 (count sha)))
+             :message msg
+             :registry reg}))
+        commit-refs))
+
+(registry/register!
+ :atlas.source-tracker/registry-at-commit
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/registry-at-commit}
+ {:execution-function/context [:git/commit-ref]
+  :execution-function/response [:registry/map :entity/count :entity/types]
+  :atlas/docs "Build a registry map from register! forms as they existed at a specific commit. Returns a map shaped like the live registry: {compound-id {:atlas/dev-id ... :atlas/type ... ...props}}. Non-serialisable values (functions) are excluded."
+  :atlas/impl (fn [{:keys [git/commit-ref]}]
+                (let [ref (or commit-ref "HEAD")
+                      reg (scan-registry-at-commit ref)]
+                  {:commit ref
+                   :entity-count (count reg)
+                   :entity-types (->> (vals reg) (map :atlas/type) frequencies)
+                   :registry reg}))})
+
+(registry/register!
+ :atlas.source-tracker/commit-semantic-diff
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/commit-semantic-diff}
+ {:execution-function/context [:git/old-ref :git/new-ref]
+  :execution-function/response [:diff/added :diff/removed :diff/aspect-changes :diff/renames]
+  :atlas/docs "Semantic diff between two commits. Builds registry maps from source at each commit, then compares: which entities were added/removed, which aspects changed, potential renames (same type + aspects, different dev-id)."
+  :atlas/impl (fn [{:keys [git/old-ref git/new-ref]}]
+                (let [old-ref (or old-ref "HEAD~1")
+                      new-ref (or new-ref "HEAD")
+                      old-reg (scan-registry-at-commit old-ref)
+                      new-reg (scan-registry-at-commit new-ref)
+                      old-ids (set (map :atlas/dev-id (vals old-reg)))
+                      new-ids (set (map :atlas/dev-id (vals new-reg)))
+                      added   (set/difference new-ids old-ids)
+                      removed (set/difference old-ids new-ids)
+                      ;; Aspect changes for entities present in both
+                      common  (set/intersection old-ids new-ids)
+                      old-by-id (into {} (map (fn [[k v]] [(:atlas/dev-id v) k]) old-reg))
+                      new-by-id (into {} (map (fn [[k v]] [(:atlas/dev-id v) k]) new-reg))
+                      aspect-changes
+                      (->> common
+                           (keep (fn [dev-id]
+                                   (let [old-cid (get old-by-id dev-id)
+                                         new-cid (get new-by-id dev-id)
+                                         old-type (:atlas/type (get old-reg old-cid))
+                                         old-asp (disj old-cid old-type)
+                                         new-asp (disj new-cid (:atlas/type (get new-reg new-cid)))
+                                         added-asp (set/difference new-asp old-asp)
+                                         removed-asp (set/difference old-asp new-asp)]
+                                     (when (or (seq added-asp) (seq removed-asp))
+                                       {:dev-id dev-id
+                                        :added-aspects added-asp
+                                        :removed-aspects removed-asp}))))
+                           vec)
+                      ;; Rename detection: removed + added with same type + aspects
+                      rename-candidates
+                      (->> (for [old-id removed
+                                 :let [old-cid (get old-by-id old-id)
+                                       old-type (:atlas/type (get old-reg old-cid))
+                                       old-asp (disj old-cid old-type)]
+                                 new-id added
+                                 :let [new-cid (get new-by-id new-id)
+                                       new-type (:atlas/type (get new-reg new-cid))
+                                       new-asp (disj new-cid new-type)]
+                                 :when (and (= old-type new-type)
+                                            (= old-asp new-asp))]
+                             {:from old-id :to new-id :type old-type :aspects old-asp})
+                           vec)]
+                  {:old-ref old-ref
+                   :new-ref new-ref
+                   :added (vec added)
+                   :removed (vec removed)
+                   :aspect-changes aspect-changes
+                   :renames rename-candidates
+                   :old-entity-count (count old-reg)
+                   :new-entity-count (count new-reg)}))})
+
+(registry/register!
+ :atlas.source-tracker/git-history-snapshot
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/history :tool/git-history-snapshot}
+ {:execution-function/context [:git/commit-refs :history/conn]
+  :execution-function/response [:history/versions :history/entity-counts]
+  :atlas/docs "Feed git commits into atlas.history as version snapshots. For each commit, scans register! forms to build a registry map, then calls history/snapshot-version! to create a semantic timeline. Requires a history conn (from atlas.history/create-conn)."
+  :atlas/impl (fn [{:keys [git/commit-refs history/conn]}]
+                (when (and commit-refs conn)
+                  (let [results (atom [])
+                        prev-reg (atom nil)]
+                    (doseq [sha commit-refs]
+                      (let [reg (scan-registry-at-commit sha)
+                            version (subs sha 0 (min 8 (count sha)))
+                            result ((requiring-resolve 'atlas.history/snapshot-version!)
+                                    conn reg version @prev-reg nil)]
+                        (swap! results conj (assoc result :commit sha))
+                        (reset! prev-reg reg)))
+                    @results)))})

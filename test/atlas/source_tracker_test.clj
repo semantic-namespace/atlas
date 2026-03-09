@@ -209,43 +209,4 @@ index abc123..def456 100644
     (testing "non-overlapping"
       (is (not (overlap? {:start 1 :end 5} {:start 10 :end 20}))))))
 
-;; ---------------------------------------------------------------------------
-;; attach-source-locations!
-;; ---------------------------------------------------------------------------
-
-(deftest attach-source-locations-enriches-registry
-  (let [dir (System/getProperty "java.io.tmpdir")
-        sub (io/file dir "atlas-test-attach")
-        _ (.mkdirs sub)
-        src "(ns test.attach
-  (:require [atlas.registry :as r]))
-
-(r/register!
- :fn/do-thing
- :atlas/execution-function
- #{:domain/test}
- {:execution-function/context [:test/input]})
-"
-        file (io/file sub "test_attach.clj")]
-    (try
-      (spit file src)
-      ;; Register the entity in the real registry
-      (registry/register!
-       :fn/do-thing
-       :atlas/execution-function
-       #{:domain/test}
-       {:execution-function/context [:test/input]})
-
-      (let [result (tracker/attach-source-locations! [(.getPath sub)])]
-
-        (testing "reports tracking stats"
-          (is (= 1 (:source-tracked result))))
-
-        (testing "entity now has :atlas/source"
-          (let [entity (registry/fetch #{:atlas/execution-function :domain/test})]
-            (is (some? (:atlas/source entity)))
-            (is (number? (get-in entity [:atlas/source :line])))
-            (is (number? (get-in entity [:atlas/source :end-line]))))))
-      (finally
-        (.delete file)
-        (.delete sub)))))
+;; attach-source-locations! was removed from source-tracker

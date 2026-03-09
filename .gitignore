@@ -55,6 +55,7 @@ ui/resources/public-v2/atlas-ui/js/
 /core/.cpcache/
 /ui/.cpcache/
 /core/target/
+/dev-tools/target/
 /ui/target/
 /core/.nrepl-port
 /ui/.nrepl-port
