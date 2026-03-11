@@ -72,6 +72,55 @@
   '((t :inherit completions-annotations))
   "Face for annotations in completion.")
 
+;;; Lens Faces
+
+(defface atlas-lens-dev-id-face
+  '((t :inherit font-lock-function-name-face :weight bold :height 1.2))
+  "Face for the dev-id in lens cards. Large and prominent.")
+
+(defface atlas-lens-type-face
+  '((t :inherit font-lock-comment-face :slant italic))
+  "Face for the entity type in lens cards. Dim and secondary.")
+
+(defface atlas-lens-label-face
+  '((t :inherit font-lock-comment-face))
+  "Face for property labels (context:, deps:, etc.) in lens cards.")
+
+(defface atlas-lens-value-face
+  '((t :inherit font-lock-string-face))
+  "Face for property values in lens cards.")
+
+(defface atlas-lens-separator-face
+  '((t :inherit font-lock-comment-face :weight light))
+  "Face for separator lines between lens cards.")
+
+;;; Lens Type Badge Faces
+
+(defface atlas-lens-badge-fn-face
+  '((((background dark))  :background "#2563eb" :foreground "#dbeafe" :weight bold)
+    (((background light)) :background "#3b82f6" :foreground "#eff6ff" :weight bold))
+  "Face for execution-function type badge.")
+
+(defface atlas-lens-badge-ep-face
+  '((((background dark))  :background "#16a34a" :foreground "#dcfce7" :weight bold)
+    (((background light)) :background "#22c55e" :foreground "#f0fdf4" :weight bold))
+  "Face for interface-endpoint type badge.")
+
+(defface atlas-lens-badge-co-face
+  '((((background dark))  :background "#d97706" :foreground "#fef3c7" :weight bold)
+    (((background light)) :background "#f59e0b" :foreground "#fffbeb" :weight bold))
+  "Face for structure-component type badge.")
+
+(defface atlas-lens-badge-ds-face
+  '((((background dark))  :background "#9333ea" :foreground "#f3e8ff" :weight bold)
+    (((background light)) :background "#a855f7" :foreground "#faf5ff" :weight bold))
+  "Face for data-schema type badge.")
+
+(defface atlas-lens-badge-default-face
+  '((((background dark))  :background "#4b5563" :foreground "#e5e7eb" :weight bold)
+    (((background light)) :background "#6b7280" :foreground "#f9fafb" :weight bold))
+  "Face for unknown entity type badge.")
+
 ;;; Business Semantics Faces
 
 (defface atlas-pattern-face

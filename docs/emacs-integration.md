@@ -144,6 +144,23 @@ The main menu (`M-x semantic-ns`) provides:
 | `G` | Refresh cache | Invalidate completion cache |
 | `!` | Toggle debug | Enable/disable debug messages |
 
+### Source (Lens)
+| Key | Command | Description |
+|-----|---------|-------------|
+| `L` | Toggle lens mode | Overlay `register!` forms with signature cards |
+| `m` | Cycle lens mode | Cycle: raw → semantic → impl |
+| `r` | Refresh lens | Re-scan and re-fetch overlays |
+
+**Lens Mode** replaces verbose `register!` forms with compact signature cards showing the entity's semantic identity. Three views cycle with `m`:
+
+- **`:semantic`** — badge + dev-id + aspects, context, response, deps
+- **`:impl`** — implementation function, context, deps
+- **`:raw`** — no overlay, actual source code
+
+Cards are template-driven and customizable per entity type via `atlas-lens-specs`. The overlay is purely visual — buffer content is untouched, so LSP/CIDER/paredit work normally. Moving the cursor into a form reveals the real code.
+
+Uses clojure-lsp to find `register!` calls regardless of namespace alias. See [Lens Design](atlas-lens-design.md) for template customization and visual styling details.
+
 ## Advanced Menu
 
 Press `z` from the main menu to access advanced features:

@@ -23,6 +23,8 @@
 (declare-function atlas-browse-recursive-deps "atlas-browse")
 (declare-function atlas-browse-deps-summary "atlas-browse")
 (declare-function atlas-browse-dependents "atlas-browse")
+(declare-function atlas-browse-recursive-dependents "atlas-browse")
+(declare-function atlas-browse-dependents-summary "atlas-browse")
 (declare-function atlas-browse-producers "atlas-browse")
 (declare-function atlas-browse-consumers "atlas-browse")
 (declare-function atlas-drill-entity-at-point "atlas-browse")
@@ -76,6 +78,18 @@ Falls back to completing-read."
   "Show dependents for keyword at point, or prompt."
   (interactive)
   (atlas-browse-dependents (atlas--entity-or-read)))
+
+;;;###autoload
+(defun atlas-at-point-transitive-dependents ()
+  "Show all transitive dependents (blast radius) for keyword at point, or prompt."
+  (interactive)
+  (atlas-browse-recursive-dependents (atlas--entity-or-read)))
+
+;;;###autoload
+(defun atlas-at-point-blast-radius ()
+  "Show blast radius summary for keyword at point, or prompt."
+  (interactive)
+  (atlas-browse-dependents-summary (atlas--entity-or-read)))
 
 ;;;###autoload
 (defun atlas-at-point-producers ()
@@ -225,6 +239,8 @@ Falls through to `xref-find-definitions' for non-Atlas keywords."
     (define-key map (kbd "C-c a w") 'atlas-at-point-deps-summary)
     (define-key map (kbd "C-c a d") 'atlas-at-point-deps)
     (define-key map (kbd "C-c a r") 'atlas-at-point-dependents)
+    (define-key map (kbd "C-c a R") 'atlas-at-point-transitive-dependents)
+    (define-key map (kbd "C-c a b") 'atlas-at-point-blast-radius)
     (define-key map (kbd "C-c a f") 'atlas-drill-entity-at-point)
     (define-key map (kbd "C-c a l") 'atlas-lens-mode)
     (define-key map (kbd "C-c a c") 'atlas-browse-check-invariants)

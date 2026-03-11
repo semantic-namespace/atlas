@@ -29,6 +29,8 @@
 (declare-function atlas-at-point-transitive-deps "atlas-at-point")
 (declare-function atlas-at-point-deps-summary "atlas-at-point")
 (declare-function atlas-at-point-dependents "atlas-at-point")
+(declare-function atlas-at-point-transitive-dependents "atlas-at-point")
+(declare-function atlas-at-point-blast-radius "atlas-at-point")
 (declare-function atlas-at-point-producers "atlas-at-point")
 (declare-function atlas-at-point-consumers "atlas-at-point")
 
@@ -49,6 +51,8 @@
     (define-key map (kbd "t") 'atlas-at-point-transitive-deps)
     (define-key map (kbd "w") 'atlas-at-point-deps-summary)
     (define-key map (kbd "r") 'atlas-at-point-dependents)
+    (define-key map (kbd "R") 'atlas-at-point-transitive-dependents)
+    (define-key map (kbd "b") 'atlas-at-point-blast-radius)
     (define-key map (kbd "p") 'atlas-at-point-producers)
     (define-key map (kbd "u") 'atlas-at-point-consumers)
     (define-key map (kbd "c") 'atlas-browse-check-invariants)

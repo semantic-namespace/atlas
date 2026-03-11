@@ -93,6 +93,27 @@ Users can customize this to control what each lens mode shows.
 When no template is found for a type+mode, the ontology's :ontology/keys
 are fetched from the registry and rendered as key: value lines.")
 
+;;; Type Badges
+
+(defvar atlas-lens-type-badges
+  '(("execution-function"  . (" fn " . atlas-lens-badge-fn-face))
+    ("interface-endpoint"   . (" ep " . atlas-lens-badge-ep-face))
+    ("structure-component"  . (" co " . atlas-lens-badge-co-face))
+    ("data-schema"          . (" ds " . atlas-lens-badge-ds-face)))
+  "Mapping of entity type short names to (LABEL . FACE) for badge rendering.
+Users can customize badge labels and faces here.")
+
+(defun atlas-lens--type-badge (entity-type)
+  "Return a propertized badge string for ENTITY-TYPE (e.g. \":atlas/execution-function\").
+Badge is a short colored label like ` fn ` with a type-specific background."
+  (let* ((short (if (string-prefix-p ":atlas/" entity-type)
+                    (substring entity-type 7)
+                  entity-type))
+         (entry (assoc short atlas-lens-type-badges))
+         (label (if entry (car (cdr entry)) (format " %s " (truncate-string-to-width short 2))))
+         (face (if entry (cdr (cdr entry)) 'atlas-lens-badge-default-face)))
+    (propertize label 'face face)))
+
 ;;; Template Engine
 
 (defun atlas-lens--get-entity-type (info)
@@ -170,43 +191,69 @@ Returns a propertized string."
                  "\\${\\([^}]+\\)}"
                  (lambda (match)
                    (let ((key (match-string 1 match)))
-                     (atlas-lens--resolve-value key info)))
+                     (save-match-data
+                       (atlas-lens--resolve-value key info))))
                  template t t)))
     ;; Apply faces to the rendered result
     (atlas-lens--propertize-rendered result)))
 
 (defun atlas-lens--propertize-rendered (text)
-  "Apply faces to rendered TEXT.
-First line gets header face, key: labels get subheader face."
+  "Apply faces to rendered TEXT with visual hierarchy.
+Dev-id: large/bold. Entity type: dim/italic. Labels: dim. Values: bright."
   (let ((lines (split-string text "\n"))
         (result-lines '()))
     (dolist (line lines)
       (push
        (cond
-        ;; Header line (starts with ──)
-        ((string-prefix-p "──" line)
-         (propertize line 'face 'atlas-header-face))
-        ;; Comment line (starts with ;;)
+        ;; Header line: ── dev-id ──  :atlas/type → badge dev-id  :atlas/type
+        ((string-match "^\\(── \\)\\([^ ]+\\)\\( ── *\\)\\(.*\\)" line)
+         (let ((entity-type (string-trim (match-string 4 line))))
+           (concat (atlas-lens--type-badge entity-type)
+                   " "
+                   (propertize (match-string 2 line) 'face 'atlas-lens-dev-id-face)
+                   "  "
+                   (propertize entity-type 'face 'atlas-lens-type-face))))
+        ;; Comment line (;; impl mode)
         ((string-match "^;;" line)
          (propertize line 'face 'font-lock-comment-face))
+        ;; aspects: line — color each aspect individually
+        ((string-match "^\\(\\s-*aspects:\\s-*\\)\\(.*\\)" line)
+         (concat (propertize (match-string 1 line) 'face 'atlas-lens-label-face)
+                 (atlas-lens--propertize-aspects (match-string 2 line))))
         ;; Key: value line
         ((string-match "^\\(\\s-*\\)\\([^ \t\n:]+:\\)\\(.*\\)" line)
          (concat (match-string 1 line)
-                 (propertize (match-string 2 line) 'face 'atlas-subheader-face)
-                 (propertize (match-string 3 line) 'face 'atlas-entity-face)))
+                 (propertize (match-string 2 line) 'face 'atlas-lens-label-face)
+                 (propertize (match-string 3 line) 'face 'atlas-lens-value-face)))
+        ;; Separator line (just dashes)
+        ((string-match "^─+$" line)
+         (propertize line 'face 'atlas-lens-separator-face))
         (t line))
        result-lines))
     (concat (string-join (nreverse result-lines) "\n") "\n")))
+
+(defun atlas-lens--propertize-aspects (aspects-str)
+  "Apply per-aspect coloring to ASPECTS-STR (aspects separated by \" · \")."
+  (if (string-empty-p aspects-str)
+      aspects-str
+    (let* ((aspects (split-string aspects-str " · " t))
+           (colored (mapcar (lambda (a) (propertize a 'face 'atlas-aspect-face))
+                            aspects)))
+      (mapconcat #'identity colored
+                 (propertize " · " 'face 'atlas-lens-separator-face)))))
 
 ;;; Card Rendering (dispatches to template engine)
 
 (defun atlas-lens--render-card (dev-id info mode)
   "Render a card for DEV-ID with entity INFO in lens MODE.
-Uses template from user specs, falling back to ontology keys."
+Uses template from user specs, falling back to ontology keys.
+Appends a thin separator line at the bottom."
   (let* ((entity-type (atlas-lens--get-entity-type info))
          (template (or (atlas-lens--get-template entity-type mode)
-                       (atlas-lens--ontology-fallback-template entity-type mode))))
-    (atlas-lens--render-template template info)))
+                       (atlas-lens--ontology-fallback-template entity-type mode)))
+         (card (atlas-lens--render-template template info)))
+    (concat card (propertize "────────────────────────────────\n"
+                             'face 'atlas-lens-separator-face))))
 
 ;;; Formatting Helpers (kept from original for template value resolution)
 

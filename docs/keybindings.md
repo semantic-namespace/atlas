@@ -16,6 +16,8 @@ Single-key access. Commands use entity/data-key at point, fall back to completin
 | `t` | Transitive deps (recursive) |
 | `w` | "What do I need?" summary |
 | `r` | Dependents (reverse) |
+| `R` | Transitive dependents (blast radius tree) |
+| `b` | Blast radius summary |
 | `p` | Producers of data-key |
 | `u` | Consumers of data-key |
 | `c` | Check invariants |
@@ -38,6 +40,8 @@ Minor mode with `C-c a` prefix. Enable with:
 | `C-c a w` | "What do I need?" at point |
 | `C-c a d` | Dependencies at point |
 | `C-c a r` | Dependents at point |
+| `C-c a R` | Transitive dependents at point |
+| `C-c a b` | Blast radius summary at point |
 | `C-c a f` | Drill into props at point |
 | `C-c a l` | Toggle lens mode |
 | `C-c a c` | Check invariants |

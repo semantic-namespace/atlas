@@ -199,6 +199,60 @@
      :summary/deps all-deps
      :summary/data-keys all-data-keys}))
 
+(defn recursive-dependents-of
+  "Get all transitive dependents for an entity, recursively (reverse BFS).
+   Answers: 'if I change this entity, what is transitively affected?'
+   Returns flat vector in BFS order, excluding the root entity itself."
+  [dev-id]
+  (let [dev-id-kw (ensure-keyword dev-id)
+        reverse-deps (get-reverse-deps)
+        entity-type-for (fn [id]
+                          (when-let [identity (rt/identity-for id)]
+                            (some #(when (= "atlas" (namespace %)) %) identity)))]
+    (loop [queue (mapv #(vector % 1 dev-id-kw)
+                       (sort (get reverse-deps dev-id-kw #{})))
+           visited #{dev-id-kw}
+           result []]
+      (if (empty? queue)
+        result
+        (let [[current depth via] (first queue)
+              rest-queue (subvec queue 1)
+              already-seen? (contains? visited current)]
+          (if already-seen?
+            (recur rest-queue visited
+                   (conj result {:dep/dev-id current
+                                 :dep/type (entity-type-for current)
+                                 :dep/depth depth
+                                 :dep/via via
+                                 :dep/already-seen? true}))
+            (let [dependents (sort (get reverse-deps current #{}))
+                  new-dependents (remove visited dependents)]
+              (recur
+               (into rest-queue (map #(vector % (inc depth) current) new-dependents))
+               (conj visited current)
+               (conj result {:dep/dev-id current
+                             :dep/type (entity-type-for current)
+                             :dep/depth depth
+                             :dep/via via
+                             :dep/already-seen? false})))))))))
+
+(defn recursive-dependents-summary
+  "Flat summary of all transitive dependents.
+   Returns :summary/root, :summary/affected (unique entities affected),
+   :summary/affected-types (count by entity type)."
+  [dev-id]
+  (let [dev-id-kw (ensure-keyword dev-id)
+        tree (recursive-dependents-of dev-id-kw)
+        unique-entries (remove :dep/already-seen? tree)
+        affected (vec (sort (map :dep/dev-id unique-entries)))
+        by-type (->> unique-entries
+                     (group-by :dep/type)
+                     (reduce-kv (fn [m k v] (assoc m k (count v))) {}))]
+    {:summary/root dev-id-kw
+     :summary/affected affected
+     :summary/affected-count (count affected)
+     :summary/by-type by-type}))
+
 (defn producers-of
   "Find functions that produce a data key."
   [data-key]
@@ -285,6 +339,24 @@
   :execution-function/deps #{}
   :atlas/docs "Summarize all transitive dependencies as flat lists: entity deps, data keys needed, and the root entity's own context. Simpler than the full tree — good for quick dependency audits."
   :atlas/impl #(recursive-dependencies-summary (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/recursive-dependents-of :atlas/execution-function
+ #{:domain/ide :intent/trace :operation/lookup :subject/dependent-tree}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:dep/tree]
+  :execution-function/deps #{}
+  :atlas/docs "Get the full transitive dependents tree for an entity via reverse BFS. Shows all entities that would be affected by a change, with depth and via-path. Use this to understand blast radius."
+  :atlas/impl #(recursive-dependents-of (:entity/dev-id %))})
+
+(cid/register!
+ :fn.ide/recursive-dependents-summary :atlas/execution-function
+ #{:domain/ide :intent/trace :operation/summary :subject/dependent}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:summary/affected :summary/affected-count :summary/by-type]
+  :execution-function/deps #{}
+  :atlas/docs "Summarize all transitive dependents as flat lists: affected entities and counts by type. Quick way to assess blast radius before changing an entity."
+  :atlas/impl #(recursive-dependents-summary (:entity/dev-id %))})
 
 (cid/register!
  :fn.ide/producers-of :atlas/execution-function

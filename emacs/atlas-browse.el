@@ -459,6 +459,103 @@ What do I need to test/run this entity? Two lists:
     (pop-to-buffer buf)))
 
 ;;;###autoload
+(defun atlas-browse-recursive-dependents (entity)
+  "Show all transitive dependents for ENTITY (reverse BFS).
+If I change this entity, what is transitively affected?"
+  (interactive
+   (list (atlas--completing-read-entity "Entity: ")))
+  (let* ((entity-kw (atlas--to-keyword entity))
+         (deps (atlas--eval-safe (format "(recursive-dependents-of %s)" entity-kw) []))
+         (buf (atlas--buffer (format "rdependents:%s" entity))))
+    (with-current-buffer buf
+      (setq atlas--last-command (lambda () (atlas-browse-recursive-dependents entity)))
+      (atlas--insert-header (format "Recursive Dependents of %s" entity))
+      (insert (propertize "What is affected if this entity changes? (BFS order):\n\n"
+                          'face 'font-lock-comment-face))
+      (let ((deps-list (atlas--to-list deps)))
+        (if (and deps-list (> (length deps-list) 0))
+            (dolist (dep deps-list)
+              (let* ((dep-id    (atlas--get dep 'dep/dev-id))
+                     (dep-type  (atlas--get dep 'dep/type))
+                     (depth     (or (atlas--get dep 'dep/depth) 1))
+                     (via       (atlas--get dep 'dep/via))
+                     (indent    (make-string (* 2 (1- depth)) ?\s))
+                     (type-str  (when dep-type
+                                  (let ((s (if (symbolp dep-type)
+                                              (symbol-name dep-type)
+                                            (format "%s" dep-type))))
+                                    (replace-regexp-in-string "^:?atlas/" "" s)))))
+                (insert indent)
+                (insert (propertize "← " 'face 'atlas-annotation-face))
+                (atlas--insert-entity dep-id)
+                (when type-str
+                  (insert (propertize (format " [%s]" type-str)
+                                      'face 'atlas-annotation-face)))
+                (when (atlas--get dep 'dep/already-seen?)
+                  (insert (propertize " ↑" 'face 'font-lock-comment-face)))
+                (when (and via (> depth 1) (not (atlas--get dep 'dep/already-seen?)))
+                  (insert (propertize (format "  ← %s" via)
+                                      'face 'font-lock-comment-face)))
+                (insert "\n")))
+          (insert "  (no dependents — nothing depends on this entity)\n")))
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
+;;;###autoload
+(defun atlas-browse-dependents-summary (entity)
+  "Show flat summary of blast radius for ENTITY.
+Which entities are affected if I change this? Grouped by type."
+  (interactive
+   (list (atlas--completing-read-entity "Entity: ")))
+  (let* ((entity-kw (atlas--to-keyword entity))
+         (summary (atlas--eval-safe
+                   (format "(recursive-dependents-summary %s)" entity-kw)))
+         (buf (atlas--buffer (format "blast:%s" entity))))
+    (with-current-buffer buf
+      (setq atlas--last-command (lambda () (atlas-browse-dependents-summary entity)))
+      (atlas--insert-header (format "Blast Radius: %s" entity))
+
+      ;; Summary counts
+      (let ((count (or (atlas--get summary 'summary/affected-count) 0)))
+        (insert (propertize (format "Total affected: %d entities\n\n" count)
+                            'face 'font-lock-warning-face)))
+
+      ;; By type
+      (when-let ((by-type (atlas--get summary 'summary/by-type)))
+        (atlas--insert-subheader "By type")
+        (let ((pairs (if (hash-table-p by-type)
+                         (let (result)
+                           (maphash (lambda (k v) (push (cons k v) result)) by-type)
+                           result)
+                       (mapcar (lambda (pair) (cons (car pair) (cdr pair)))
+                               (atlas--to-list by-type)))))
+          (dolist (pair pairs)
+            (let* ((type-key (car pair))
+                   (count (cdr pair))
+                   (type-str (if (symbolp type-key)
+                                 (replace-regexp-in-string
+                                  "^:?atlas/" "" (symbol-name type-key))
+                               (replace-regexp-in-string
+                                "^:?atlas/" "" (format "%s" type-key)))))
+              (insert (format "  %s: %d\n" type-str count)))))
+        (insert "\n"))
+
+      ;; All affected entities
+      (let ((affected (atlas--to-list (atlas--get summary 'summary/affected))))
+        (atlas--insert-subheader (format "All affected entities (%d)" (length affected)))
+        (if affected
+            (dolist (d affected)
+              (insert "  ")
+              (atlas--insert-entity d)
+              (insert "\n"))
+          (insert "  (none)\n")))
+
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
+;;;###autoload
 (defun atlas-browse-producers (data-key)
   "Find functions that produce DATA-KEY."
   (interactive

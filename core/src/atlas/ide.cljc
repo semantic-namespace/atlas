@@ -75,9 +75,13 @@
 ;; =============================================================================
 
 (defn list-entity-types
-  "List all registered entity types in the registry."
+  "List all registered entity types from ontology definitions."
   []
-  (vec (sort (cid/registered-types))))
+  (->> (ot/all-ontologies)
+       vals
+       (map :ontology/for)
+       sort
+       vec))
 
 (defn list-entity-types-with-counts
   "List all entity types present in the registry with entity counts.
@@ -293,7 +297,7 @@
                                           :atlas/schema)))
          :entity/definition-keys definition-keys
          :entity/definition-values definition-values
-         :interface-endpoint/context (vec (sort (ot/context-for dev-id-kw)))
+         :interface-endpoint/context (into (vec (sort (ot/deps-for dev-id-kw))) (vec (sort (ot/context-for dev-id-kw))))
          :interface-endpoint/response (vec (sort (ot/response-for dev-id-kw)))
          :execution-function/deps (vec (sort (ot/deps-for dev-id-kw)))
          :atlas/fields (vec (sort (fields-for props)))}))))
@@ -316,6 +320,8 @@
 (defn dependencies-of        [dev-id]   (ide.trace/dependencies-of dev-id))
 (defn recursive-dependencies-of      [dev-id] (ide.trace/recursive-dependencies-of dev-id))
 (defn recursive-dependencies-summary [dev-id] (ide.trace/recursive-dependencies-summary dev-id))
+(defn recursive-dependents-of        [dev-id] (ide.trace/recursive-dependents-of dev-id))
+(defn recursive-dependents-summary   [dev-id] (ide.trace/recursive-dependents-summary dev-id))
 (defn producers-of           [data-key] (ide.trace/producers-of data-key))
 (defn consumers-of           [data-key] (ide.trace/consumers-of data-key))
 (defn trace-data-flow        [data-key] (ide.trace/trace-data-flow data-key))
@@ -1427,7 +1433,8 @@
             #'entities-info #'inspect-entity #'entity-doc #'suggest-aspects
             #'semantic-similarity #'validate-identity
             #'data-flow #'dependents-of #'dependencies-of #'recursive-dependencies-of
-            #'recursive-dependencies-summary #'producers-of #'consumers-of
+            #'recursive-dependencies-summary #'recursive-dependents-of
+            #'recursive-dependents-summary #'producers-of #'consumers-of
             #'trace-data-flow #'impact-of-change #'execution-order
             #'check-invariants #'validate-entity #'domain-coupling #'pii-surface
             #'error-handler-coverage
