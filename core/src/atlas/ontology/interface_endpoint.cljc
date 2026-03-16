@@ -32,8 +32,12 @@
                   :interface-endpoint/response
                   :interface-endpoint/deps]
   :dataflow/context-key :interface-endpoint/context
+  :dataflow/context-verb :entity/consumes
   :dataflow/response-key :interface-endpoint/response
-  :dataflow/deps-key :interface-endpoint/deps})
+  :dataflow/response-verb :entity/produces
+  :dataflow/deps-key :interface-endpoint/deps
+  :dataflow/extra-verbs {:interface-endpoint/context :endpoint-context
+                         :interface-endpoint/response :endpoint-response}})
 
 ;; Type-ref: interface-endpoint → execution-function (deps)
 (registry/register!

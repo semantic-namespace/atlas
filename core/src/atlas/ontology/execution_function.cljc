@@ -30,9 +30,13 @@
  {:ontology/for :atlas/execution-function
    :ontology/keys [:execution-function/context
                    :execution-function/response
-                   :execution-function/deps]
+                   :execution-function/deps
+                   :atlas/impl]
+   :ontology/not-serialisable-keys [:atlas/impl]
    :dataflow/context-key :execution-function/context
+   :dataflow/context-verb :entity/consumes
    :dataflow/response-key :execution-function/response
+   :dataflow/response-verb :entity/produces
    :dataflow/deps-key :execution-function/deps})
 
 ;; Type-ref: execution-function → structure-component (deps)

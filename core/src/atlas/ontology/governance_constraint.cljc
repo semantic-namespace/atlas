@@ -1,6 +1,7 @@
 (ns atlas.ontology.governance-constraint
   "Governance-constraint ontology module. Auto-registers on require."
-  (:require [atlas.registry :as registry]))
+  (:require [atlas.registry :as registry]
+            [atlas.ontology.type-ref :as type-ref]))
 
 (registry/register!
  :atlas/governance-constraint
@@ -22,6 +23,43 @@
                    :governance-constraint/revocable
                    :governance-constraint/revocation-path]})
 
+;; Type-refs
+(registry/register!
+ :type-ref/governance-constraint-enforced-by
+ :atlas/type-ref
+ #{:meta/ref-governance-constraint-enforced-by}
+ {:type-ref/source      :atlas/governance-constraint
+  :type-ref/property    :governance-constraint/enforced-by
+  :type-ref/datalog-verb :constraint/enforced-by
+  :type-ref/cardinality :db.cardinality/many})
+
+(registry/register!
+ :type-ref/governance-constraint-compliance
+ :atlas/type-ref
+ #{:meta/ref-governance-constraint-compliance}
+ {:type-ref/source      :atlas/governance-constraint
+  :type-ref/property    :governance-constraint/compliance-requirement
+  :type-ref/datalog-verb :constraint/compliance-requirement
+  :type-ref/cardinality :db.cardinality/many})
+
+(registry/register!
+ :type-ref/governance-constraint-oauth-scope
+ :atlas/type-ref
+ #{:meta/ref-governance-constraint-oauth-scope}
+ {:type-ref/source      :atlas/governance-constraint
+  :type-ref/property    :governance-constraint/google-oauth-scope
+  :type-ref/datalog-verb :constraint/oauth-scope
+  :type-ref/cardinality :db.cardinality/many})
+
+(registry/register!
+ :type-ref/governance-constraint-revocable
+ :atlas/type-ref
+ #{:meta/ref-governance-constraint-revocable}
+ {:type-ref/source      :atlas/governance-constraint
+  :type-ref/property    :governance-constraint/revocable
+  :type-ref/datalog-verb :constraint/revocable
+  :type-ref/cardinality :db.cardinality/one})
+
 ;; Datalog extractor
 (registry/register!
  :datalog-extractor/governance-constraint
@@ -29,33 +67,10 @@
  #{:meta/governance-constraint-extractor}
  {:datalog-extractor/fn (fn [compound-id props]
                           (when (contains? compound-id :atlas/governance-constraint)
-                            (let [dev-id (:atlas/dev-id props)
-                                  enforced-by (:governance-constraint/enforced-by props)
-                                  compliance (:governance-constraint/compliance-requirement props)
-                                  oauth-scopes (:governance-constraint/google-oauth-scope props)
-                                  revocable (:governance-constraint/revocable props)]
-                              (cond-> []
-                                ;; Enforced by (references to components/functions)
-                                enforced-by
-                                (concat (map (fn [enforcer]
-                                               [:db/add dev-id :constraint/enforced-by enforcer])
-                                             (if (coll? enforced-by) enforced-by [enforced-by])))
-
-                                ;; Compliance requirements
-                                compliance
-                                (concat (map (fn [req]
-                                               [:db/add dev-id :constraint/compliance-requirement req])
-                                             (if (coll? compliance) compliance [compliance])))
-
-                                ;; OAuth scopes
-                                oauth-scopes
-                                (concat (map (fn [scope]
-                                               [:db/add dev-id :constraint/oauth-scope scope])
-                                             (if (coll? oauth-scopes) oauth-scopes [oauth-scopes])))
-
-                                ;; Revocable flag
-                                revocable
-                                (conj [:db/add dev-id :constraint/revocable revocable])))))
+                            (type-ref/extract-reference-facts
+                             :atlas/governance-constraint
+                             compound-id
+                             props)))
   :datalog-extractor/schema {:constraint/enforced-by {:db/cardinality :db.cardinality/many}
                              :constraint/compliance-requirement {:db/cardinality :db.cardinality/many}
                              :constraint/oauth-scope {:db/cardinality :db.cardinality/many}

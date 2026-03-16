@@ -17,7 +17,7 @@
 (defn- registered-protocol-ids
   "Return protocol dev-ids registered as :atlas/interface-protocol."
   []
-  (->> @registry/registry
+  (->> (registry/current-registry)
        (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
        (map (fn [[_ v]] (:atlas/dev-id v)))
        set))
@@ -97,7 +97,7 @@
                   []
                   ;; "Components that declare protocol aspects must have those protocols registered."
                   (let [known-protocols (registered-protocol-ids)
-                        components-with-protocols (->> @registry/registry
+                        components-with-protocols (->> (registry/current-registry)
                                                        (filter (fn [[id _]]
                                                                  (and (contains? id :atlas/structure-component)
                                                                       (seq (:declared (get-protocol-aspects id known-protocols))))))
@@ -127,7 +127,7 @@
    Checks that component's implementation map contains all methods declared
    in the protocol's :protocol/functions."
 
-                  (let [protocols (->> @registry/registry
+                  (let [protocols (->> (registry/current-registry)
                                        (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
                                        (map (fn [[_ v]]
                                               {:protocol-id (:atlas/dev-id v)
@@ -136,7 +136,7 @@
 
                         violations (for [{:keys [protocol-id required-fns]} protocols
                                          :when required-fns
-                                         [compound-id value] @registry/registry
+                                         [compound-id value] (registry/current-registry)
                                          :when (and (contains? compound-id :atlas/structure-component)
                                                     (contains? compound-id protocol-id))
                                          :let [dev-id (:atlas/dev-id value)
