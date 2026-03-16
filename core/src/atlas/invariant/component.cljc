@@ -11,7 +11,7 @@
 (defn- registered-protocol-ids
   "Return protocol dev-ids registered as :semantic-namespace/interface-protocol."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
        (map (fn [[_ v]] (:atlas/dev-id v)))
        set))
@@ -52,7 +52,7 @@
   "Components that declare protocol aspects must have those protocols registered."
   []
   (let [known-protocols (registered-protocol-ids)
-        components-with-protocols (->> @cid/registry
+        components-with-protocols (->> (cid/current-registry)
                                        (filter (fn [[id _]]
                                                  (and (contains? id :atlas/structure-component)
                                                       (seq (:declared (get-protocol-aspects id known-protocols))))))
@@ -78,7 +78,7 @@
    Checks that component's implementation map contains all methods declared
    in the protocol's :protocol/functions."
   []
-  (let [protocols (->> @cid/registry
+  (let [protocols (->> (cid/current-registry)
                        (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
                        (map (fn [[_ v]]
                               {:protocol-id (:atlas/dev-id v)
@@ -90,7 +90,7 @@
         ;; This invariant validates that component REGISTRATIONS declare conformance.
         violations (for [{:keys [protocol-id required-fns]} protocols
                          :when required-fns
-                         [compound-id value] @cid/registry
+                         [compound-id value] (cid/current-registry)
                          :when (and (contains? compound-id :atlas/structure-component)
                                     (contains? compound-id protocol-id))
                          :let [dev-id (:atlas/dev-id value)

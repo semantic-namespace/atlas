@@ -84,7 +84,7 @@
                         :check-fn (fn [_entity-id]
                                     (some (fn [[_id props]]
                                             (contains? (set (:interface-endpoint/response props)) data-key))
-                                          @cid/registry))})})
+                                          (cid/current-registry)))})})
 
 (register-operator! #{:dsl.op/data-has-consumer}
                     {:operator/arity 1
@@ -96,7 +96,7 @@
                         :check-fn (fn [_entity-id]
                                     (some (fn [[_id props]]
                                             (contains? (set (:interface-endpoint/context props)) data-key))
-                                          @cid/registry))})})
+                                          (cid/current-registry)))})})
 
 ;; =============================================================================
 ;; LOGICAL OPERATORS
@@ -159,7 +159,7 @@
                      (fn [{:keys [edge]}]
                        {:type :graph-predicate
                         :check-fn (fn [_entity-id]
-                                    (let [all-ids (map #(:atlas/dev-id (second %)) @cid/registry)
+                                    (let [all-ids (map #(:atlas/dev-id (second %)) (cid/current-registry))
                                           deps-map (case edge
                                                      :depends (into {} (map (fn [id] [id (ot/deps-for id)]) all-ids))
                                                      :data-flow (into {} (map (fn [id] [id (ot/compute-data-deps id)]) all-ids)))]
@@ -201,7 +201,7 @@
     ;; Simple predicate node: {:op :dsl.op/entity-has-aspect :args :tier/service}
     (and (map? node) (:op node))
     (let [op-id (conj #{(:op node)} :semantic-namespace.invariant/operator)
-          op-def (get @cid/registry op-id)]
+          op-def (get (cid/current-registry) op-id)]
       (when-not op-def
         (throw (ex-info "Unknown DSL operator" {:op (:op node)})))
       (let [compile-fn (:operator/compile-fn op-def)
@@ -243,7 +243,7 @@
 (defn check-invariant
   "Check a single invariant against all entities."
   [{:keys [invariant/id invariant/level invariant/doc compiled/when compiled/assert] :as compiled-invariant}]
-  (let [all-entities (map :atlas/dev-id (vals @cid/registry))
+  (let [all-entities (map :atlas/dev-id (vals (cid/current-registry)))
         message doc
         violations (for [entity-id all-entities
                          :when (eval-predicate when entity-id)

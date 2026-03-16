@@ -47,13 +47,13 @@
 ;; =============================================================================
 
 (defn- all-dev-ids []
-  (map #(:atlas/dev-id (second %)) @registry/registry))
+  (map #(:atlas/dev-id (second %)) (registry/current-registry)))
 
 (defn invariant-deps-exist
   "All dependency keys must reference existing dev-ids."
   []
   (let [all-ids (set (all-dev-ids))
-        violations (for [[_ v] @registry/registry
+        violations (for [[_ v] (registry/current-registry)
                          :let [dev-id (:atlas/dev-id v)
                                deps (ontology/deps-for dev-id)]
                          :when deps

@@ -246,7 +246,7 @@
   {:atlas/tools (available-tools)
    :atlas/types (ide/list-entity-types)
    :atlas/aspect-namespaces (ide/list-aspect-namespaces)
-   :atlas/entity-count (count @registry/registry)})
+   :atlas/entity-count (count (registry/current-registry))})
 
 ;; Intent: trace
 (registry/register!
@@ -388,7 +388,7 @@
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/intended-aspects :dataflow/consumes :dataflow/produces]}]
                 (let [aspect-set (if (set? intended-aspects) intended-aspects (set intended-aspects))
-                      similar (->> @registry/registry
+                      similar (->> (registry/current-registry)
                                    (map (fn [[id props]]
                                           (let [entity-aspects (registry/aspects id)
                                                 shared (set/intersection aspect-set entity-aspects)
@@ -724,7 +724,9 @@
                       entities (mapv (fn [id]
                                       (when (some? (lookup/identity-for id))
                                         {:entity id
-                                         :props (lookup/props-for id)
+                                         :props (let [cid (lookup/identity-for id)
+                                                      not-ser (ontology/not-serialisable-keys-for-identity cid)]
+                                                  (reduce dissoc (lookup/props-for id) not-ser))
                                          :identity (lookup/identity-for id)
                                          :type (first (extract-aspects id "atlas"))
                                          :domains (vec (extract-aspects id "domain"))
@@ -747,11 +749,11 @@
 
                       ;; Calculate metrics
                       metrics {:avg-in-degree (when (seq valid-entities)
-                                               (/ (reduce + (map :in-degree valid-entities))
-                                                  (count valid-entities)))
+                                               (double (/ (reduce + (map :in-degree valid-entities))
+                                                          (count valid-entities))))
                               :avg-out-degree (when (seq valid-entities)
-                                               (/ (reduce + (map :out-degree valid-entities))
-                                                  (count valid-entities)))
+                                               (double (/ (reduce + (map :out-degree valid-entities))
+                                                          (count valid-entities))))
                               :types (frequencies (map :type valid-entities))
                               :domains (frequencies (mapcat :domains valid-entities))
                               :tiers (frequencies (mapcat :tiers valid-entities))}]
@@ -858,9 +860,9 @@
                    :by-tier (into {} (map (fn [[k v]] [k (count v)]) by-tier))
                    :by-domain (into {} (map (fn [[k v]] [k (count v)]) by-domain))
                    :metrics {:avg-in-degree (when (seq in-degrees)
-                                             (/ (reduce + in-degrees) (count in-degrees)))
+                                             (double (/ (reduce + in-degrees) (count in-degrees))))
                             :avg-out-degree (when (seq out-degrees)
-                                             (/ (reduce + out-degrees) (count out-degrees)))
+                                             (double (/ (reduce + out-degrees) (count out-degrees))))
                             :max-in-degree (when (seq in-degrees) (apply max in-degrees))
                             :max-out-degree (when (seq out-degrees) (apply max out-degrees))}}))})
 

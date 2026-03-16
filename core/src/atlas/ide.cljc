@@ -89,7 +89,7 @@
    so works with both register!-built and raw EDN-loaded registries.
    Returns [{:entity-type/type :atlas/execution-function :entity-type/count 5} ...]"
   []
-  (let [registry @cid/registry]
+  (let [registry (cid/current-registry)]
     (->> registry
          (group-by (fn [[id _]] (first (filter #(= "atlas" (namespace %)) id))))
          (remove (fn [[type _]] (nil? type)))
@@ -104,7 +104,7 @@
    entity-type - keyword like :atlas/execution-function"
   [entity-type]
   (let [entity-type-kw (ensure-keyword entity-type)]
-    (->> @cid/registry
+    (->> (cid/current-registry)
          (filter (fn [[id _props]] (contains? id entity-type-kw)))
          (map (fn [[_id props]] (:atlas/dev-id props)))
          (remove nil?)
@@ -169,7 +169,7 @@
           value-proposition, user-role, user-experience, other"
   []
   (vec (sort-by str
-                (for [[id props] @cid/registry]
+                (for [[id props] (cid/current-registry)]
                   {:entity/dev-id (:atlas/dev-id props)
                    :entity/type (cond
                                   (contains? id :atlas/interface-endpoint) :endpoint
@@ -191,7 +191,7 @@
    Args:
      registry - (Optional) Registry map. Defaults to global registry."
   ([]
-   (list-aspects @cid/registry))
+   (list-aspects (cid/current-registry)))
   ([registry]
    (let [;; Get registered entity types dynamically
          entity-types (cid/registered-types)
@@ -226,7 +226,7 @@
   "List all aspect namespaces with usage counts.
    Dynamically excludes entity types using the registry."
   ([]
-   (list-aspect-namespaces @cid/registry))
+   (list-aspect-namespaces (cid/current-registry)))
   ([registry]
    (let [;; Count aspects by namespace
          ns-counts (reduce (fn [acc identity]
@@ -249,7 +249,7 @@
   "List all aspect names (without namespace prefix) in a given namespace.
    Returns only aspects, not entity types."
   ([ns-name]
-   (list-aspect-names-in-namespace @cid/registry ns-name))
+   (list-aspect-names-in-namespace (cid/current-registry) ns-name))
   ([registry ns-name]
    (let [;; Collect all unique names in the namespace
          names (reduce (fn [acc identity]
@@ -398,7 +398,7 @@
   "Autocomplete data key from prefix. Returns vector of strings without ':' prefix."
   [prefix]
   (let [prefix-str (to-string prefix)
-        all-keys (->> @cid/registry
+        all-keys (->> (cid/current-registry)
                       vals
                       (mapcat #(concat (:interface-endpoint/context %)
                                        (:interface-endpoint/response %)))
@@ -414,7 +414,7 @@
 (defn domain-coupling
   "Analyze inter-domain dependencies."
   []
-  (->> (query/domain-coupling @cid/registry :atlas/dev-id :execution-function/deps)
+  (->> (query/domain-coupling (cid/current-registry) :atlas/dev-id :execution-function/deps)
        (map (fn [{:keys [domain depends-on entity-count]}]
               {:coupling/domain domain
                :coupling/depends-on (sorted-vec depends-on)
@@ -425,7 +425,7 @@
 (defn pii-surface
   "Find all entities handling PII."
   []
-  (->> (query/pii-surface @cid/registry :atlas/dev-id :interface-endpoint/context :interface-endpoint/response)
+  (->> (query/pii-surface (cid/current-registry) :atlas/dev-id :interface-endpoint/context :interface-endpoint/response)
        (map (fn [{:keys [id audited? context response]}]
               {:pii/id id
                :pii/audited? audited?
@@ -437,7 +437,7 @@
 (defn error-handler-coverage
   "Check error handler coverage."
   []
-  (let [{:keys [handlers coverage]} (query/error-handler-coverage @cid/registry :atlas/dev-id)]
+  (let [{:keys [handlers coverage]} (query/error-handler-coverage (cid/current-registry) :atlas/dev-id)]
     {:error-handler/handlers (->> handlers
                                   (map (fn [{:keys [id handles]}]
                                          {:error-handler/id id
@@ -525,11 +525,11 @@
   "Find entities with similar semantic profiles to given entity."
   [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)
-        [target-identity _] (query/find-by-dev-id @cid/registry dev-id-kw)
-        results (query/semantic-similarity @cid/registry target-identity 0.0)]
+        [target-identity _] (query/find-by-dev-id (cid/current-registry) dev-id-kw)
+        results (query/semantic-similarity (cid/current-registry) target-identity 0.0)]
     (->> results
          (map (fn [{:keys [identity similarity shared]}]
-                (let [dev-id-for-identity (get-in @cid/registry [identity :atlas/dev-id])]
+                (let [dev-id-for-identity (get-in (cid/current-registry) [identity :atlas/dev-id])]
                   {:similarity/entity dev-id-for-identity
                    :similarity/score (double similarity)
                    :similarity/shared-aspects (sorted-vec shared)})))
@@ -542,7 +542,7 @@
 (defn by-tier
   "Group all entities by architectural tier."
   []
-  (let [result (query/by-tier @cid/registry :atlas/dev-id)]
+  (let [result (query/by-tier (cid/current-registry) :atlas/dev-id)]
     (->> result
          (map (fn [[tier entities]]
                 {:tier/name tier
@@ -633,7 +633,7 @@
 (defn list-protocols
   "List all registered protocols."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :atlas/interface-protocol)))
        (map (fn [[_ props]]
               (let [dev-id (:atlas/dev-id props)]
@@ -650,7 +650,7 @@
     (when props
       {:protocol/id protocol-id-kw
        :interface-protocol/functions (vec (sort (:interface-protocol/functions props)))
-       :protocol/implementers (->> @cid/registry
+       :protocol/implementers (->> (cid/current-registry)
                                    (filter (fn [[id _]]
                                              (and (contains? id :atlas/structure-component)
                                                   (contains? id protocol-id-kw))))
@@ -670,7 +670,7 @@
   "Find all components implementing a specific protocol."
   [protocol-id]
   (let [protocol-id-kw (ensure-keyword protocol-id)]
-    (->> @cid/registry
+    (->> (cid/current-registry)
          (filter (fn [[id _]]
                    (and (contains? id :atlas/structure-component)
                         (contains? id protocol-id-kw))))
@@ -782,7 +782,7 @@
   "Get detailed information about a business entity including metadata and implementations."
   [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)
-        [id props] (query/find-by-dev-id @cid/registry dev-id-kw)]
+        [id props] (query/find-by-dev-id (cid/current-registry) dev-id-kw)]
     (when id
       (let [biz-type (business-entity-type id)]
         (cond-> {:entity/dev-id dev-id-kw

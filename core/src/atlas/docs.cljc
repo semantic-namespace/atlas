@@ -264,7 +264,7 @@
    :operations (operations-documentation)
    :health (health-documentation)
    :raw-registry (into {} (map (fn [[k v]] [(:atlas/dev-id v) {:identity (vec k) :props (dissoc v :atlas/dev-id)}])
-                               @cid/registry))})
+                               (cid/current-registry)))})
 
 (def aspect-glossary
   "Human-readable descriptions of semantic aspects"

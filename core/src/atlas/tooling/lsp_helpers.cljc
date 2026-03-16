@@ -76,7 +76,7 @@
     (find-by-aspect :tier/foundation)
     ;=> [{:dev-id :component/db :identity #{...} :context [...] ...}]"
   [aspect]
-  (for [identity-set (q/all-identities @cid/registry)
+  (for [identity-set (q/all-identities (cid/current-registry))
         :when (contains? identity-set aspect)
         :let [value (cid/fetch identity-set)
               dev-id (:atlas/dev-id value)]]
@@ -147,7 +147,7 @@
 
   Returns sequence of maps with searchable content."
   []
-  (for [identity-set (q/all-identities @cid/registry)
+  (for [identity-set (q/all-identities (cid/current-registry))
         :let [value (cid/fetch identity-set)
               dev-id (:atlas/dev-id value)]]
     {:dev-id (str dev-id)
@@ -180,7 +180,7 @@
   "Return dev-ids matching a prefix for autocomplete."
   [prefix]
   (let [prefix-str (if (keyword? prefix) (str prefix) prefix)]
-    (->> (q/all-identities @cid/registry)
+    (->> (q/all-identities (cid/current-registry))
          (map #(:atlas/dev-id (cid/fetch %)))
          (filter #(str/starts-with? (str %) prefix-str))
          (sort)
@@ -190,7 +190,7 @@
   "Return aspects matching a prefix for autocomplete."
   [prefix]
   (let [prefix-str (if (keyword? prefix) (str prefix) prefix)]
-    (->> (q/aspect-frequency @cid/registry)
+    (->> (q/aspect-frequency (cid/current-registry))
          (map first)
          (filter #(str/starts-with? (str %) prefix-str))
          (sort)

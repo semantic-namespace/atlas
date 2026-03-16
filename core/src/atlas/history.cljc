@@ -1,8 +1,10 @@
 (ns atlas.history
   "Registry history — tracks semantic movement of Atlas entities across versions.
 
-   Phase 1: snaps (aspects, added/removed, prev-dev-id).
-   Phase 2: edges (cross-entity type-ref connections).
+   Three fact layers:
+   - snaps: aspects, added/removed, prev-dev-id (identity facts)
+   - props: type-ref edges + dataflow edges, extracted from registry metadata (property facts)
+   - edges: cross-entity type-ref connections via live registry (legacy, use props instead)
 
    Usage:
 
@@ -10,18 +12,21 @@
      (def conn (create-conn))
      (snapshot-version! conn v1-reg \"v1\" nil nil)
      (snapshot-version! conn v2-reg \"v2-serial\" v1-reg nil)
-     (snapshot-edges!   conn v2-reg \"v2-serial\")
 
      ;; Query snaps
      (entity-timeline @conn :serial/fees-all)
-     (full-timeline @conn :serial/fees-all)
      (version-diff @conn \"v2-serial\")
      (aspect-adoption @conn \"v2-serial\" :cardinality/many)
 
-     ;; Query edges
+     ;; Query props
+     (properties-at @conn \"v2-serial\" :fn/validate-token)
+     (property-diff @conn \"v1\" \"v2-serial\")
+     (properties-by-verb @conn \"v2-serial\" :entity/depends)
+
+     ;; Query edges (legacy)
+     (snapshot-edges! conn v2-reg \"v2-serial\")
      (edges-at @conn \"v2-serial\" :cache/fees-all)
-     (edge-diff @conn \"v1\" \"v2-serial\")
-     (dependents-of @conn \"v2-serial\" :serial/fees-all)"
+     (edge-diff @conn \"v1\" \"v2-serial\")"
   (:require [datascript.core :as d]
             [clojure.set :as set]
             [atlas.ontology.type-ref :as type-ref]
@@ -45,6 +50,13 @@
    :snap/prev-dev-id {:db/index true}
    :snap/deleted     {:db/index true}
 
+   ;; Property facts: one entity per [dev-id × version × key × target]
+   :prop/dev-id      {:db/index true}
+   :prop/version     {:db/index true}
+   :prop/key         {:db/index true}
+   :prop/verb        {:db/index true}
+   :prop/target      {:db/index true}
+
    ;; Edge: one entity per [source × target × property × version]
    :edge/source      {:db/index true}
    :edge/target      {:db/index true}
@@ -60,6 +72,86 @@
   "Create a fresh history db connection."
   []
   (d/create-conn schema))
+
+;; =============================================================================
+;; Helpers
+;; =============================================================================
+
+(defn- extract-targets
+  "Extract keyword targets from a property value.
+   Handles: keyword, vector, list, set — flattens nested structures."
+  [value]
+  (cond
+    (keyword? value) [value]
+    (set? value)     (vec value)
+    :else            (->> (flatten (seq value))
+                          (filter keyword?))))
+
+(defn- type-ref-index
+  "Build a {source-entity-type -> [type-ref-props ...]} index from the registry.
+   Reads type-ref declarations directly from the registry map — no live registry needed."
+  [registry]
+  (->> (vals registry)
+       (filter #(= :atlas/type-ref (:atlas/type %)))
+       (group-by :type-ref/source)))
+
+(defn- dataflow-index
+  "Build a {source-entity-type -> [{:property key :verb verb} ...]} index from the registry.
+   Reads dataflow declarations from ontology entities — no live registry needed."
+  [registry]
+  (->> (vals registry)
+       (filter #(= :atlas/ontology (:atlas/type %)))
+       (keep (fn [ont]
+               (let [ctx-key  (:dataflow/context-key ont)
+                     ctx-verb (:dataflow/context-verb ont)
+                     resp-key (:dataflow/response-key ont)
+                     resp-verb (:dataflow/response-verb ont)
+                     etype    (:ontology/for ont)]
+                 (when (or ctx-key resp-key)
+                   {:source etype
+                    :flows (cond-> []
+                             ctx-key  (conj {:property ctx-key  :verb ctx-verb})
+                             resp-key (conj {:property resp-key :verb resp-verb}))}))))
+       (group-by :source)
+       (map (fn [[k vs]] [k (mapcat :flows vs)]))
+       (into {})))
+
+(defn- extract-prop-facts
+  "Extract property facts for a single entity using type-ref and dataflow indexes."
+  [dev-id version etype props type-refs-by-source dataflow-by-source]
+  (let [;; Type-ref edges (entity → entity)
+        ref-facts
+        (mapcat
+         (fn [type-ref-props]
+           (let [property (:type-ref/property type-ref-props)
+                 verb     (:type-ref/datalog-verb type-ref-props)
+                 value    (get props property)]
+             (when value
+               (keep (fn [target]
+                       (when (keyword? target)
+                         {:prop/dev-id  dev-id
+                          :prop/version version
+                          :prop/key     property
+                          :prop/verb    verb
+                          :prop/target  target}))
+                     (extract-targets value)))))
+         (get type-refs-by-source etype))
+        ;; Dataflow edges (entity → data concept)
+        flow-facts
+        (mapcat
+         (fn [{:keys [property verb]}]
+           (let [value (get props property)]
+             (when value
+               (keep (fn [target]
+                       (when (keyword? target)
+                         {:prop/dev-id  dev-id
+                          :prop/version version
+                          :prop/key     property
+                          :prop/verb    verb
+                          :prop/target  target}))
+                     (extract-targets value)))))
+         (get dataflow-by-source etype))]
+    (concat ref-facts flow-facts)))
 
 ;; =============================================================================
 ;; Snapshot ingestion
@@ -117,12 +209,24 @@
                        :snap/type    (:atlas/type prev-props)
                        :snap/deleted true})))
                 prev-registry))
-        txdata (concat snap-txdata deleted-txdata)]
+        ;; Property facts from type-ref and dataflow declarations
+        type-refs-by-source (type-ref-index registry)
+        dataflow-by-source  (dataflow-index registry)
+        prop-txdata
+        (mapcat
+         (fn [[_ props]]
+           (let [dev-id (:atlas/dev-id props)
+                 etype  (:atlas/type props)]
+             (extract-prop-facts dev-id version etype props
+                                 type-refs-by-source dataflow-by-source)))
+         registry)
+        txdata (concat snap-txdata deleted-txdata prop-txdata)]
     (d/transact! conn txdata)
     {:version version
      :entities (count registry)
      :changed (count (filter :snap/added txdata))
-     :deleted (count (filter :snap/deleted txdata))}))
+     :deleted (count (filter :snap/deleted txdata))
+     :properties (count prop-txdata)}))
 
 ;; =============================================================================
 ;; Version queries
@@ -348,18 +452,57 @@
                    (sort-by :new-count))}))
 
 ;; =============================================================================
-;; Edge ingestion
+;; Property queries
 ;; =============================================================================
 
-(defn- extract-targets
-  "Extract target dev-ids from a property value.
-   Handles: keyword, vector, list, set — flattens nested structures."
-  [value]
-  (cond
-    (keyword? value) [value]
-    (set? value)     (vec value)
-    :else            (->> (flatten (seq value))
-                          (filter keyword?))))
+(defn property-diff
+  "Property edges added or removed between two versions.
+   Returns {:added #{[source key verb target] ...} :removed #{...}}."
+  [db v-old v-new]
+  {:added   (d/q '[:find ?source ?key ?verb ?target
+                    :in $ ?v-new ?v-old
+                    :where
+                    [?e :prop/dev-id ?source] [?e :prop/version ?v-new]
+                    [?e :prop/key ?key] [?e :prop/verb ?verb] [?e :prop/target ?target]
+                    (not [?o :prop/dev-id ?source] [?o :prop/version ?v-old]
+                         [?o :prop/key ?key] [?o :prop/target ?target])]
+                  db v-new v-old)
+   :removed (d/q '[:find ?source ?key ?verb ?target
+                    :in $ ?v-old ?v-new
+                    :where
+                    [?e :prop/dev-id ?source] [?e :prop/version ?v-old]
+                    [?e :prop/key ?key] [?e :prop/verb ?verb] [?e :prop/target ?target]
+                    (not [?o :prop/dev-id ?source] [?o :prop/version ?v-new]
+                         [?o :prop/key ?key] [?o :prop/target ?target])]
+                  db v-old v-new)})
+
+(defn properties-at
+  "All property facts for a given entity at a version."
+  [db version dev-id]
+  (->> (d/q '[:find ?key ?verb ?target
+              :in $ ?version ?dev-id
+              :where
+              [?e :prop/dev-id ?dev-id] [?e :prop/version ?version]
+              [?e :prop/key ?key] [?e :prop/verb ?verb] [?e :prop/target ?target]]
+            db version dev-id)
+       (map (fn [[k v t]] {:prop/key k :prop/verb v :prop/target t}))
+       (sort-by (juxt :prop/verb :prop/target))))
+
+(defn properties-by-verb
+  "All property facts with a given verb at a version."
+  [db version verb]
+  (->> (d/q '[:find ?source ?key ?target
+              :in $ ?version ?verb
+              :where
+              [?e :prop/version ?version] [?e :prop/verb ?verb]
+              [?e :prop/dev-id ?source] [?e :prop/key ?key] [?e :prop/target ?target]]
+            db version verb)
+       (map (fn [[s k t]] {:prop/dev-id s :prop/key k :prop/target t}))
+       (sort-by (juxt :prop/dev-id :prop/target))))
+
+;; =============================================================================
+;; Edge ingestion
+;; =============================================================================
 
 (defn snapshot-edges!
   "Transact edge entities for cross-entity type-ref connections at a version.

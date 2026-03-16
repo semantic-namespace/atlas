@@ -148,7 +148,7 @@
                r
                r)))
      {:aggregation/enriched   @enrichments
-      :aggregation/total      (count @registry/registry)
+      :aggregation/total      (count (registry/current-registry))
       :aggregation/type-refs  (mapv :property ref-properties)})))
 
 (defn semantic-of
@@ -182,7 +182,7 @@
   ([ns-set]
    (let [ref-properties (discover-ref-properties)
          violations
-         (->> @registry/registry
+         (->> (registry/current-registry)
               (keep
                (fn [[compound-id props]]
                  (let [dev-id (:atlas/dev-id props)]

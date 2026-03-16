@@ -43,7 +43,7 @@
                   consumer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) consumes context)]
               (assoc acc :entity/produces producer-updated :entity/consumes consumer-updated)))
           {:entity/produces {} :entity/consumes {}}
-          @cid/registry))
+          (cid/current-registry)))
 
 (defn- get-data-key-cache []
   (let [now (platform/now-ms)
@@ -283,7 +283,7 @@
 (defn impact-of-change
   "Show what would be affected if an entity changes: its outputs and direct dependents."
   [entity-id]
-  (let [result (query/impact-of-change @cid/registry (ensure-keyword entity-id) :atlas/dev-id :execution-function/deps :interface-endpoint/response)
+  (let [result (query/impact-of-change (cid/current-registry) (ensure-keyword entity-id) :atlas/dev-id :execution-function/deps :interface-endpoint/response)
         entity (:entity result)
         produces (:entity/produces result)
         direct-dependents (:direct-dependents result)]

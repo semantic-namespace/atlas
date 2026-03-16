@@ -18,6 +18,16 @@
 (def registry
   (atom {}))
 
+(def ^:dynamic *registry-override*
+  "When bound, `current-registry` returns this value instead of @registry.
+   Used by the cloud MCP layer to run tools against a pulled version snapshot."
+  nil)
+
+(defn current-registry
+  "Return the active registry map — either the dynamic override or the live atom."
+  []
+  (or *registry-override* @registry))
+
 ;; =============================================================================
 ;; Validation & Registry
 ;; =============================================================================
@@ -170,7 +180,10 @@
 ;; =============================================================================
 
 (defn registered-types
-  "Return all registered entity types (those with :atlas/type in their identity)."
+  "Return all registered entity types (those with :atlas/type in their identity).
+   :deprecated Use (atlas.ontology/all-ontologies) instead — queries :atlas/ontology
+   compound-ids which are always present, unlike :atlas/type meta-registrations."
+  {:deprecated "0.2.0"}
   []
   (->> @registry
        keys

@@ -147,7 +147,7 @@
    (when-not @history-conn
      (init!))
    (let [prev-reg @last-snapshot-registry
-         reg      @cid/registry
+         reg      (cid/current-registry)
          result   (history/snapshot-version! @history-conn reg version-label prev-reg rename-map)]
      (history/snapshot-edges! @history-conn reg version-label)
      (reset! last-snapshot-registry reg)

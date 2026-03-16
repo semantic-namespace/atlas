@@ -10,18 +10,18 @@
 ;; =============================================================================
 
 (defn all-dev-ids []
-  (map #(:atlas/dev-id (second %)) @cid/registry))
+  (map #(:atlas/dev-id (second %)) (cid/current-registry)))
 
 (defn all-context-keys []
-  (->> @cid/registry vals (mapcat :interface-endpoint/context) (remove nil?) set))
+  (->> (cid/current-registry) vals (mapcat :interface-endpoint/context) (remove nil?) set))
 
 (defn all-response-keys []
-  (->> @cid/registry vals (mapcat :interface-endpoint/response) (remove nil?) set))
+  (->> (cid/current-registry) vals (mapcat :interface-endpoint/response) (remove nil?) set))
 
 (defn endpoint-context-keys
   "Keys that come from outside (endpoint inputs)."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :atlas/interface-endpoint)))
        (mapcat (fn [[_ v]] (:interface-endpoint/context v)))
        set))
@@ -29,7 +29,7 @@
 (defn endpoint-response-keys
   "Keys that go to the client (endpoint outputs) - terminal by design."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :atlas/interface-endpoint)))
        (mapcat (fn [[_ v]] (:interface-endpoint/response v)))
        set))
@@ -37,7 +37,7 @@
 (defn display-output-keys
   "Keys marked as :dataflow/display-output - terminal by design."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :dataflow/display-output)))
        (map (fn [[id _]]
               ;; The key IS the dev-id for data-keys
@@ -48,7 +48,7 @@
 (defn external-input-keys
   "Keys marked as :dataflow/external-input - no internal producer expected."
   []
-  (->> @cid/registry
+  (->> (cid/current-registry)
        (filter (fn [[id _]] (contains? id :dataflow/external-input)))
        (map (fn [[id _]] (:atlas/dev-id (cid/fetch id))))
        (remove nil?)
@@ -177,7 +177,7 @@
   "All invariants including core and ontology-contributed invariants.
    Ontology invariants are discovered by querying the registry for :atlas/invariant entities."
   []
-  (let [ontology-invs (->> (q/find-by-aspect @cid/registry :atlas/invariant)
+  (let [ontology-invs (->> (q/find-by-aspect (cid/current-registry) :atlas/invariant)
                            vals
                            (map :invariant/fn)
                            (remove nil?))]

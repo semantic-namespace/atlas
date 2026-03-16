@@ -61,10 +61,10 @@
   - semantic-definitions.json: Minimal format for go-to-definition"
   []
   #?(:clj
-     (let [all-entries (q/all-identities @cid/registry)
+     (let [all-entries (q/all-identities (cid/current-registry))
            export-data {:identities (map identity->export-map all-entries)
                         :aspects
-                        (let [freq (q/aspect-frequency @cid/registry)]
+                        (let [freq (q/aspect-frequency (cid/current-registry))]
                           (map (fn [[aspect cnt]]
                                  {:aspect (str aspect)
                                   :namespace (namespace aspect)
@@ -73,7 +73,7 @@
                                freq))
                         :metadata
                         {:total-identities (count all-entries)
-                         :total-aspects (count (q/aspect-frequency @cid/registry))
+                         :total-aspects (count (q/aspect-frequency (cid/current-registry)))
                          :exported-at (platform/now-ms)}}
 
            output-dir ".clj-kondo/.cache"
@@ -104,7 +104,7 @@
                        w)))
 
        {:exported-identities (count all-entries)
-        :exported-aspects (count (q/aspect-frequency @cid/registry))
+        :exported-aspects (count (q/aspect-frequency (cid/current-registry)))
         :files [registry-file definitions-file]})
      :cljs (platform/unsupported! :lsp-export)))
 

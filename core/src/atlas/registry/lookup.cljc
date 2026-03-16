@@ -11,7 +11,7 @@
   "Find the [identity value] pair for a given dev-id.
    Delegates to atlas.query/find-by-dev-id."
   [dev-id]
-  (query/find-by-dev-id @registry/registry dev-id))
+  (query/find-by-dev-id (registry/current-registry) dev-id))
 
 (defn identity-for [dev-id]
   (first (fetch-by-dev-id dev-id)))
@@ -30,7 +30,7 @@
   "Find all dev-ids with given aspect.
    Delegates to atlas.query/find-dev-ids-with-aspect."
   [aspect]
-  (query/find-dev-ids-with-aspect @registry/registry aspect))
+  (query/find-dev-ids-with-aspect (registry/current-registry) aspect))
 
 (defn handle-tool
   "Execute any registered entity that has :atlas/impl.

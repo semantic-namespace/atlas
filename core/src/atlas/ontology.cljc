@@ -13,15 +13,19 @@
 (defn all-ontologies
   "Return all registered ontologies from the registry."
   []
-  (q/find-by-aspect @registry/registry :atlas/ontology))
+  (q/find-by-aspect (registry/current-registry) :atlas/ontology))
 
 (defn ontology-for
   "Return the ontology definition for a given entity type from the registry.
    Returns nil if not found."
   [entity-type]
-  (let [results (q/find-by-aspect @registry/registry #{:atlas/ontology entity-type})]
+  (let [results (q/find-by-aspect (registry/current-registry) (conj #{:atlas/ontology} entity-type))]
     (when (seq results)
-      (val (first results)))))
+      ;; When entity-type is :atlas/ontology itself, all ontology entries match.
+      ;; Use :ontology/for to find the exact one.
+      (->> (vals results)
+           (filter #(= entity-type (:ontology/for %)))
+           first))))
 
 (defn ontology-keys-for
   "Return the ontology keys for a given entity type from the registry."
@@ -56,7 +60,7 @@
 ;; =============================================================================
 
 (def ^:private common-registry-keys
-  [:atlas/dev-id])
+  [:atlas/dev-id :atlas/type])
 
 (defn registry-definition-for
   "Return registry definition for a semantic-namespace aspect.
@@ -93,11 +97,11 @@
 (defn aspect-catalog
   "Show all aspects with usage stats and examples"
   []
-  (let [freq (q/aspect-frequency @registry/registry)]
+  (let [freq (q/aspect-frequency (registry/current-registry))]
     (->> freq
          (map (fn [[aspect count]]
                 (let [examples (take 2 (filter #(contains? % aspect)
-                                               (q/all-identities @registry/registry)))]
+                                               (q/all-identities (registry/current-registry))))]
                   {:aspect aspect
                    :usage-count count
                    :examples (map #(:atlas/dev-id (registry/fetch %)) examples)})))
@@ -107,7 +111,7 @@
 (defn suggest-aspects
   "Given partial identity, suggest aspects based on similar entries"
   [partial-identity]
-  (let [similar (q/semantic-similarity @registry/registry partial-identity 0.0)
+  (let [similar (q/semantic-similarity (registry/current-registry) partial-identity 0.0)
         all-aspects (->> similar
                          (take 5)
                          (mapcat :identity)
@@ -122,7 +126,7 @@
 (defn impact-analysis
   "Analyze what would be affected by changes to an aspect"
   [aspect]
-  (let [direct-users (q/find-by-aspect @registry/registry aspect)
+  (let [direct-users (q/find-by-aspect (registry/current-registry) aspect)
         by-tier (group-by (fn [[id _]]
                             (cond
                               (contains? id :tier/foundation) :foundation
@@ -221,10 +225,10 @@
         response-keys (dataflow-keys :dataflow/response-key)]
     (for [ctx-key context
           :let [producers-map (reduce (fn [acc key]
-                                        (merge acc (q/find-producers @registry/registry ctx-key key)))
+                                        (merge acc (q/find-producers (registry/current-registry) ctx-key key)))
                                       {}
                                       response-keys)
-                function-producers (q/find-by-aspect @registry/registry :atlas/execution-function)
+                function-producers (q/find-by-aspect (registry/current-registry) :atlas/execution-function)
                 producer-ids (->> producers-map
                                   (keep (fn [[id v]]
                                           (when (contains? function-producers id)
@@ -248,7 +252,7 @@
     (->> context
          (mapcat (fn [ctx-key]
                    (let [producers (reduce (fn [acc key]
-                                             (merge acc (q/find-producers @registry/registry ctx-key key)))
+                                             (merge acc (q/find-producers (registry/current-registry) ctx-key key)))
                                            {}
                                            response-keys)]
                      (->> producers
@@ -269,7 +273,7 @@
                           (set/difference a b)
                           (set/difference b a)))]
     (-> issues
-        (into (when (contains? @registry/registry new-identity)
+        (into (when (contains? (registry/current-registry) new-identity)
                 [{:level :error
                   :type :collision
                   :message "Identity already exists"
@@ -282,7 +286,7 @@
                            :message "Differs by only one aspect from existing"
                            :existing-dev-id (:atlas/dev-id (registry/fetch existing-id))
                            :difference diff})))
-                    (take 100 (q/all-identities @registry/registry))))
+                    (take 100 (q/all-identities (registry/current-registry)))))
         (into (when (and (contains? new-identity :integration/external)
                          (not (contains? new-identity :temporal/async)))
                 [{:level :error
@@ -315,7 +319,7 @@
 
 (defn execute-query [query]
   (let [{:keys [aspects ops]} query
-        base-results (q/find-by-aspect @registry/registry aspects)
+        base-results (q/find-by-aspect (registry/current-registry) aspects)
         filtered (reduce (fn [results [op arg]]
                            (case op
                              :exclude (into {} (remove (fn [[id _]] (contains? id arg)) results))
@@ -348,14 +352,14 @@
 (defn refactor-aspect
   "Safely rename/replace an aspect across the registry"
   [old-aspect new-aspect & {:keys [dry-run?] :or {dry-run? true}}]
-  (let [affected (filter #(contains? % old-aspect) (q/all-identities @registry/registry))
+  (let [affected (filter #(contains? % old-aspect) (q/all-identities (registry/current-registry)))
         migrations (map (fn [old-id]
                           (let [new-id (-> old-id (disj old-aspect) (conj new-aspect))
                                 value (registry/fetch old-id)]
                             {:old-id old-id
                              :new-id new-id
                              :dev-id (:atlas/dev-id value)
-                             :will-collide? (contains? @registry/registry new-id)}))
+                             :will-collide? (contains? (registry/current-registry) new-id)}))
                         affected)]
     (if dry-run?
       {:dry-run true
@@ -440,7 +444,7 @@
 (defn inspect
   "Quick inspection of a dev-id"
   [dev-id]
-  (let [matches (filter #(= dev-id (:atlas/dev-id (registry/fetch %))) (q/all-identities @registry/registry))]
+  (let [matches (filter #(= dev-id (:atlas/dev-id (registry/fetch %))) (q/all-identities (registry/current-registry)))]
     (if (seq matches)
       (let [id (first matches)
             val (registry/fetch id)]
@@ -503,7 +507,12 @@
    :atlas/ontology
    #{:atlas/ontology}
    {:ontology/for :atlas/ontology
-    :ontology/keys [:ontology/for :ontology/keys]})
+    :ontology/keys [:ontology/for :ontology/keys
+                    :ontology/not-serialisable-keys
+                    :dataflow/context-key :dataflow/context-verb
+                    :dataflow/response-key :dataflow/response-verb
+                    :dataflow/deps-key
+                    :dataflow/extra-verbs]})
 
 (registry/register!
    :ontology/datalog-extractor

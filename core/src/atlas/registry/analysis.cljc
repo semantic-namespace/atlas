@@ -27,13 +27,13 @@
                                 (fnil conj #{}) id-set)))
                     acc id-set))
           {}
-          (query/all-identities @registry/registry)))
+          (query/all-identities (registry/current-registry))))
 
 (defn correlation-matrix
   "Return normalized correlation matrix of aspect co-occurrence (as 0-1 floats)."
   []
-  (let [aspects (keys (query/aspect-frequency @registry/registry))
-        all-ids (query/all-identities @registry/registry)
+  (let [aspects (keys (query/aspect-frequency (registry/current-registry)))
+        all-ids (query/all-identities (registry/current-registry))
         total (max 1 (count all-ids))]
     (into {}
           (for [a1 aspects]
@@ -51,7 +51,7 @@
 (defn missing-aspects
   "Suggest aspects potentially missing from an identity based on correlation."
   [identity-set]
-  (let [similar (query/semantic-similarity @registry/registry identity-set 0.0)
+  (let [similar (query/semantic-similarity (registry/current-registry) identity-set 0.0)
         all-aspects (->> similar
                          (mapcat :identity)
                          (frequencies)
@@ -66,7 +66,7 @@
 (defn find-anomalies
   "Return list of identities that violate expected semantic constraints."
   []
-  (let [all-ids (query/all-identities @registry/registry)]
+  (let [all-ids (query/all-identities (registry/current-registry))]
     (->> all-ids
          (filter (fn [id]
                    (or (and (contains? id :sync/operation)
@@ -81,7 +81,7 @@
 (defn to-graphviz
   "Return a Graphviz DOT string representing compound-identity relationships."
   []
-  (let [edges (for [id (query/all-identities @registry/registry)
+  (let [edges (for [id (query/all-identities (registry/current-registry))
                     aspect id]
                 [aspect id])]
     (str "digraph CompoundIdentity {\n"
@@ -117,8 +117,8 @@
   "Return data summary of the current identity registry:
    {:total :unique-aspects :namespaces :top-aspects :largest :anomalies}"
   []
-  (let [ids (query/all-identities @registry/registry)
-        aspects (query/aspect-frequency @registry/registry)
+  (let [ids (query/all-identities (registry/current-registry))
+        aspects (query/aspect-frequency (registry/current-registry))
         clusters (clusters)]
     {:total (count ids)
      :unique-aspects (count aspects)
