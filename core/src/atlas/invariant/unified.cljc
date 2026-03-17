@@ -1,8 +1,9 @@
 (ns atlas.invariant.unified
-  "Unified interface supporting both DSL and function-based invariants.
+  "Unified interface supporting DSL, function, and Datalog-query invariants.
    Lets developers choose their style while maintaining full interoperability."
   (:require [atlas.datalog :as datalog]
-            [atlas.invariant.dsl.datalog :as dsl-datalog]))
+            [atlas.invariant.dsl.datalog :as dsl-datalog]
+            [datascript.core :as d]))
 
 ;; =============================================================================
 ;; INVARIANT PROTOCOLS - Both Styles Implement This
@@ -78,6 +79,52 @@
   (->FunctionAxiom id level doc check-fn))
 
 ;; =============================================================================
+;; DATALOG-QUERY INVARIANT (Pure Data — Cloud-Evaluable)
+;; =============================================================================
+;;
+;; Invariants expressed as Datalog queries (EDN vectors).
+;; The query returns *violating* entities — its results ARE the violations.
+;; No functions, no multimethods — runs on CLJ, CLJS, and cloud snapshots.
+;;
+;; Convention: the query should return tuples where the first binding is ?dev-id.
+;; Additional bindings become extra context in the violation map.
+
+(defrecord DatalogAxiom [id level doc query]
+  Axiom
+  (invariant-id [_] id)
+  (invariant-level [_] level)
+  (invariant-doc [_] doc)
+  (check-invariant [_ db]
+    (let [results (d/q query db)]
+      (map (fn [result]
+             (let [dev-id (if (sequential? result) (first result) result)]
+               {:invariant id
+                :level     level
+                :entity    dev-id
+                :message   doc
+                :result    result}))
+           results))))
+
+(defn datalog-invariant
+  "Create a Datalog-query invariant (pure data, cloud-evaluable).
+
+   The query is a standard Datascript query vector that returns violating entities.
+   Convention: query results where first binding is the entity dev-id.
+
+   Example:
+   (datalog-invariant
+     :auth/oauth-requires-component
+     :error
+     \"OAuth operations must depend on :component/oauth\"
+     '[:find ?dev-id
+       :where
+       [?e :atlas/dev-id ?dev-id]
+       [?e :entity/aspect :protocol/oauth]
+       (not [?e :entity/depends :component/oauth])])"
+  [id level doc query]
+  (->DatalogAxiom id level doc query))
+
+;; =============================================================================
 ;; HYBRID SUGAR - Best of Both Worlds
 ;; =============================================================================
 
@@ -109,9 +156,14 @@
       :when {:op :dsl.op/entity-has-aspect :args :protocol/oauth}
       :assert {:op :dsl.op/entity-depends-on :args :component/oauth}})"
   [name metadata & body]
-  (let [{:keys [id level doc when assert]} metadata
+  (let [{:keys [id level doc when assert query]} metadata
         body-form (first body)]
     (cond
+      ;; Metadata contains :query - Datalog style (pure data)
+      query
+      `(def ~name
+         (->DatalogAxiom ~id ~level ~doc ~query))
+
       ;; Metadata contains :when/:assert - DSL style
       (and when assert)
       `(def ~name
@@ -129,7 +181,7 @@
 
       ;; Error
       :else
-      (throw (ex-info "definvariant requires either :when/:assert in metadata or a function body"
+      (throw (ex-info "definvariant requires :query, :when/:assert in metadata, or a function body"
                       {:metadata metadata :body body})))))
 
 ;; =============================================================================
@@ -150,30 +202,32 @@
   "Check all invariants regardless of style.
 
    Accepts:
-   - Individual invariant (DslAxiom or FunctionAxiom)
+   - Individual invariant (DslAxiom, FunctionAxiom, or DatalogAxiom)
    - Collection of invariants
-   - Mix of both styles
+   - Mix of all styles
+
+   2-arity accepts an explicit Datascript db (for cloud/snapshot evaluation).
 
    Returns unified violation format:
    {:violations [...] :errors [...] :warnings [...] :valid? boolean}"
-  [invariants]
-  (let [invariant-list (if (sequential? invariants) invariants [invariants])
-        db (datalog/create-db)
-        violations (vec (mapcat (fn [invariant]
-                                  (let [level (invariant-level invariant)
-                                        message (invariant-doc invariant)]
-                                    (map #(normalize-violation % level message)
-                                         (check-invariant invariant db))))
-                                invariant-list))
-        errors (filterv #(= :error (:level %)) violations)
-        warnings (filterv #(= :warning (:level %)) violations)]
-    {:violations violations
-     :errors errors
-     :warnings warnings
-     :violations-flat violations
-     :errors-flat errors
-     :warnings-flat warnings
-     :valid? (empty? errors)}))
+  ([invariants] (check-all invariants (datalog/create-db)))
+  ([invariants db]
+   (let [invariant-list (if (sequential? invariants) invariants [invariants])
+         violations (vec (mapcat (fn [invariant]
+                                   (let [level (invariant-level invariant)
+                                         message (invariant-doc invariant)]
+                                     (map #(normalize-violation % level message)
+                                          (check-invariant invariant db))))
+                                 invariant-list))
+         errors (filterv #(= :error (:level %)) violations)
+         warnings (filterv #(= :warning (:level %)) violations)]
+     {:violations violations
+      :errors errors
+      :warnings warnings
+      :violations-flat violations
+      :errors-flat errors
+      :warnings-flat warnings
+      :valid? (empty? errors)})))
 
 (defn report
   "Print unified report for all invariant styles."
@@ -204,6 +258,7 @@
    :level (invariant-level invariant)
    :doc (invariant-doc invariant)
    :style (cond
+            (instance? DatalogAxiom invariant) :datalog
             (instance? DslAxiom invariant) :dsl
             (instance? FunctionAxiom invariant) :function
             :else :unknown)})
@@ -280,6 +335,22 @@
 ;; =============================================================================
 
 (comment
+  ;; Datalog Style - Pure data, cloud-evaluable, works in CLJ + CLJS + JS
+  (def oauth-datalog
+    (datalog-invariant
+     :example/oauth-needs-component-dq
+     :error
+     "OAuth operations must depend on OAuth component"
+     '[:find ?dev-id
+       :where
+       [?e :atlas/dev-id ?dev-id]
+       [?e :entity/aspect :protocol/oauth]
+       (not [?e :entity/depends :component/oauth])]))
+
+  ;; Check against a cloud snapshot (no live registry needed)
+  ;; (let [db (datalog/create-db some-snapshot)]
+  ;;   (check-all [oauth-datalog] db))
+
   ;; DSL Style - Great for LLMs and declarative thinking
   (def oauth-dsl
     (dsl-invariant
