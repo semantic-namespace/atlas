@@ -48,6 +48,7 @@
    :snap/removed     {:db/cardinality :db.cardinality/many
                       :db/index true}
    :snap/prev-dev-id {:db/index true}
+   :snap/prev-type   {:db/index true}
    :snap/deleted     {:db/index true}
 
    ;; Property facts: one entity per [dev-id × version × key × target]
@@ -110,8 +111,8 @@
                  (when (or ctx-key resp-key)
                    {:source etype
                     :flows (cond-> []
-                             ctx-key  (conj {:property ctx-key  :verb ctx-verb})
-                             resp-key (conj {:property resp-key :verb resp-verb}))}))))
+                             (and ctx-key ctx-verb)   (conj {:property ctx-key  :verb ctx-verb})
+                             (and resp-key resp-verb) (conj {:property resp-key :verb resp-verb}))}))))
        (group-by :source)
        (map (fn [[k vs]] [k (mapcat :flows vs)]))
        (into {})))
@@ -179,7 +180,10 @@
                  prev-dev-id (get inv-renames dev-id)
                  lookup-id   (or prev-dev-id dev-id)
                  prev-cid    (get prev-by-dev-id lookup-id)
-                 prev-asp    (when prev-cid (disj prev-cid etype))
+                 prev-props  (when prev-cid (get prev-registry prev-cid))
+                 prev-etype  (when prev-props (:atlas/type prev-props))
+                 prev-asp    (when prev-cid (disj prev-cid (or prev-etype etype)))
+                 type-changed? (and prev-etype (not= prev-etype etype))
                  ;; For new entities in a subsequent snapshot, all aspects are "added".
                  ;; For the first snapshot (no prev-by-dev-id), nothing is "added" yet.
                  added       (cond
@@ -192,9 +196,10 @@
                                   :snap/version version
                                   :snap/type    etype
                                   :snap/aspect  aspects}
-                           (seq added)   (assoc :snap/added added)
-                           (seq removed) (assoc :snap/removed removed)
-                           prev-dev-id   (assoc :snap/prev-dev-id prev-dev-id))]
+                           (seq added)    (assoc :snap/added added)
+                           (seq removed)  (assoc :snap/removed removed)
+                           prev-dev-id    (assoc :snap/prev-dev-id prev-dev-id)
+                           type-changed?  (assoc :snap/prev-type prev-etype))]
              [snap-tx]))
          registry)
         ;; Deleted entities: present in prev-registry but absent in this version
@@ -270,16 +275,17 @@
 ;; =============================================================================
 
 (defn version-diff
-  "All entities that changed in a given version (have added or removed aspects).
+  "All entities that changed in a given version (added/removed aspects or type change).
    Returns seq of pulled snapshots sorted by dev-id."
   [db version]
   (->> (d/q '[:find (pull ?e [:snap/dev-id :snap/type :snap/added :snap/removed
-                               :snap/prev-dev-id])
+                               :snap/prev-dev-id :snap/prev-type])
               :in $ ?version
               :where
               [?e :snap/version ?version]
               (or [?e :snap/added _]
-                  [?e :snap/removed _])]
+                  [?e :snap/removed _]
+                  [?e :snap/prev-type _])]
             db version)
        (map first)
        (sort-by :snap/dev-id)))
