@@ -261,9 +261,13 @@ symbol syntax).  Only returns namespaced keywords (must contain '/')."
   (or
    ;; Atlas result buffers: entity stored as button property (without leading :)
    (when-let* ((button (button-at (point)))
-               (entity (button-get button 'entity)))
+               (entity (or (button-get button 'entity)
+                           ;; data-key buttons store the keyword as label text
+                           (let ((label (button-label button)))
+                             (when (string-match-p "^:?[a-zA-Z][a-zA-Z0-9_.-]*/[a-zA-Z]" label)
+                               label)))))
      (atlas--to-keyword entity))
-   ;; Clojure source files: thing-at-point includes : in symbol syntax
+   ;; Clojure source files / plain text: thing-at-point includes : in symbol syntax
    (when-let* ((sym (thing-at-point 'symbol t))
                (kw  (if (string-prefix-p ":" sym) sym (concat ":" sym))))
      (when (string-match-p "^:[a-zA-Z][a-zA-Z0-9_.-]*/[a-zA-Z]" kw)

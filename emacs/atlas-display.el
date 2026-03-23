@@ -41,6 +41,7 @@
     (define-key map (kbd "q") 'quit-window)
     (define-key map (kbd "g") 'atlas-refresh)
     (define-key map (kbd "?") 'atlas)
+    (define-key map (kbd "M-.") 'atlas-goto-definition)
     (define-key map (kbd "RET") 'push-button)
     (define-key map (kbd "TAB") 'forward-button)
     (define-key map (kbd "<backtab>") 'backward-button)
@@ -62,6 +63,7 @@
   "Keymap for `atlas-mode'.")
 
 (declare-function atlas-xref-setup "atlas-at-point")
+(declare-function atlas-goto-definition "atlas-at-point")
 
 (define-derived-mode atlas-mode special-mode "Atlas"
   "Major mode for Atlas semantic registry browsing.

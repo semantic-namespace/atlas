@@ -206,29 +206,95 @@ Ensures atlas is first by removing and re-adding at the front."
   (message "[atlas-xref] setup complete, xref-backend-functions: %s"
            xref-backend-functions))
 
-;;; atlas-clj-mode — minor mode for Clojure buffers
+;;; Clojure spec helpers
+
+(defun atlas--spec-exists-p (kw)
+  "Return non-nil if KW is a registered clojure.spec."
+  (when (cider-connected-p)
+    (let* ((code (format "(do (require 'clojure.spec.alpha) (some? (clojure.spec.alpha/get-spec %s)))" kw))
+           (result (cider-nrepl-sync-request:eval code))
+           (value (nrepl-dict-get result "value")))
+      (and value (not (string= value "false"))))))
+
+(defun atlas--spec-exercise-pretty (kw &optional n)
+  "Return a pretty-printed string of spec/exercise results for KW.
+Uses clojure.pprint on the server side. Returns nil on error."
+  (when (cider-connected-p)
+    (let* ((count (or n 5))
+           (code (format
+                  (concat "(do (require 'clojure.spec.alpha)"
+                          "    (require 'clojure.pprint)"
+                          "    (with-out-str"
+                          "      (run! (fn [[gen conformed]]"
+                          "              (println \"── generated ──\")"
+                          "              (clojure.pprint/pprint gen)"
+                          "              (println \"── conformed ──\")"
+                          "              (clojure.pprint/pprint conformed)"
+                          "              (println))"
+                          "            (clojure.spec.alpha/exercise %s %d))))")
+                  kw count))
+           (result (cider-nrepl-sync-request:eval code))
+           (value  (nrepl-dict-get result "value"))
+           (err    (nrepl-dict-get result "err")))
+      (cond
+       (err   (message "spec/exercise error: %s" err) nil)
+       (value (condition-case e
+                  (read value)          ; unquote the returned EDN string
+                (error (message "spec unquote error: %s" (error-message-string e))
+                       nil)))))))
+
+(defun atlas--show-spec-popup (kw pretty-str)
+  "Display pretty-printed spec examples for KW in a side-window popup."
+  (let* ((buf-name (format "*Atlas Spec: %s*" kw))
+         (buf (get-buffer-create buf-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (format "Spec examples: %s\n" kw) 'face 'atlas-header-face))
+        (insert (make-string 60 ?─))
+        (insert "\n\n")
+        (insert pretty-str)
+        (insert (propertize "(q to close)" 'face 'font-lock-comment-face)))
+      (special-mode)
+      (local-set-key (kbd "q") #'quit-window)
+      (goto-char (point-min)))
+    (display-buffer buf '(display-buffer-in-side-window
+                          (side . bottom)
+                          (window-height . 0.35)))))
 
 (defun atlas-goto-definition ()
   "Go to register! definition for Atlas keyword at point.
-Falls through to `xref-find-definitions' for non-Atlas keywords."
+Falls through to spec examples popup for clojure.spec keywords,
+then to default `xref-find-definitions' for everything else."
   (interactive)
   (let ((kw (atlas--keyword-at-point)))
-    (if (and kw
-             (cider-connected-p)
-             (atlas--eval-safe (format "(registered-entity? %s)" kw)))
-        (let ((locations (atlas--find-register-locations kw)))
-          (if locations
-              (let* ((loc (car locations))
-                     (file (nth 0 loc))
-                     (line (nth 1 loc)))
-                (xref-push-marker-stack)
-                (find-file file)
-                (goto-char (point-min))
-                (forward-line (1- line)))
-            (user-error "Atlas: register! call not found for %s" kw)))
-      ;; Not an Atlas entity — fall through to default M-.
+    (cond
+     ;; Case 1: registered Atlas entity → jump to register! site
+     ((and kw
+           (cider-connected-p)
+           (atlas--eval-safe (format "(registered-entity? %s)" kw)))
+      (let ((locations (atlas--find-register-locations kw)))
+        (if locations
+            (let* ((loc (car locations))
+                   (file (nth 0 loc))
+                   (line (nth 1 loc)))
+              (xref-push-marker-stack)
+              (find-file file)
+              (goto-char (point-min))
+              (forward-line (1- line)))
+          (user-error "Atlas: register! call not found for %s" kw))))
+     ;; Case 2: clojure.spec def → show generated examples in popup
+     ((and kw (atlas--spec-exists-p kw))
+      (let ((pretty (atlas--spec-exercise-pretty kw)))
+        (if pretty
+            (atlas--show-spec-popup kw pretty)
+          (user-error "Atlas: could not generate spec examples for %s" kw))))
+     ;; Case 3: neither — fall through to CIDER/LSP xref
+     (t
       (let ((xref-backend-functions (remq 'atlas-xref-backend xref-backend-functions)))
-        (call-interactively 'xref-find-definitions)))))
+        (call-interactively 'xref-find-definitions))))))
+
+;;; atlas-clj-mode — minor mode for Clojure buffers
 
 (defvar atlas-clj-mode-map
   (let ((map (make-sparse-keymap)))
