@@ -18,7 +18,7 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (require 'atlas.ontology :reload)
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.structure-component :reload)
@@ -30,7 +30,7 @@
     (assert (cid/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (reset! @#'ide.trace/reverse-deps-cache {:time 0 :data {}})
     (reset! @#'ide.trace/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})))
 

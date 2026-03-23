@@ -9,7 +9,7 @@
    [clojure.pprint :refer [pprint]]))
 
 (defn reset-and-init! []
-  (reset! cid/registry {})
+  (cid/reset-all!)
   (app/init-registry!))
 
 (comment

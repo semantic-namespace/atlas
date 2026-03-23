@@ -6,9 +6,9 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (f)
-    (reset! registry/registry {})))
+    (registry/reset-all!)))
 
 ;; =============================================================================
 ;; KEY NORMALIZATION TESTS
@@ -195,7 +195,7 @@
       (is (some? (query/find-by-dev-id @registry/registry :service/users)))))
 
   (testing "Registered entities have correct structure"
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (ig-adapter/register-config!
      {:service/users {:db {:key :component/db}}}
      {:identities {:service/users #{:domain/users :tier/service}}})
@@ -206,7 +206,7 @@
       (is (= :atlas/structure-component (:atlas/type entity)))))
 
   (testing "Composite keys are registered with composite-key metadata"
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (ig-adapter/register-config!
      {[:persistence/base :accounts/db] {:pool-size 5}})
     (let [[identity entity] (query/find-by-dev-id @registry/registry :persistence/base)]

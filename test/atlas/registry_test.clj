@@ -17,9 +17,9 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! id/registry {})
+    (id/reset-all!)
     (f)
-    (reset! id/registry {})))
+    (id/reset-all!)))
 
 
 

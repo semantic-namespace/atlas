@@ -10,9 +10,9 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (f)
-    (reset! registry/registry {})))
+    (registry/reset-all!)))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers

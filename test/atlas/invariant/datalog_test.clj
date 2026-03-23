@@ -15,7 +15,7 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (a.datalog/reset-all!)  ;; Reset DB cache
     ;; Load ontologies for each test
     (require 'atlas.ontology.execution-function :reload)
@@ -26,7 +26,7 @@
     (assert (registry/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (a.datalog/reset-all!)))
 
 ;; =============================================================================
@@ -663,7 +663,7 @@
 (deftest custom-ontology-extensibility
   (testing "custom ontology can register extractor via registry"
     ;; Reset to clean state
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (a.datalog/reset-all!)  ;; Reset DB cache
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)

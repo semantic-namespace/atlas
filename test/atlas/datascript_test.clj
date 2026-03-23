@@ -8,7 +8,7 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (sut/reset-db-cache!)
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
@@ -17,7 +17,7 @@
     (assert (cid/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (sut/reset-db-cache!)))
 
 (defn- seed-registry! []

@@ -7,7 +7,8 @@
    - atlas.registry
    - atlas.semantic-queries
    - atlas.registry.graph"
-  (:require [clojure.set :as set]))
+  (:require [atlas.registry]
+            [clojure.set :as set]))
 
 ;; =============================================================================
 ;; Core Query Functions
@@ -30,14 +31,22 @@
 (defn find-by-dev-id
   "Find the [identity value] pair for a given dev-id.
    Returns nil if not found.
+   Uses dev-id-index for O(1) lookup when querying the live registry,
+   falls back to linear scan for arbitrary registry maps (e.g., snapshots).
 
    UNIFIES:
    - atlas.registry/find-by-dev-id
    - atlas.registry.graph/fetch-by-dev-id"
   [registry dev-id]
   (when dev-id
-    (first (filter (fn [[_ v]] (= (:atlas/dev-id v) dev-id))
-                   registry))))
+    ;; Fast path: use index when querying the live registry
+    (if-let [compound-id (and (identical? registry (atlas.registry/current-registry))
+                              (get @atlas.registry/dev-id-index dev-id))]
+      (when-let [props (get registry compound-id)]
+        [compound-id props])
+      ;; Slow path: linear scan for snapshot registries
+      (first (filter (fn [[_ v]] (= (:atlas/dev-id v) dev-id))
+                     registry)))))
 
 (defn find-dev-ids-with-aspect
   "Find all dev-ids with given aspect(s). Returns set of dev-ids.

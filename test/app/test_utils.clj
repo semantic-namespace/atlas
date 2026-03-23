@@ -95,7 +95,7 @@
     (use-fixtures :each (make-fixture sut/init-registry!))"
   [init-fn]
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (init-fn)
     (f)))
 
@@ -112,7 +112,7 @@
     (use-fixtures :each (make-fixture-with-ontologies sut/init-registry!))"
   [init-fn]
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (datalog/reset-db-cache!)
     (require 'atlas.ontology :reload)
     (require 'atlas.ontology.execution-function :reload)
@@ -141,7 +141,7 @@
         reset-mock-sessions!))"
   [init-fn reset-fn]
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (init-fn)
     (reset-fn)
     (f)))
@@ -157,7 +157,7 @@
         reset-mock-sessions!))"
   [init-fn reset-fn]
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (datalog/reset-db-cache!)
     (require 'atlas.ontology :reload)
     (require 'atlas.ontology.execution-function :reload)

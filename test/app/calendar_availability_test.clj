@@ -223,7 +223,7 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! cid/registry {})
+    (cid/reset-all!)
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.structure-component :reload)
     (require 'atlas.ontology.interface-endpoint :reload)

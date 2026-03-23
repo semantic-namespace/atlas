@@ -10,7 +10,7 @@
 
 (use-fixtures :each
   (fn [f]
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (datalog/reset-db-cache!)  ;; Clear datalog cache when registry changes
     (require 'atlas.ontology.execution-function :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
@@ -19,7 +19,7 @@
     (assert (registry/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
-    (reset! registry/registry {})
+    (registry/reset-all!)
     (datalog/reset-db-cache!)))
 
 ;; =============================================================================

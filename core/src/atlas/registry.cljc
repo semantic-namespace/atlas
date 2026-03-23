@@ -1,21 +1,39 @@
 (ns atlas.registry
   "Semantic kernel providing compound-identity algebra.
+
    Each identity is a set of qualified keywords representing composed meaning.
-   All operations are deterministic, data-oriented, and side-effect free,
-   except for explicit registry mutation helpers."
+
+   Registration model (like clojure.spec):
+   - register! appends to an ordered log and keeps the map warm
+   - compile! rebuilds the map from the log with aggregated compound-ids
+   - check-consistency! validates the compiled registry
+
+   Pipeline: load → compile! → check-consistency!"
   (:refer-clojure :exclude [exists? remove])
   (:require [clojure.string :as str]
             [clojure.set :as set]
             [clojure.spec.alpha :as s]
             [taoensso.telemere :as tel]
-            [clojure.walk :as walk]
             #?(:cljs [goog.string :as gstring])))
 
 ;; =============================================================================
-;; Registry
+;; Registry — dual storage: log (source of truth) + map (query index)
 ;; =============================================================================
 
+(def registrations
+  "Ordered log of all register! calls. Source of truth.
+   Each entry: {:dev-id kw :type kw :aspects #{} :value {} :ns str}"
+  (atom []))
+
 (def registry
+  "Derived map: compound-id → props. Rebuilt from log by compile!.
+   After compile!, compound-ids include aggregated aspects from deps.
+   Also kept warm by register! (with declared aspects only)."
+  (atom {}))
+
+(def dev-id-index
+  "Derived index: dev-id → compound-id. O(1) lookup.
+   Rebuilt by compile!. Also kept warm by register!."
   (atom {}))
 
 (def ^:dynamic *registry-override*
@@ -29,37 +47,13 @@
   (or *registry-override* @registry))
 
 ;; =============================================================================
-;; Validation & Registry
+;; Helpers
 ;; =============================================================================
 
 #?(:clj (defn- format* [fmt & args]
           (apply format fmt args))
    :cljs (defn- format* [fmt & args]
            (apply gstring/format fmt args)))
-
-(defn- normalize-callables
-  "Replaces anonymous / inline functions with :fun,
-   preserves named vars that refer to functions
-  Relaces reifies by :reify."
-  [m]
-  (walk/postwalk
-    (fn [v]
-      (cond
-        ;; named function (var)
-        (and (var? v) (fn? @v)) v
-
-        ;; anonymous or inline function
-        (fn? v) :fun
-         ;; Inline reify objects (JVM only)
-        #?(:clj
-           (let [^Class c (class v)
-                 n (.getName c)]
-             (or (.isAnonymousClass c)
-                 (boolean (re-find #"\$reify__\d+" n))))
-           :cljs false)
-        :reify
-        :else v))
-    m))
 
 (defn fetch
   "Fetch the value associated with a compound identity."
@@ -90,90 +84,257 @@
         joined (str/join "--" aspect-names)]
     (keyword "auto" joined)))
 
-(defn- get-not-serialisable-keys
-  "Get not-serialisable keys for a compound identity by reading ontology from registry.
-   Avoids circular dependency with atlas.ontology by reading registry directly."
-  [compound-id]
-  (let [entity-types (filter #(= "atlas" (namespace %)) compound-id)
-        ontology-entries (filter #(contains? % :atlas/ontology) (keys @registry))]
-    (set (mapcat (fn [entity-type]
-                   ;; Find ontology entry that has both :atlas/ontology and this entity-type
-                   (when-let [ontology-id (first (filter #(contains? % entity-type)
-                                                         ontology-entries))]
-                     (let [ontology-props (get @registry ontology-id)]
-                       (:ontology/not-serialisable-keys ontology-props))))
-                 entity-types))))
-
-(defn- serialisable-value
-  "Filter value to only include serialisable keys (exclude :ontology/not-serialisable-keys).
-   Used for comparing entity definitions to detect semantic conflicts.
-   Reads ontology definitions directly from registry to avoid circular dependency."
-  [compound-id value]
-  (let [not-serialisable-keys (get-not-serialisable-keys compound-id)]
-    (apply dissoc value not-serialisable-keys)))
-
-(def ^:dynamic *error-on-register* false)
-
-(defn value-changed? [dev-id compound-id enriched-value]
-  (when (contains? @registry compound-id)
-    (let [existing-value (get @registry compound-id)
-          existing-serialisable (serialisable-value compound-id existing-value)
-          new-serialisable (serialisable-value compound-id enriched-value)]
-      (when-let [error (and (not= existing-serialisable new-serialisable)
-                            [(format* "%s entity value v0 v1 conflict" dev-id)
-                             {:compound-id compound-id
-                              :dev-id dev-id
-                              :error-type :compound-id
-                              :v0 existing-serialisable
-                              :v1 new-serialisable}])]
-        (if *error-on-register*
-          (tel/log! {:level :warn} error)
-          (ex-info (first error) (last error)))))))
-
-(defn compound-id-changed? [dev-id compound-id _enriched-value]
-  (when-let [[existing-compound-id _existing-value]
-             (first (filter (fn [[_k v]] (= (:atlas/dev-id v) dev-id))
-                            @registry))]
-    (when-let [error (and (not= existing-compound-id compound-id)
-                          [(format* "%s compound-id v0 v1 conflict" dev-id)
-                           {:dev-id dev-id
-                            :error-type :dev-id
-                            :v0 existing-compound-id
-                            :v1 compound-id}])]
-      (if *error-on-register*
-        (tel/log! {:level :warn} error)
-        (ex-info (first error) (last error))))))
+;; =============================================================================
+;; Registration — append to log + keep map warm
+;; =============================================================================
 
 (defn register!
   "Register a new compound identity with explicit entity type and aspects.
 
-   The entity type and aspects are combined to form the complete compound identity.
-   Entity types are registered with :atlas/type and can be validated after load.
+   Appends to the registration log and updates the map immediately
+   (with declared aspects only). Call compile! after all registrations
+   to rebuild with aggregated compound-ids.
 
    Arities:
    - [type aspects value]: Register with auto-generated dev-id
-   - [dev-id type aspects value]: Register with explicit dev-id
-
-   Parameters:
-   - dev-id: Developer ID (keyword, auto-generated if not provided)
-   - type: Entity type keyword (e.g., :atlas/execution-function, :semantic-namespace/flow)
-   - aspects: Set of aspect keywords (e.g., #{:domain/cart :tier/service})
-   - value: Value map with entity-specific keys"
+   - [dev-id type aspects value]: Register with explicit dev-id"
   ([type aspects value]
-   (register! (generate-dev-id (conj aspects type)) type aspects value)) 
+   (register! (generate-dev-id (conj aspects type)) type aspects value))
   ([dev-id type aspects value]
-   ;; 4-arity: (register! dev-id type aspects value) with explicit dev-id
    (assert (qualified-keyword? type)
            (format* "Entity type must be a qualified keyword, got: %s" type))
    (assert (and (set? aspects) (every? qualified-keyword? aspects))
            (format* "Aspects must be a set of qualified kws got: %s" aspects))
    (let [compound-id (conj aspects type)
          value-with-meta (assoc value :atlas/dev-id dev-id :atlas/type type)]
-     (when-let [e  (and *error-on-register* (or (compound-id-changed? dev-id compound-id value-with-meta)
-                                                (value-changed? dev-id compound-id value-with-meta)))]
-       (throw e))
+     ;; Append to registration log
+     (swap! registrations conj {:dev-id  dev-id
+                                 :type    type
+                                 :aspects aspects
+                                 :value   value
+                                 :ns      #?(:clj (str *ns*) :cljs nil)})
+     ;; Keep map + index warm for backward compatibility
+     (swap! dev-id-index assoc dev-id compound-id)
      (swap! registry assoc compound-id value-with-meta)
-     compound-id))) 
+     compound-id)))
+
+;; =============================================================================
+;; Aggregation — pure functions over maps (used by compile!)
+;; =============================================================================
+
+(defn- resolve-refs
+  "Get referenced dev-ids (keywords) from an entity's props for a given type-ref property.
+   Filters to qualified keywords only."
+  [props {:keys [property cardinality]}]
+  (let [value (get props property)]
+    (cond
+      (nil? value) #{}
+      (= cardinality :db.cardinality/many)
+      (cond
+        (set? value)        (into #{} (filter qualified-keyword?) value)
+        (sequential? value) (into #{} (filter qualified-keyword?) value)
+        (qualified-keyword? value) #{value}
+        :else #{})
+      :else
+      (if (qualified-keyword? value) #{value} #{}))))
+
+(defn- discover-type-refs
+  "Read type-ref declarations from a base registry map (not the live atom).
+   Returns a seq of {:source kw :property kw :cardinality kw}."
+  [base-map]
+  (->> (vals base-map)
+       (filter #(= :atlas/type-ref (:atlas/type %)))
+       (keep (fn [props]
+               (when (:type-ref/property props)
+                 {:source      (:type-ref/source props)
+                  :property    (:type-ref/property props)
+                  :cardinality (:type-ref/cardinality props)})))
+       vec))
+
+(defn- build-dep-graph
+  "Build {dev-id -> #{dep-dev-ids}} by walking type-ref properties for each entity.
+   Only includes dep-ids that exist in dev-id->entry (known entities)."
+  [dev-id->entry base-map ref-properties]
+  (reduce (fn [graph [dev-id {:keys [type aspects]}]]
+            (let [cid   (conj aspects type)
+                  props (get base-map cid)
+                  deps  (into #{}
+                              (comp (mapcat #(resolve-refs props %))
+                                    (filter #(contains? dev-id->entry %)))
+                              (filter #(contains? cid (:source %)) ref-properties))]
+              (assoc graph dev-id deps)))
+          {}
+          dev-id->entry))
+
+(defn- topo-sort*
+  "Kahn's algorithm on {node -> #{deps}} graph.
+   Returns nodes in dependency-first order (leaves before roots).
+   Nodes referenced as deps but absent from graph keys are included."
+  [graph]
+  (let [all-nodes  (into #{} (concat (keys graph) (mapcat val graph)))
+        in-degree  (into {} (map (fn [n] [n (count (get graph n #{}))]) all-nodes))
+        rev-graph  (reduce (fn [acc [node deps]]
+                             (reduce (fn [a d] (update a d (fnil conj #{}) node)) acc deps))
+                           {}
+                           graph)
+        init-queue (filterv #(zero? (get in-degree %)) all-nodes)]
+    (loop [queue     init-queue
+           result    []
+           in-degree in-degree]
+      (if (empty? queue)
+        result
+        (let [node  (first queue)
+              [in-deg' q']
+              (reduce (fn [[indeg q] dep]
+                        (let [new-deg (dec (get indeg dep 0))]
+                          [(assoc indeg dep new-deg)
+                           (if (zero? new-deg) (conj q dep) q)]))
+                      [in-degree (subvec queue 1)]
+                      (get rev-graph node #{}))]
+          (recur q' (conj result node) in-deg'))))))
+
+;; =============================================================================
+;; Compile — rebuild map from log with aggregated compound-ids
+;; =============================================================================
+
+(defn compile!
+  "Rebuild the registry map from the registration log.
+
+   Two passes:
+   1. Build base map from log (last-write-wins by dev-id, no orphans)
+   2. Walk deps via type-refs to expand compound-ids with derived aspects
+
+   After compile!, compound-ids include all aspects inherited from deps.
+   The log preserves declared aspects — use declared-aspects to read them.
+
+   Returns a summary map."
+  []
+  (let [entries @registrations
+        ;; Last-write-wins by dev-id
+        dev-id->entry (reduce (fn [acc {:keys [dev-id] :as entry}]
+                                (assoc acc dev-id entry))
+                              {}
+                              entries)
+        ;; Pass 1: base map (declared compound-ids only)
+        base-map (into {}
+                       (map (fn [[_ {:keys [dev-id type aspects value]}]]
+                              [(conj aspects type)
+                               (assoc value :atlas/dev-id dev-id :atlas/type type)]))
+                       dev-id->entry)
+
+        ;; Discover type-refs, build dep graph, topo-sort
+        ref-properties    (discover-type-refs base-map)
+        dep-graph         (build-dep-graph dev-id->entry base-map ref-properties)
+        topo-order        (topo-sort* dep-graph)
+
+        ;; Pass 2: walk bottom-to-top — each node gets own ∪ all deps' all-aspects
+        all-aspects-by-id
+        (reduce (fn [acc dev-id]
+                  (let [own      (get-in dev-id->entry [dev-id :aspects] #{})
+                        dep-ids  (get dep-graph dev-id #{})
+                        inherited (apply set/union (map #(get acc % #{}) dep-ids))]
+                    (assoc acc dev-id (into own inherited))))
+                {}
+                topo-order)
+
+        expanded-map
+        (into {}
+              (map (fn [[dev-id {:keys [type aspects value]}]]
+                     (let [all-asp (get all-aspects-by-id dev-id aspects)
+                           cid     (conj all-asp type)]
+                       [cid (assoc value :atlas/dev-id dev-id :atlas/type type)])))
+              dev-id->entry)
+
+        ;; Build dev-id → expanded compound-id index
+        idx (into {}
+                  (map (fn [[cid props]] [(:atlas/dev-id props) cid]))
+                  expanded-map)
+
+        aggregated (count (filter (fn [[dev-id all-asp]]
+                                    (> (count all-asp)
+                                       (count (get-in dev-id->entry [dev-id :aspects] #{}))))
+                                  all-aspects-by-id))]
+    (reset! registry expanded-map)
+    (reset! dev-id-index idx)
+    {:compile/entities     (count dev-id->entry)
+     :compile/from-entries (count entries)
+     :compile/shadowed     (- (count entries) (count dev-id->entry))
+     :compile/aggregated   aggregated
+     :compile/type-refs    (mapv :property ref-properties)}))
+
+;; =============================================================================
+;; Log queries — read declared vs compiled aspects
+;; =============================================================================
+
+(defn declared-aspects
+  "Get the declared aspects for a dev-id (from the log, before aggregation)."
+  [dev-id]
+  (let [entries @registrations]
+    (:aspects (last (filter #(= dev-id (:dev-id %)) entries)))))
+
+(defn derived-aspects
+  "Get aspects that were derived by aggregation (compiled minus declared)."
+  [dev-id]
+  (when-let [compiled-cid (get @dev-id-index dev-id)]
+    (let [declared (or (declared-aspects dev-id) #{})
+          entry (last (filter #(= dev-id (:dev-id %)) @registrations))
+          type (:type entry)]
+      (disj (set/difference compiled-cid declared) type))))
+
+;; =============================================================================
+;; Consistency checking — post-load validation
+;; =============================================================================
+
+(defn check-consistency!
+  "Validate the registry for consistency after compile!.
+
+   Checks:
+   1. Duplicate dev-ids in the log (same dev-id registered more than once)
+   2. Compound-id collisions (different dev-ids producing the same compound-id)
+
+   Returns {:consistent? bool :issues [...]}."
+  []
+  (let [entries @registrations
+        compiled-registry @registry
+
+        ;; 1. Duplicate dev-ids
+        dev-id-entries (group-by :dev-id entries)
+        duplicates (->> dev-id-entries
+                        (filter (fn [[_ es]] (> (count es) 1)))
+                        (mapv (fn [[dev-id es]]
+                                {:issue    :duplicate-dev-id
+                                 :dev-id   dev-id
+                                 :count    (count es)
+                                 :sources  (mapv :ns es)})))
+
+        ;; 2. Compound-id collisions (different dev-ids → same expanded compound-id)
+        cid-to-devids (reduce (fn [acc [cid props]]
+                                (update acc cid (fnil conj #{}) (:atlas/dev-id props)))
+                              {}
+                              compiled-registry)
+        collisions (->> cid-to-devids
+                        (filter (fn [[_ dev-ids]] (> (count dev-ids) 1)))
+                        (mapv (fn [[cid dev-ids]]
+                                {:issue       :compound-id-collision
+                                 :compound-id cid
+                                 :dev-ids     (vec (sort dev-ids))})))
+
+        issues (into duplicates collisions)]
+    {:consistent? (empty? issues)
+     :issues      issues
+     :entities    (count compiled-registry)}))
+
+;; =============================================================================
+;; Reset — clear everything (tests, dev)
+;; =============================================================================
+
+(defn reset-all!
+  "Clear registrations log, registry map, and dev-id index.
+   Use in test fixtures and for full dev reset."
+  []
+  (reset! registrations [])
+  (reset! registry {})
+  (reset! dev-id-index {}))
 
 ;; =============================================================================
 ;; Entity Type Helpers
@@ -230,13 +391,7 @@
 ;; =============================================================================
 
 (defn validate-registry-types
-  "Validate that all registered entities use known types.
-
-  Returns:
-    {:valid? true} or
-    {:valid? false :violations [...]}
-
-  Call this after all code is loaded to check type consistency."
+  "Validate that all registered entities use known types."
   []
   (let [types (registered-types)
         all-identities (vec (keys @registry))
@@ -256,16 +411,8 @@
        :registered-types types})))
 
 (defn validate-with-specs
-  "Optionally validate entities using clojure.spec if specs exist.
-
-  Returns:
-    {:valid? true} or
-    {:valid? false :violations [...]}
-
-  Only validates entities that have corresponding specs registered."
+  "Optionally validate entities using clojure.spec if specs exist."
   []
-  ;; TODO: Implement spec validation
-  ;; For now, just return valid
   {:valid? true
    :note "Spec validation not yet implemented"})
 
@@ -274,14 +421,11 @@
   [keys*]
   (eval `(s/keys :req ~keys*)))
 
-(s/def :atlas/compound-id (s/coll-of qualified-keyword? ;;:min-count 1
-                                     ))
+(s/def :atlas/compound-id (s/coll-of qualified-keyword?))
 (s/def :atlas/dev-id qualified-keyword?)
 
 (defn validate-ontology-specs
-  "Validate entities against their ontology definitions using dynamic specs.
-
-  Returns true if all entities are valid, false otherwise."
+  "Validate entities against their ontology definitions using dynamic specs."
   []
   (let [ontologies (into {} (filter (fn [[id _]] (contains? id :atlas/ontology)) @registry))
         ontology-specs (into {}
@@ -302,8 +446,7 @@
                                    ["NOT VALID"
                                     {:dev-id (:atlas/dev-id props)
                                      :compound-id compound-id
-                                     :message (s/explain-str (dyn-spec required-keys) props)
-                                     }])
+                                     :message (s/explain-str (dyn-spec required-keys) props)}])
                             false))
                       true))))
             @registry)))
@@ -311,9 +454,6 @@
 ;; =============================================================================
 ;; Analytical Utilities — delegated to atlas.registry.analysis
 ;; =============================================================================
-;; These require atlas.query which the kernel intentionally does not depend on.
-;; The functions are kept here as delegation stubs for backward compatibility.
-;; New code should require atlas.registry.analysis directly.
 
 (defn clusters           [] ((requiring-resolve 'atlas.registry.analysis/clusters)))
 (defn correlation-matrix [] ((requiring-resolve 'atlas.registry.analysis/correlation-matrix)))

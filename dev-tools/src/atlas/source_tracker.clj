@@ -710,6 +710,7 @@
  #{:tier/tooling :domain/llm-ide :intent/history :tool/git-history-snapshot}
  {:execution-function/context [:git/commit-refs :history/conn]
   :execution-function/response [:history/versions :history/entity-counts]
+  :execution-function/deps []
   :atlas/docs "Feed git commits into atlas.history as version snapshots. For each commit, scans register! forms to build a registry map, then calls history/snapshot-version! to create a semantic timeline. Requires a history conn (from atlas.history/create-conn)."
   :atlas/impl (fn [{:keys [git/commit-refs history/conn]}]
                 (when (and commit-refs conn)
