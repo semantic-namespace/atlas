@@ -39,6 +39,9 @@
 (s/def :query/status     #{:ok :error})
 (s/def :query/since      inst?)
 (s/def :query/order      #{:asc :desc})
+(s/def :query/compact   boolean?)
+(s/def :query/trace-id  uuid?)
+(s/def :exec/trace-id   uuid?)
 
 ;; ============================================================================
 ;; SPECS — response (output) keys
@@ -161,10 +164,83 @@
            :next-id        (inc (:next-id s))
            :evicted-before evicted-before')))
 
+(defn- serializable?
+  "True if v is safe for JSON/EDN serialization."
+  [v]
+  (or (nil? v) (string? v) (number? v) (boolean? v) (keyword? v)
+      (symbol? v) (inst? v) (uuid? v)))
+
+(defn- sanitize-val
+  "Replace non-serializable values (functions, objects) with a placeholder string."
+  [v]
+  (cond
+    (serializable? v)  v
+    (map? v)           (into {} (map (fn [[k val]] [k (sanitize-val val)])) v)
+    (set? v)           (into #{} (map sanitize-val) v)
+    (sequential? v)    (mapv sanitize-val v)
+    (fn? v)            (str "<fn " (type v) ">")
+    :else              (str "<" (type v) ">")))
+
+(defn- sanitize-for-storage
+  "Walk entry and replace non-serializable values so the buffer is always
+   JSON/EDN-safe. Preserves :exec/dev-id and :exec/status as-is."
+  [entry]
+  (into {} (map (fn [[k v]] [k (sanitize-val v)])) entry))
+
+;; ============================================================================
+;; TRACE DYNAMIC VARS
+;; ============================================================================
+
+(def ^:dynamic *exec-trace-id*
+  "UUID for the current execution trace. Bound by with-trace.
+   Automatically conveyed to child threads via Clojure binding conveyance."
+  nil)
+
+(def ^:dynamic *exec-trace-buffer*
+  "volatile! accumulating full entries for the current trace.
+   nil when no trace is active — record! writes metrics-only directly."
+  nil)
+
+;; ============================================================================
+;; FLUSH HELPERS
+;; ============================================================================
+
+(def ^:private metrics-keys
+  "Keys retained for metrics-only (non-anomalous) trace entries."
+  #{:exec/id :exec/at :exec/dev-id :exec/status :exec/duration-ms
+    :exec/trace-id :exec/atlas})
+
+(defn- push-entry!
+  "Write a single prepped entry to the main ring, assigning its id."
+  [entry]
+  (let [id (:next-id @state)]
+    (swap! state push (assoc entry :exec/id id))))
+
+(defn- flush-metrics!
+  "Flush staged trace entries as metrics-only (strip args/response/error)."
+  [entries]
+  (doseq [entry entries]
+    (push-entry! (select-keys entry metrics-keys))))
+
+(defn- flush-full!
+  "Flush staged trace entries in full (anomalous trace — keep all fields)."
+  [entries]
+  (doseq [entry entries]
+    (push-entry! entry)))
+
+;; ============================================================================
+;; RECORD
+;; ============================================================================
+
 (defn record!
   "Append one execution entry. Safe no-op when disabled or filtered out.
    Never throws — wrapped in try/catch so executor failures cannot mask
    the original call result.
+
+   When called inside with-trace: stages a full entry in the trace buffer.
+   The buffer is flushed as metrics-only on normal exit, or full on exception.
+
+   When called outside with-trace: writes metrics-only directly to the ring.
 
    Entry shape (caller is responsible for pre-filtering args/response to
    declared keys):
@@ -183,14 +259,45 @@
   (try
     (when (should-capture? @state entry props)
       (let [snapshot (atlas/entity-snapshot-fast (:exec/dev-id entry) props)
-            id       (:next-id @state)
-            full     (assoc entry
-                            :exec/id    id
+            full     (assoc (sanitize-for-storage entry)
                             :exec/at    #?(:clj (java.util.Date.)
                                            :cljs (js/Date.))
-                            :exec/atlas snapshot)]
-        (swap! state push full)))
+                            :exec/atlas snapshot
+                            :exec/trace-id *exec-trace-id*)]
+        (if *exec-trace-buffer*
+          (vswap! *exec-trace-buffer* conj full)
+          (push-entry! (select-keys full metrics-keys)))))
     (catch #?(:clj Throwable :cljs :default) _ nil)))
+
+;; ============================================================================
+;; WITH-TRACE MACRO
+;; ============================================================================
+
+(defmacro with-trace
+  "Execute body within a named execution trace.
+
+   Binds *exec-trace-id* to a fresh UUID and *exec-trace-buffer* to a
+   volatile!. All record! calls within body (including nested exec-fns)
+   stage full entries in the buffer.
+
+   On normal exit  → flush metrics-only to ring (id/at/dev-id/status/ms).
+   On exception    → flush full entries to ring (all fields including
+                      args/response/error) then rethrow.
+
+   Usage (at your endpoint/job boundary):
+     (h/with-trace
+       (executor/run-pipeline :endpoint/checkout ctx))"
+  [& body]
+  `(let [buf# (volatile! [])]
+     (binding [*exec-trace-id*     (random-uuid)
+               *exec-trace-buffer* buf#]
+       (try
+         (let [result# (do ~@body)]
+           (flush-metrics! @buf#)
+           result#)
+         (catch #?(:clj Throwable :cljs :default) e#
+           (flush-full! @buf#)
+           (throw e#))))))
 
 ;; ============================================================================
 ;; QUERY
@@ -204,6 +311,36 @@
     (set/union (or (:atlas/declared a) #{})
                (or (:atlas/derived  a) #{}))))
 
+(def ^:private compact-keys
+  "Keys retained in compact mode — diagnostic essentials only."
+  #{:exec/id :exec/at :exec/dev-id :exec/status :exec/duration-ms
+    :exec/args :exec/response :exec/error})
+
+(defn- summarize-val
+  "Summarize a map/collection value: show keys only, cap string values."
+  [v]
+  (cond
+    (map? v)        (into {} (map (fn [[k val]]
+                                   [k (cond
+                                        (map? val)        (str "{" (count val) " keys}")
+                                        (sequential? val) (str "[" (count val) " items]")
+                                        (and (string? val) (> (count val) 80))
+                                        (str (subs val 0 77) "...")
+                                        :else val)])) v)
+    (sequential? v) (str "[" (count v) " items]")
+    :else           v))
+
+(defn- compact-entry
+  "Strip :exec/atlas, summarize args/response values to reduce payload.
+   Keeps keys of args/response visible but truncates large values."
+  [entry]
+  (let [base (select-keys entry compact-keys)]
+    (cond-> base
+      (:exec/args base)     (update :exec/args summarize-val)
+      (:exec/response base) (update :exec/response summarize-val)
+      (:exec/error base)    (update :exec/error
+                                    #(select-keys % [:class :message])))))
+
 (defn query
   "Cursor-paginated history fetch. The single primitive every tool builds on.
 
@@ -216,6 +353,9 @@
                         aspects include this
      :query/since     - inst lower bound on :exec/at
      :query/order     - :asc (default) or :desc
+     :query/compact  - when true, strip :exec/atlas metadata from each entry.
+                        Reduces payload ~10x. Default false.
+     :query/trace-id - uuid; return only entries for this trace.
 
    Returns:
      {:exec/entries        [...]
@@ -228,7 +368,8 @@
   ([] (query {}))
   ([{:keys [:query/cursor :query/limit
             :entity/dev-id
-            :query/status :query/aspect :query/since :query/order]
+            :query/status :query/aspect :query/since :query/order
+            :query/compact :query/trace-id]
      :or   {cursor 0 limit default-limit order :asc}}]
    (let [{:keys [entries evicted-before]} @state
          limit    (min (max 1 limit) max-limit)
@@ -238,14 +379,16 @@
                     status          (filter #(= (:exec/status %) status))
                     aspect          (filter #(contains? (entry-aspects %) aspect))
                     since           (filter #(>= (compare (:exec/at %) since) 0))
+                    trace-id        (filter #(= (:exec/trace-id %) trace-id))
                     (= :desc order) reverse)
          taken     (take (inc limit) filtered)   ;; +1 to detect has-more?
          page      (vec (take limit taken))
          has-more? (> (count taken) limit)
          next-cursor (if (seq page)
                        (inc (:exec/id (last page)))
-                       cursor)]
-     {:exec/entries        page
+                       cursor)
+         xf        (if compact compact-entry sanitize-for-storage)]
+     {:exec/entries        (mapv xf page)
       :exec/returned       (count page)
       :exec/next-cursor    next-cursor
       :exec/has-more?      has-more?

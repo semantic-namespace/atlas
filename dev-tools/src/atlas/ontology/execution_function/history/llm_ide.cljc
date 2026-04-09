@@ -69,12 +69,13 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/exec-history-page}
  {:execution-function/context  [:query/cursor :query/limit
                                 :entity/dev-id :query/status
-                                :query/aspect :query/since :query/order]
+                                :query/aspect :query/since :query/order
+                                :query/compact :query/trace-id]
   :execution-function/response [:exec/entries :exec/returned
                                 :exec/next-cursor :exec/has-more?
                                 :exec/total-buffered :exec/evicted-before]
   :execution-function/deps     #{}
-  :atlas/docs "Paginated raw execution entries from the local history ring buffer. Returns up to :query/limit entries (default 50, max 200) starting at :query/cursor. Pass :exec/next-cursor from the response back into the next call. If :exec/evicted-before > your :query/cursor, the buffer wrapped and you missed entries — restart from :exec/evicted-before. Same filters as :atlas.llm-ide/exec-history-summary."
+  :atlas/docs "Paginated raw execution entries from the local history ring buffer. Returns up to :query/limit entries (default 50, max 200) starting at :query/cursor. Pass :exec/next-cursor from the response back into the next call. Pass :query/compact true to strip :exec/atlas metadata (~10x smaller). Pass :query/trace-id to see the full call chain for one trace."
   :atlas/impl (fn [args] (h/query (normalize-args args)))})
 
 (registry/register!
@@ -82,13 +83,14 @@
  :atlas/execution-function
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/exec-history-by-dev-id}
  {:execution-function/context  [:entity/dev-id :query/cursor
-                                :query/limit :query/order]
+                                :query/limit :query/order :query/compact]
   :execution-function/response [:exec/entries :exec/returned
                                 :exec/next-cursor :exec/has-more?
                                 :exec/total-buffered :exec/evicted-before]
   :execution-function/deps     #{}
-  :atlas/docs "Paginated history entries for a single execution-function dev-id. Convenience wrapper over :atlas.llm-ide/exec-history-page with :entity/dev-id required."
-  :atlas/impl (fn [args] (h/query (normalize-args args)))})
+  :atlas/docs "Paginated history entries for a single execution-function dev-id. Convenience wrapper over :atlas.llm-ide/exec-history-page with :entity/dev-id required. Defaults to compact mode (no :exec/atlas metadata). Pass :query/compact false for full entries."
+  :atlas/impl (fn [args]
+                (h/query (normalize-args (merge {:query/compact true} args))))})
 
 (registry/register!
  :atlas.llm-ide/exec-history-errors
@@ -96,14 +98,16 @@
  #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/exec-history-errors}
  {:execution-function/context  [:query/cursor :query/limit
                                 :entity/dev-id :query/aspect
-                                :query/since :query/order]
+                                :query/since :query/order :query/compact
+                                :query/trace-id]
   :execution-function/response [:exec/entries :exec/returned
                                 :exec/next-cursor :exec/has-more?
                                 :exec/total-buffered :exec/evicted-before]
   :execution-function/deps     #{}
-  :atlas/docs "Paginated history entries restricted to :exec/status :error. Same pagination contract as :atlas.llm-ide/exec-history-page. Use to triage what's been failing in this dev session."
+  :atlas/docs "Paginated history entries restricted to :exec/status :error. Defaults to compact mode. Pass :query/trace-id from an error entry to see the full call chain for that trace."
   :atlas/impl (fn [args]
-                (h/query (assoc (normalize-args args) :query/status :error)))})
+                (h/query (assoc (normalize-args (merge {:query/compact true} args))
+                                :query/status :error)))})
 
 (registry/register!
  :atlas.llm-ide/exec-history-clear
