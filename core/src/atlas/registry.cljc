@@ -362,7 +362,8 @@
   [identity]
   (let [types (registered-types)
         type-in-id (first (set/intersection identity types))]
-    (or type-in-id
+    type-in-id
+    #_(or type-in-id
         ;; Fallback: return first keyword if no registered type found
         (first identity))))
 

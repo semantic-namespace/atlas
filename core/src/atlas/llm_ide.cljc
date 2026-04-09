@@ -16,7 +16,8 @@
    - :intent/trace   - trace-causes, blast-radius, change-risk
    - :intent/explain - explain-area
    - :intent/suggest - suggest-placement
-   - :intent/diagnose - orphans, islands, bottlenecks, anomalies, structural-gaps
+   - :intent/diagnose - orphans, islands, bottlenecks, anomalies, structural-gaps,
+                        entity-snapshot, entity-snapshot-fast
    - :intent/query   - by-aspect, entity-detail, data-flow
    - :intent/history  - snapshot-registry, diff-versions, version-summary, entity-timeline, snapshot-and-diff
 
@@ -58,7 +59,8 @@
 
    Context export for LLM prompts:
      (llm-context) => {:atlas/ontology ... :atlas/registry ... :atlas/tools ...}"
-  (:require [atlas.registry :as registry]
+  (:require [atlas.core :as atlas]
+            [atlas.registry :as registry]
             [atlas.registry.lookup :as lookup]
             [atlas.query :as q]
             [atlas.ontology :as ontology]
@@ -540,6 +542,33 @@
   :atlas/impl (fn [_]
                   ;; Uses cached datalog DB with precomputed aspects/deps for efficiency
                 {:gaps (datalog/query-structural-gaps (datalog/get-db) 0.5 20)})})
+
+(registry/register!
+ :atlas.llm-ide/entity-snapshot-fast
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/entity-snapshot-fast}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:atlas/dev-id :atlas/compound-id :atlas/type
+                                :atlas/declared :atlas/derived]
+  :execution-function/deps #{}
+  :atlas/docs "Cheap semantic snapshot of an entity by dev-id: identity, type, declared and derived aspects only. Safe for hot exception paths under load. Use this when you only need to know what an entity *is* without walking its deps. Returns nil for unknown dev-ids. See docs/exception-enrichment.md."
+  :atlas/impl (fn [{:keys [:entity/dev-id]}]
+                (atlas/entity-snapshot-fast (ensure-keyword dev-id)))})
+
+(registry/register!
+ :atlas.llm-ide/entity-snapshot
+ :atlas/execution-function
+ #{:tier/tooling :domain/llm-ide :intent/diagnose :tool/entity-snapshot}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:atlas/dev-id :atlas/compound-id :atlas/type
+                                :atlas/declared :atlas/derived
+                                :atlas/deps :atlas/dep-summary
+                                :atlas/blast-radius :atlas/data-flow
+                                :atlas/props]
+  :execution-function/deps #{}
+  :atlas/docs "Full semantic snapshot of an entity by dev-id: identity, aspects, effective deps, transitive dependency summary, blast radius, and data-flow satisfaction. Same shape attached to runtime exceptions via atlas.core/entity-snapshot — call this when triaging a stack trace to see what failed and what depends on it. See docs/exception-enrichment.md."
+  :atlas/impl (fn [{:keys [:entity/dev-id]}]
+                (atlas/entity-snapshot (ensure-keyword dev-id)))})
 
     ;; Intent: query
 (registry/register!
