@@ -656,8 +656,10 @@
   :execution-function/response [:types/all]
   :execution-function/deps #{}
   :atlas/impl (fn [_]
-                {:types (vec (ide/list-entity-types))
-                 :count (count (ide/list-entity-types))})})
+                (let [types-with-counts (ide/list-entity-types-with-counts)]
+                  {:types (mapv :entity-type/type types-with-counts)
+                   :counts types-with-counts
+                   :count (count types-with-counts)}))})
 
 (registry/register!
  :atlas.llm-ide/entities-by-type
@@ -697,7 +699,8 @@
   :execution-function/response [:entities/by-type :types/summary]
   :execution-function/deps #{}
   :atlas/impl (fn [_]
-                (let [all-types (ide/list-entity-types)
+                (let [all-types (->> (ide/list-entity-types-with-counts)
+                                     (mapv :entity-type/type))
                       by-type (into {}
                                    (map (fn [entity-type]
                                           [entity-type

@@ -55,6 +55,7 @@
 (require 'atlas-lens)
 (require 'atlas-recent)
 (require 'atlas-at-point)
+(require 'atlas-testing)
 
 ;;; Explorer Transient Menu
 
@@ -99,7 +100,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("I" "Insert aspect" atlas-authoring-insert-aspect)
     ("D" "Insert dev-id" atlas-authoring-insert-dev-id)
     ("P" "Aspect palette" atlas-authoring-aspect-palette)
-    ("~" "Similar entities at point" atlas-authoring-similar-at-point)]
+    ("~" "Similar entities at point" atlas-authoring-similar-at-point)
+    ("y" "Insert exec-fn test" atlas-insert-exec-fn-test)]
    ["Business Semantics"
     ("b" "List business entities" atlas-business-list-entities)
     ("B" "Business info" atlas-business-info)

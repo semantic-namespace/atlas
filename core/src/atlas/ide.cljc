@@ -933,6 +933,97 @@
 (defn history-get-conn       [] (ide.history/get-conn))
 
 ;; =============================================================================
+;; TEST TEMPLATE GENERATION
+;; =============================================================================
+
+(defn exec-fn-test-template
+  "Generate a Clojure REPL snippet for testing a single execution-function.
+   Uses direct deps only (no transitive walk). Separates components (from
+   integrant dev/*system*) and direct exec-fn deps with :atlas/impl. Both
+   sections are editable. Returns a string."
+  [dev-id]
+  (let [dev-id-kw   (ensure-keyword dev-id)
+        direct-deps (ot/deps-for dev-id-kw)
+        entity-type (fn [id]
+                      (when-let [identity (rt/identity-for id)]
+                        (some #(when (= "atlas" (namespace %)) %) identity)))
+        components  (vec (sort (filter #(= :atlas/structure-component (entity-type %))
+                                       direct-deps)))
+        dep-fns     (vec (sort (filter #(= :atlas/execution-function (entity-type %))
+                                       direct-deps)))
+        ctx-keys    (vec (sort (ot/context-for dev-id-kw)))
+        all-ef-ids  (conj dep-fns dev-id-kw)
+        with-impl   (filter #(:atlas/impl (rt/props-for %)) all-ef-ids)
+        no-impl     (remove #(:atlas/impl (rt/props-for %)) all-ef-ids)
+        has-deps?   (seq dep-fns)
+        sample      (fn [k]
+                      (let [nm (name k)]
+                        (cond
+                          (str/includes? nm "id")    (str "<" nm ">")
+                          (str/includes? nm "token") (str "<" nm ">")
+                          (str/includes? nm "?")     "false"
+                          (str/includes? nm "count") "0"
+                          (str/ends-with? nm "s")    "[]"
+                          :else                      (str "<" nm ">"))))]
+    (str/join
+     "\n"
+     (remove
+      nil?
+      [";; Test template for " (str dev-id-kw)
+       ";; Generated from atlas registry — edit values as needed"
+       ""
+       "(require '[atlas.ontology.execution-function.executor :as executor])"
+       "(require '[atlas.registry.lookup :as entity])"
+       ""
+       ;; Components
+       (when (seq components)
+         (str ";; ---- components (default: from integrant dev/*system*) ----\n"
+              ";; Replace with mocks if needed\n"
+              "(def components\n"
+              "  {"
+              (str/join "\n   "
+                        (map (fn [c] (str c " (" c " dev/system)"))
+                             components))
+              "})"))
+       (when (empty? components)
+         ";; No structure-components in dependency tree")
+       ""
+       ;; Impl map (all exec-fns including the fn under test)
+       (str ";; ---- impl-map (default: from registry :atlas/impl) ----\n"
+            ";; Replace individual fns to test with stubs:\n"
+            ";;   :fn/example (fn [ctx] {:some/key \"mock\"})\n"
+            (when (seq no-impl)
+              (str ";; NOTE: no :atlas/impl for: "
+                   (str/join ", " (map str no-impl)) "\n"))
+            "(def impl-map\n"
+            "  {"
+            (str/join "\n   "
+                      (map (fn [id]
+                             (str id " (:atlas/impl (entity/props-for " id "))"))
+                           with-impl))
+            "})")
+       ""
+       ";; ---- initial context ----"
+       (if (seq components)
+         (str "(def ctx\n"
+              "  (merge components\n"
+              "         {"
+              (str/join "\n          "
+                        (map (fn [k] (str k " " (sample k)))
+                             ctx-keys))
+              "}))")
+         (str "(def ctx\n"
+              "  {"
+              (str/join "\n   "
+                        (map (fn [k] (str k " " (sample k)))
+                             ctx-keys))
+              "})"))
+       ""
+       ";; ---- run ----"
+       (str "(def pipeline (executor/build-pipeline " dev-id-kw " impl-map))")
+       (str "(pipeline ctx)")]))))
+
+;; =============================================================================
 ;; SELF-REGISTRATION — IDE functions as execution-functions
 ;; =============================================================================
 
@@ -1376,6 +1467,17 @@
   :execution-function/deps #{}
   :atlas/docs "Autocomplete a data key from a prefix string. Searches across all endpoint context/response keys. Use this for IDE autocomplete in data key input fields."
   :atlas/impl #(complete-data-key (:completion/prefix %))})
+
+;; Intent: testing (template generation)
+
+(cid/register!
+ :fn.ide/exec-fn-test-template :atlas/execution-function
+ #{:domain/ide :intent/testing :meta/ide-exec-fn-test-template}
+ {:execution-function/context [:entity/dev-id]
+  :execution-function/response [:template/code]
+  :execution-function/deps #{}
+  :atlas/docs "Generate a Clojure REPL test template for an execution-function. Shows components from integrant dev/*system*, dep impls from registry :atlas/impl, sample context, and the execute call. All sections are editable."
+  :atlas/impl #(exec-fn-test-template (:entity/dev-id %))})
 
 ;; History registrations are in atlas.ide.history (loaded via require)
 ;; Trace registrations are in atlas.ide.trace (loaded via require)
