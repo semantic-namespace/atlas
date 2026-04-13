@@ -937,10 +937,10 @@
 ;; =============================================================================
 
 (defn exec-fn-test-template
-  "Generate a Clojure REPL snippet for testing a single execution-function.
-   Uses direct deps only (no transitive walk). Separates components (from
-   integrant dev/*system*) and direct exec-fn deps with :atlas/impl. Both
-   sections are editable. Returns a string."
+  "Generate a test-case registration for a single execution-function.
+   Uses direct deps only (no transitive walk). The generated code registers
+   an :atlas/test-case entity that can be run via the runner and Kaocha.
+   Returns a string."
   [dev-id]
   (let [dev-id-kw   (ensure-keyword dev-id)
         direct-deps (ot/deps-for dev-id-kw)
@@ -952,76 +952,77 @@
         dep-fns     (vec (sort (filter #(= :atlas/execution-function (entity-type %))
                                        direct-deps)))
         ctx-keys    (vec (sort (ot/context-for dev-id-kw)))
-        all-ef-ids  (conj dep-fns dev-id-kw)
-        with-impl   (filter #(:atlas/impl (rt/props-for %)) all-ef-ids)
-        no-impl     (remove #(:atlas/impl (rt/props-for %)) all-ef-ids)
-        has-deps?   (seq dep-fns)
+        ;; Derive a test dev-id from the fn name
+        test-dev-id (keyword "test" (name dev-id-kw))
         sample      (fn [k]
                       (let [nm (name k)]
                         (cond
-                          (str/includes? nm "id")    (str "<" nm ">")
-                          (str/includes? nm "token") (str "<" nm ">")
+                          (str/includes? nm "id")    (str "\"<" nm ">\" ")
+                          (str/includes? nm "token") (str "\"<" nm ">\" ")
                           (str/includes? nm "?")     "false"
                           (str/includes? nm "count") "0"
                           (str/ends-with? nm "s")    "[]"
-                          :else                      (str "<" nm ">"))))]
+                          :else                      (str "\"<" nm ">\" "))))]
     (str/join
      "\n"
      (remove
       nil?
-      [";; Test template for " (str dev-id-kw)
-       ";; Generated from atlas registry — edit values as needed"
+      [(str ";; Test-case for " dev-id-kw)
+       ";; Generated from atlas registry — edit fixture values and expectations"
        ""
-       "(require '[atlas.ontology.execution-function.executor :as executor])"
-       "(require '[atlas.registry.lookup :as entity])"
+       "(require '[atlas.registry :as registry])"
+       "(require '[atlas.test.runner :as test-runner])"
        ""
-       ;; Components
-       (when (seq components)
-         (str ";; ---- components (default: from integrant dev/*system*) ----\n"
-              ";; Replace with mocks if needed\n"
-              "(def components\n"
-              "  {"
-              (str/join "\n   "
-                        (map (fn [c] (str c " (" c " dev/system)"))
-                             components))
-              "})"))
-       (when (empty? components)
-         ";; No structure-components in dependency tree")
+       (str "(registry/register!")
+       (str " " test-dev-id)
+       " :atlas/test-case"
+       (str " #{:atlas/test-case}  ;; add domain/test aspects as needed")
        ""
-       ;; Impl map (all exec-fns including the fn under test)
-       (str ";; ---- impl-map (default: from registry :atlas/impl) ----\n"
-            ";; Replace individual fns to test with stubs:\n"
-            ";;   :fn/example (fn [ctx] {:some/key \"mock\"})\n"
-            (when (seq no-impl)
-              (str ";; NOTE: no :atlas/impl for: "
-                   (str/join ", " (map str no-impl)) "\n"))
-            "(def impl-map\n"
-            "  {"
-            (str/join "\n   "
-                      (map (fn [id]
-                             (str id " (:atlas/impl (entity/props-for " id "))"))
-                           with-impl))
-            "})")
+       (str " {;; ---- target ----"
+            "\n  :test-case/target " dev-id-kw)
        ""
-       ";; ---- initial context ----"
+       "  ;; ---- fixture (initial context) ----"
+       (str "  :test-case/fixture {"
+            (str/join "\n                      "
+                      (map (fn [k] (str k " " (sample k)))
+                           ctx-keys))
+            "}")
+       ""
+       ;; Mocks section
        (if (seq components)
-         (str "(def ctx\n"
-              "  (merge components\n"
-              "         {"
-              (str/join "\n          "
-                        (map (fn [k] (str k " " (sample k)))
-                             ctx-keys))
-              "}))")
-         (str "(def ctx\n"
-              "  {"
-              (str/join "\n   "
-                        (map (fn [k] (str k " " (sample k)))
-                             ctx-keys))
-              "})"))
+         (str "  ;; ---- mocks (omit to start real components from ig-config) ----\n"
+              "  ;; Replace with mock values, or remove to use real subsystem\n"
+              "  :test-case/mocks {"
+              (str/join "\n                     "
+                        (map (fn [c] (str c " nil ;; TODO: mock or remove \n"))
+                             components))
+              "}")
+         "  ;; No structure-component deps to mock")
+       ""
+       "  ;; ---- expectations ----"
+       "  :test-case/expectations"
+       (str "  [{:expectation/kind :result")
+       (str "    :expectation/pred (fn [r] (contains? r " (first (ot/response-for dev-id-kw)) "))")
+       (str "    :expectation/docs \"TODO: describe expected result\"}")
+       ;; Trace expectations for dep fns
+       (when (seq dep-fns)
+         (str/join
+          "\n"
+          (map (fn [dep]
+                 (str "   {:expectation/kind :trace\n"
+                      "    :expectation/must-contain " dep "\n"
+                      "    :expectation/docs \"Pipeline calls " dep "\"}"))
+               dep-fns)))
+       "   ]})"
        ""
        ";; ---- run ----"
-       (str "(def pipeline (executor/build-pipeline " dev-id-kw " impl-map))")
-       (str "(pipeline ctx)")]))))
+       (str "(test-runner/run-test {:test/case-dev-id " test-dev-id "})")
+       ""
+       ";; With integrant config (starts real components minus mocks):"
+       (str ";; (test-runner/run-test {:test/case-dev-id " test-dev-id)
+       ";;                        :test/ig-config   ig-config"
+       ";;                        :test/init-key-fn ig/init-key"
+       ";;                        :test/halt-key-fn ig/halt-key!})"]))))
 
 ;; =============================================================================
 ;; SELF-REGISTRATION — IDE functions as execution-functions

@@ -216,14 +216,16 @@
   (let [id (:next-id @state)]
     (swap! state push (assoc entry :exec/id id))))
 
-(defn- flush-metrics!
-  "Flush staged trace entries as metrics-only (strip args/response/error)."
+(defn ^:no-doc flush-metrics!
+  "Flush staged trace entries as metrics-only (strip args/response/error).
+   Public because with-trace macro expands in calling namespace."
   [entries]
   (doseq [entry entries]
     (push-entry! (select-keys entry metrics-keys))))
 
-(defn- flush-full!
-  "Flush staged trace entries in full (anomalous trace — keep all fields)."
+(defn ^:no-doc flush-full!
+  "Flush staged trace entries in full (anomalous trace — keep all fields).
+   Public because with-trace macro expands in calling namespace."
   [entries]
   (doseq [entry entries]
     (push-entry! entry)))

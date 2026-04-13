@@ -1,6 +1,8 @@
 (ns atlas.adapter.integrant
   "Adapter to convert Integrant system configurations to Atlas registry definitions."
   (:require [atlas.registry :as registry]
+            [atlas.registry.lookup :as entity]
+            [atlas.ontology :as ontology]
             [clojure.walk :as walk]))
 
 ;; =============================================================================
@@ -371,3 +373,83 @@
       (let [dev-id (normalize-integrant-key ig-key shared-bases)]
         (when-let [instance (get running dev-id)]
           (halt-key-fn ig-key instance))))))
+
+;; =============================================================================
+;; SUBSYSTEM — start only what an atlas entity needs
+;; =============================================================================
+
+(defn- entity-type-for [dev-id]
+  (when-let [identity (entity/identity-for dev-id)]
+    (some #(when (= "atlas" (namespace %)) %) identity)))
+
+(defn- transitive-component-deps
+  "Walk atlas deps from entity-dev-id, collecting all :atlas/structure-component
+   dev-ids transitively."
+  [entity-dev-id]
+  (loop [queue (vec (ontology/deps-for entity-dev-id))
+         seen  #{}]
+    (if (empty? queue)
+      seen
+      (let [id   (peek queue)
+            rest (pop queue)]
+        (if (seen id)
+          (recur rest seen)
+          (let [is-component? (= :atlas/structure-component (entity-type-for id))
+                new-deps      (ontology/deps-for id)]
+            (recur (into rest new-deps)
+                   (if is-component? (conj seen id) seen))))))))
+
+(defn subsystem-config
+  "Filter an integrant config to only the components needed by entity-dev-id.
+
+   Walks the atlas registry to find all transitive structure-component deps,
+   then selects matching keys from the integrant config. Optionally excludes
+   components listed in exclude-ids (e.g. mocked components).
+
+   Example:
+   (subsystem-config full-ig-config :endpoint/create-event)
+   ;; => {:component/db {...} :component/event-store {...}}
+
+   (subsystem-config full-ig-config :endpoint/create-event #{:component/http})
+   ;; => {:component/db {...} :component/event-store {...}}
+   ;;    http excluded because it will be mocked"
+  ([integrant-config entity-dev-id]
+   (subsystem-config integrant-config entity-dev-id #{}))
+  ([integrant-config entity-dev-id exclude-ids]
+   (let [needed   (transitive-component-deps entity-dev-id)
+         keep?    (fn [ig-key]
+                    (let [dev-id (normalize-integrant-key ig-key)]
+                      (and (contains? needed dev-id)
+                           (not (contains? exclude-ids dev-id)))))]
+     (into {} (filter (fn [[k _]] (keep? k))) integrant-config))))
+
+(defn start-subsystem
+  "Start only the components needed by an atlas entity.
+
+   Derives the component subset from the atlas registry (transitive deps),
+   excludes any components in exclude-ids (mocked by the caller), and starts
+   the rest in dependency order via init-key-fn.
+
+   Returns map of {dev-id -> instance}.
+
+   Example:
+   (start-subsystem full-ig-config :endpoint/create-event ig/init-key
+                    #{:component/http-client})
+   ;; starts :component/db, :component/event-store
+   ;; skips :component/http-client (caller will provide a mock)"
+  ([integrant-config entity-dev-id init-key-fn]
+   (start-subsystem integrant-config entity-dev-id init-key-fn #{}))
+  ([integrant-config entity-dev-id init-key-fn exclude-ids]
+   (let [sub-config (subsystem-config integrant-config entity-dev-id exclude-ids)]
+     (start-system sub-config init-key-fn))))
+
+(defn stop-subsystem
+  "Stop a subsystem started by start-subsystem.
+
+   Takes the same integrant-config and entity-dev-id to derive the config subset,
+   then stops in reverse dependency order."
+  ([integrant-config entity-dev-id running halt-key-fn]
+   (stop-subsystem integrant-config entity-dev-id running halt-key-fn #{}))
+  ([integrant-config entity-dev-id running halt-key-fn exclude-ids]
+   (let [sub-config (subsystem-config integrant-config entity-dev-id exclude-ids)]
+     (stop-system sub-config running halt-key-fn))))
