@@ -4,9 +4,9 @@
    Provides two MCP-discoverable tools registered under :domain/llm-ide / :intent/diagnose:
 
      :atlas.llm-ide/endpoint-test-template
-       Generates a Clojure REPL snippet for testing a given endpoint.
-       Components default to integrant dev/*system*, exec-fn impls default
-       to :atlas/impl from registry. Both sections are editable.
+       Generates a test-case registration for a given endpoint.
+       Components become mocks, exec-fn deps become trace expectations.
+       The generated code registers an :atlas/test-case entity.
 
      :atlas.llm-ide/endpoint-execute
        Directly runs an endpoint's pipeline in-process using :atlas/impl
@@ -74,76 +74,83 @@
       (str/ends-with? nm "s")    []
       :else                      (str "<" nm ">"))))
 
+(defn- response-keys-for
+  "Return the direct response keys declared by the entity."
+  [dev-id]
+  (vec (sort (o/response-for dev-id))))
+
 (defn- generate-template
-  "Generate a Clojure REPL code string for testing endpoint-id.
-   Separates components (from integrant) and exec-fn impls (from registry)."
+  "Generate a test-case registration for endpoint-id.
+   Components become mocks, exec-fn deps become trace expectations."
   [endpoint-id]
   (let [{:keys [components exec-fns]} (direct-deps endpoint-id)
-        ctx-keys   (context-keys-for-endpoint endpoint-id)
-        all-ef-ids (conj exec-fns endpoint-id)
-        with-impl  (filter #(:atlas/impl (entity/props-for %)) all-ef-ids)
-        no-impl    (remove #(:atlas/impl (entity/props-for %)) all-ef-ids)]
+        ctx-keys     (context-keys-for-endpoint endpoint-id)
+        resp-keys    (response-keys-for endpoint-id)
+        test-dev-id  (keyword "test" (name endpoint-id))]
     (str/join
      "\n"
      (remove
       nil?
-      [(str ";; Endpoint test template for " endpoint-id)
-       ";; Generated from atlas registry — edit values as needed"
+      [(str ";; Test-case for " endpoint-id)
+       ";; Generated from atlas registry — edit fixture values and expectations"
        ""
-       "(require '[atlas.ontology.execution-function.executor :as executor])"
-       "(require '[atlas.registry.lookup :as entity])"
+       "(require '[atlas.registry :as registry])"
+       "(require '[atlas.test.runner :as test-runner])"
        ""
-       ;; Components section
-       (when (seq components)
-         (str ";; ---- components (default: from integrant dev/*system*) ----\n"
-              ";; Replace with mocks if needed:\n"
-              ";;   :component/db (reify YourProtocol ...)\n"
-              "(def components\n"
-              "  {"
-              (str/join "\n   "
-                        (map (fn [c] (str c " (" c " dev/system)"))
+       (str "(registry/register! " )
+       (str " " test-dev-id)
+       " :atlas/test-case"
+       " #{:atlas/test-case}  ;; add domain/test aspects as needed"
+       ""
+       (str " {;; ---- target ----"
+            "\n  :test-case/target " endpoint-id)
+       ""
+       "  ;; ---- fixture (initial context) ----"
+       (str "  :test-case/fixture {"
+            (str/join "\n                      "
+                      (map (fn [k] (str k " " (pr-str (sample-value-for k))))
+                           ctx-keys))
+            "}")
+       ""
+       ;; Mocks section
+       (if (seq components)
+         (str "  ;; ---- mocks (omit to start real components from ig-config) ----\n"
+              "  ;; Replace with mock values, or remove to use real subsystem\n"
+              "  :test-case/mocks {"
+              (str/join "\n                     "
+                        (map (fn [c] (str c " nil ;; TODO: mock or remove"))
                              components))
-              "})"))
-       (when (empty? components)
-         ";; No structure-components in dependency tree")
+              "}")
+         "  ;; No structure-component deps to mock")
        ""
-       ;; Exec-fn impls section
-       ";; ---- exec-fn impls (default: from registry :atlas/impl) ----"
-       ";; Replace individual fns to test with stubs:"
-       ";;   :fn/example (fn [ctx] {:some/key \"mock\"})"
-       (when (seq no-impl)
-         (str ";; NOTE: no :atlas/impl found for: "
-              (str/join ", " (map str no-impl))
-              "\n;; Add :atlas/impl to their register! calls, or wire manually below."))
-       (str "(def impl-map\n"
-            "  {"
-            (str/join "\n   "
-                      (map (fn [id]
-                             (str id " (:atlas/impl (entity/props-for " id "))"))
-                           with-impl))
-            "})")
+       "  ;; ---- expectations ----"
+       "  :test-case/expectations"
+       (str "  [{:expectation/kind :result")
+       (if (first resp-keys)
+         (str "    :expectation/pred (fn [r] (contains? r " (first resp-keys) "))")
+         "    :expectation/pred (fn [r] (some? r))")
+       "    :expectation/docs \"TODO: describe expected result\"}"
+       ;; Trace expectations for exec-fn deps
+       (when (seq exec-fns)
+         (str/join
+          "\n"
+          (map (fn [dep]
+                 (str "   {:expectation/kind :trace\n"
+                      "    :expectation/must-contain " dep "\n"
+                      "    :expectation/docs \"Pipeline calls " dep "\"}"))
+               exec-fns)))
+       "   ]})"
        ""
-       ;; Context section
-       ";; ---- initial context ----"
-       (str "(def ctx\n"
-            (if (seq components)
-              (str "  (merge components\n"
-                   "         {"
-                   (str/join "\n          "
-                             (map (fn [k]
-                                    (str k " " (pr-str (sample-value-for k))))
-                                  ctx-keys))
-                   "}))")
-              (str "  {"
-                   (str/join "\n   "
-                             (map (fn [k]
-                                    (str k " " (pr-str (sample-value-for k))))
-                                  ctx-keys))
-                   "})")))
+       ";; ---- run ----"
+       (str "(test-runner/run-test {:test/case-dev-id " test-dev-id "})")
        ""
-       ";; ---- run pipeline ----"
-       (str "(def pipeline (executor/build-pipeline " endpoint-id " impl-map))")
-       "(pipeline ctx)"]))))
+       ";; With integrant config (starts real components minus mocks):"
+       (str ";; (test-runner/run-test {:test/case-dev-id " test-dev-id)
+       ";;                        :test/ig-config   ig-config"
+       ";;                        :test/init-key-fn ig/init-key"
+       ";;                        :test/halt-key-fn ig/halt-key!})"])))
+
+  )
 
 ;; ============================================================================
 ;; TOOL REGISTRATIONS
@@ -156,7 +163,7 @@
  {:execution-function/context  [:entity/dev-id]
   :execution-function/response [:endpoint/template]
   :execution-function/deps     #{}
-  :atlas/docs "Generate a Clojure REPL snippet for testing an interface-endpoint. Pass :entity/dev-id (the endpoint's dev-id keyword). Returns :endpoint/template — a string you can paste into a REPL. The snippet has three editable sections: (1) components from integrant dev/*system*, (2) exec-fn impls from registry :atlas/impl, (3) initial context with sample values. All transitive deps are included."
+  :atlas/docs "Generate an :atlas/test-case registration for an interface-endpoint. Pass :entity/dev-id (the endpoint's dev-id keyword). Returns :endpoint/template — a string that registers a test-case entity with fixture, mocks, and expectations. The test can then be run via test-runner/run-test and Kaocha."
   :atlas/impl (fn [{:entity/keys [dev-id]}]
                 (let [eid (ensure-keyword dev-id)]
                   {:endpoint/template (generate-template eid)}))})

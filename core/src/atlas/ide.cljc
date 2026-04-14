@@ -933,6 +933,79 @@
 (defn history-get-conn       [] (ide.history/get-conn))
 
 ;; =============================================================================
+;; ENTITY SCAFFOLD — ontology-driven
+;; =============================================================================
+
+(defn scaffold-entity
+  "Generate a register! call for any entity type, driven by the ontology.
+   Reads ontology keys to produce the right props skeleton. Works for
+   built-in and custom entity types.
+
+   Options:
+     :dev-id-prefix — namespace prefix for the dev-id (default: derived from type)
+     :aspects       — extra aspects to include (default: #{})
+
+   Returns a string."
+  ([entity-type]
+   (scaffold-entity entity-type {}))
+  ([entity-type {:keys [dev-id-prefix aspects]}]
+   (let [entity-type-kw (ensure-keyword entity-type)
+         ont-keys       (vec (ot/ontology-keys-for entity-type-kw))
+         ;; Derive dev-id prefix from entity type name
+         prefix         (or dev-id-prefix
+                             (name entity-type-kw))
+         ;; Build placeholder props from ontology keys
+         prop-lines     (mapv (fn [k]
+                                (let [nm (name k)]
+                                  (cond
+                                    (str/ends-with? nm "deps")
+                                    (str k " #{}")
+
+                                    (str/ends-with? nm "context")
+                                    (str k " [" "]")
+
+                                    (str/ends-with? nm "response")
+                                    (str k " [" "]")
+
+                                    (str/ends-with? nm "expectations")
+                                    (str k " []")
+
+                                    (str/ends-with? nm "mocks")
+                                    (str k " {}")
+
+                                    (str/ends-with? nm "fixture")
+                                    (str k " {}")
+
+                                    (str/ends-with? nm "fn")
+                                    (str k " (fn [] nil)")
+
+                                    (= nm "impl")
+                                    (str k " (fn [ctx] ctx)")
+
+                                    (= nm "target")
+                                    (str k " :TARGET-DEV-ID")
+
+                                    :else
+                                    (str k " nil ;; TODO"))))
+                              ont-keys)
+         aspect-set     (or aspects #{})]
+     (str/join
+      "\n"
+      [(str ";; " entity-type-kw " entity — fill in placeholders")
+       (str "(registry/register!")
+       (str " :" prefix "/NAME")
+       (str " " entity-type-kw)
+       (str " #{" entity-type-kw
+            (when (seq aspect-set)
+              (str " " (str/join " " (sort (map str aspect-set)))))
+            "}")
+       (if (seq prop-lines)
+         (str " {"
+              (str/join "\n  " prop-lines)
+              "})")
+         " {})")]))))
+
+;; =============================================================================
 ;; TEST TEMPLATE GENERATION
 ;; =============================================================================
 

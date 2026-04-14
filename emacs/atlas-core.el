@@ -181,6 +181,18 @@ Parseedn converts Clojure vectors to Emacs vectors and sets to (edn-set ...)."
    ((symbolp obj) (symbol-name obj))
    (t (format "%s" obj))))
 
+(defun atlas--unescape-template (template)
+  "Unescape a TEMPLATE string returned from nREPL eval.
+Strip surrounding quotes, unescape newlines and quotes."
+  (let ((text (if (stringp template) template (atlas--to-string template))))
+    (when (and (> (length text) 1)
+               (string-prefix-p "\"" text)
+               (string-suffix-p "\"" text))
+      (setq text (substring text 1 -1))
+      (setq text (replace-regexp-in-string "\\\\n" "\n" text))
+      (setq text (replace-regexp-in-string "\\\\\"" "\"" text)))
+    text))
+
 (defun atlas--map-entries (obj)
   "Convert OBJ into a list of (key . value) pairs when possible."
   (cond

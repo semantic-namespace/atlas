@@ -262,69 +262,36 @@ Useful reference when authoring entity definitions."
    (atlas-authoring--format-aspect-palette)
    "*Atlas: Aspect Palette*"))
 
-;;; Entity Template Scaffolding
-
-(defun atlas-authoring--scaffold-entity (entity-type)
-  "Generate template code for registering an entity of ENTITY-TYPE."
-  (let ((templates
-         '((:atlas/execution-function .
-            "(registry/register!
- :DEVID-HERE
- :atlas/execution-function
- #{:domain/DOMAIN
-   :operation/OPERATION
-   :tier/TIER}
- {:execution-function/context [:input/KEY]
-  :execution-function/response [:output/KEY]
-  :execution-function/deps #{:component/COMPONENT}})")
-
-           (:atlas/interface-endpoint .
-            "(registry/register!
- :endpoint/NAME
- :atlas/interface-endpoint
- #{:domain/DOMAIN
-   :tier/api}
- {:interface-endpoint/method :get
-  :interface-endpoint/path \"/path/here\"
-  :interface-endpoint/handler 'ns/handler-fn})")
-
-           (:atlas/structure-component .
-            "(registry/register!
- :component/NAME
- :atlas/structure-component
- #{:domain/DOMAIN
-   :tier/TIER}
- {:structure-component/type :database
-  :structure-component/deps #{:component/OTHER}})")
-
-           (:atlas/data-schema .
-            "(registry/register!
- :schema/NAME
- :atlas/data-schema
- #{:domain/DOMAIN}
- {:data-schema/fields [:field/one :field/two]})"))))
-    (or (cdr (assoc entity-type templates))
-        "(registry/register!\n :dev-id\n :TYPE\n #{:aspect}\n {:properties :here})")))
+;;; Entity Template Scaffolding — ontology-driven
 
 ;;;###autoload
 (defun atlas-authoring-scaffold-entity ()
-  "Insert a template for registering a new Atlas entity.
+  "Insert a register! template for any Atlas entity type.
 
-Prompts for entity type, then inserts a commented template
-with placeholder values to fill in."
+Reads entity types from the live registry (including custom types),
+then generates the skeleton from ontology keys. No hardcoded templates."
   (interactive)
-  (let* ((types '(:atlas/execution-function
-                  :atlas/interface-endpoint
-                  :atlas/structure-component
-                  :atlas/data-schema))
-         (type (intern (completing-read "Entity type: "
-                                        (mapcar #'symbol-name types)
-                                        nil t)))
-         (template (atlas-authoring--scaffold-entity type)))
-    (insert ";; TODO: Fill in placeholder values\n")
-    (insert template)
-    (insert "\n")
-    (message "Inserted template for %s" type)))
+  (let* ((types-result (atlas--eval "(list-entity-types)"))
+         (types (when types-result (atlas--to-list types-result)))
+         (type-strings (mapcar (lambda (t)
+                                 (let ((s (atlas--to-string t)))
+                                   (if (string-prefix-p ":" s)
+                                       (substring s 1) s)))
+                               types))
+         (choice (completing-read "Entity type: " type-strings nil t))
+         (type-kw (if (string-prefix-p ":" choice) choice
+                    (concat ":" choice)))
+         ;; Prompt for dev-id prefix
+         (prefix (read-string (format "Dev-id prefix (e.g. fn, component): ")
+                              nil nil (car (last (split-string (substring type-kw 1) "/")))))
+         (form (format "(scaffold-entity %s {:dev-id-prefix \"%s\"})" type-kw prefix))
+         (template (atlas--eval form)))
+    (if template
+        (let ((text (atlas--unescape-template template)))
+          (insert text)
+          (insert "\n")
+          (message "Inserted %s scaffold (ontology-driven)" type-kw))
+      (message "Failed to generate scaffold for %s" type-kw))))
 
 ;;; Dev-ID Insertion
 

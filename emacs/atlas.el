@@ -101,7 +101,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("D" "Insert dev-id" atlas-authoring-insert-dev-id)
     ("P" "Aspect palette" atlas-authoring-aspect-palette)
     ("~" "Similar entities at point" atlas-authoring-similar-at-point)
-    ("y" "Insert exec-fn test" atlas-insert-exec-fn-test)]
+    ("y" "Insert exec-fn test" atlas-insert-exec-fn-test)
+    ("Y" "Insert endpoint test" atlas-insert-endpoint-test)]
    ["Business Semantics"
     ("b" "List business entities" atlas-business-list-entities)
     ("B" "Business info" atlas-business-info)
