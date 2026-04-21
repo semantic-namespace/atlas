@@ -228,19 +228,17 @@
      :workflow-dev-id   - dev-id for the workflow (required)
      :workflow-aspects  - aspects set for the workflow compound-id (default #{})
      :producer-aspects-fn - (fn [producer-data] -> aspects), default: unique meta aspect
-     :producer-context-fn - (fn [producer-data] -> [keyword...]), default: []
      :producer-output-fn  - (fn [producer-data] -> [keyword...]), default: []
      :ef-mapping        - map of {producer-dev-id -> execution-function-dev-id}
 
    Returns the workflow dev-id."
   [atlas-data {:keys [workflow-dev-id workflow-aspects
-                      producer-aspects-fn producer-context-fn producer-output-fn
+                      producer-aspects-fn producer-output-fn
                       ef-mapping]
                :or {workflow-aspects #{}
                     producer-aspects-fn (fn [{:keys [dev-id]}]
                                           ;; Default: use dev-id as meta aspect for uniqueness
                                           #{(keyword "meta" (str (namespace dev-id) "." (name dev-id)))})
-                    producer-context-fn (constantly [])
                     producer-output-fn (constantly [])}}]
   (let [{:keys [producers workflow]} atlas-data]
     ;; Register workflow-producers
@@ -251,7 +249,6 @@
          :atlas/workflow-producer
          (producer-aspects-fn p-data)
          (cond-> {:workflow-producer/signals (if (seq signals) signals #{:signal/any})
-                  :workflow-producer/context (producer-context-fn p-data)
                   :workflow-producer/output (producer-output-fn p-data)}
            ef-id (assoc :workflow-producer/execution-function ef-id)
            state-meta (assoc :tilakone/state-meta state-meta)))))
@@ -272,26 +269,26 @@
 ;; =============================================================================
 
 (defn exec
-  "Execute a tilakone-style integrant producer and convert the result tuple
-   to an atlas response map.
+  "Build an :atlas/impl function that delegates to a tilakone-style integrant
+   producer.
 
    dispatch-key: integrant dispatch value (e.g. :spec.workers.ob.fees/banks-accounts)
-   response-keys: execution-function/response vector
-   deps: integrant component dependencies
-   context: producer execution context
 
-   Calls (ig/init-key dispatch-key deps) -> [_ producer-fn],
-   then (producer-fn context) -> [signal delay result...],
-   then zips with response-keys.
+   Returns a (fn [deps context]) that:
+     1. (ig/init-key dispatch-key deps) -> [_ producer-fn]
+     2. (producer-fn context) -> [signal delay result]
+     3. zipmap with [:workflow/signal :async/seconds-to-delay dispatch-key]
 
-   Returns a map like {:workflow/signal :fsm/success
-                       :async/seconds-to-delay 0
-                       :my/result data}"
-  [dispatch-key response-keys deps context]
-  (let [init-fn (requiring-resolve 'integrant.core/init-key)
-        [_ producer-fn] (init-fn dispatch-key deps)
-        result (producer-fn context)]
-    (zipmap response-keys result)))
+   Result map shape: {:workflow/signal :fsm/success
+                      :async/seconds-to-delay 0
+                      <dispatch-key> data}"
+  [dispatch-key]
+  (let [response-keys [:workflow/signal :async/seconds-to-delay dispatch-key]]
+    (fn [deps context]
+      (let [init-fn (requiring-resolve 'integrant.core/init-key)
+            [_ producer-fn] (init-fn dispatch-key deps)
+            result (producer-fn context)]
+        (zipmap response-keys result)))))
 
 ;; =============================================================================
 ;; NORMALIZATION (for roundtrip comparison)
