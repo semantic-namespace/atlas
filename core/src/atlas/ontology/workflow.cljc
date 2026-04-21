@@ -114,8 +114,11 @@
             producer-outputs (->> producer-propsets
                                   (mapcat :workflow-producer/output)
                                   set)
-            producer-contexts (->> producer-propsets
-                                   (mapcat :workflow-producer/context)
+            producer-ef-propsets (->> producer-propsets
+                                      (keep :workflow-producer/execution-function)
+                                      (map entity/props-for))
+            producer-contexts (->> producer-ef-propsets
+                                   (mapcat :execution-function/context)
                                    set)
             external-context (set/difference producer-contexts producer-outputs)]
         (vec

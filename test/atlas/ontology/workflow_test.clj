@@ -55,7 +55,6 @@
    #{:domain/warehouse :workflow/inventory-check}
    {:workflow-producer/execution-function :fn/fetch-inventory
     :workflow-producer/signals #{:signal/in-stock :signal/out-of-stock}
-    :workflow-producer/context [:warehouse/sku]
     :workflow-producer/output [:warehouse/inventory]})
 
   (registry/register!
@@ -64,7 +63,6 @@
    #{:domain/warehouse :workflow/reservation}
    {:workflow-producer/execution-function :fn/reserve-stock
     :workflow-producer/signals #{:signal/reserved :signal/reserve-failed}
-    :workflow-producer/context [:warehouse/inventory]
     :workflow-producer/output [:warehouse/reservation-id]})
 
   (registry/register!
@@ -73,7 +71,6 @@
    #{:domain/shipping :workflow/shipping-notification}
    {:workflow-producer/execution-function :fn/notify-shipping
     :workflow-producer/signals #{:signal/shipped :signal/ship-failed}
-    :workflow-producer/context [:warehouse/reservation-id]
     :workflow-producer/output [:shipping/tracking-id]})
 
   ;; Workflow (FSM graph) — per-producer transitions
@@ -96,23 +93,20 @@
     (is (s/valid? :atlas/workflow-producer-props
                   {:workflow-producer/execution-function :fn/fetch-inventory
                    :workflow-producer/signals #{:signal/in-stock :signal/out-of-stock}
-                   :workflow-producer/context [:warehouse/sku]
                    :workflow-producer/output [:warehouse/inventory]})))
 
   (testing "empty signals rejected"
     (is (not (s/valid? :atlas/workflow-producer-props
                        {:workflow-producer/execution-function :fn/fetch-inventory
                         :workflow-producer/signals #{}
-                        :workflow-producer/context []
                         :workflow-producer/output []}))))
 
   (testing "missing execution-function rejected"
     (is (not (s/valid? :atlas/workflow-producer-props
                        {:workflow-producer/signals #{:signal/ok}
-                        :workflow-producer/context []
                         :workflow-producer/output []}))))
 
-  (testing "missing context/output rejected"
+  (testing "missing output rejected"
     (is (not (s/valid? :atlas/workflow-producer-props
                        {:workflow-producer/execution-function :fn/fetch-inventory
                         :workflow-producer/signals #{:signal/ok}})))))
@@ -150,7 +144,7 @@
   (testing "workflow-producer ontology is registered"
     (is (some? (ontology/ontology-for :atlas/workflow-producer)))
     (is (= [:workflow-producer/execution-function :workflow-producer/signals
-            :workflow-producer/context :workflow-producer/output]
+            :workflow-producer/output]
            (:ontology/keys (ontology/ontology-for :atlas/workflow-producer)))))
 
   (testing "workflow ontology is registered"
@@ -312,7 +306,6 @@
    #{:domain/test :workflow/orphan}
    {:workflow-producer/execution-function :fn/does-not-exist
     :workflow-producer/signals #{:signal/ok}
-    :workflow-producer/context []
     :workflow-producer/output []})
 
   (let [result (inv/check-all)
@@ -336,7 +329,6 @@
    #{:domain/test :workflow/missing-signal}
    {:workflow-producer/execution-function :fn/no-signal
     :workflow-producer/signals #{:signal/ok}
-    :workflow-producer/context []
     :workflow-producer/output []})
 
   (let [result (inv/check-all)

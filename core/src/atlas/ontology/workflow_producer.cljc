@@ -37,12 +37,10 @@
 ;; Set of qualified-keyword signals this producer can emit
 (s/def :workflow-producer/signals (s/coll-of qualified-keyword? :kind set? :min-count 1))
 
-;; Keys this producer reads from shared storage (separate from ef context
-;; which is the function-call-level input)
-(s/def :workflow-producer/context (s/coll-of qualified-keyword?))
-
 ;; Keys this producer writes to shared storage as side effects
-;; (separate from the ef response tuple which is FSM plumbing)
+;; (separate from the ef response tuple which is FSM plumbing).
+;; Context (keys read) lives on the linked execution-function — single
+;; source of truth via :execution-function/context.
 (s/def :workflow-producer/output (s/coll-of qualified-keyword?))
 
 ;; The response contract: execution-functions wrapped by workflow-producers
@@ -54,7 +52,6 @@
 (s/def :atlas/workflow-producer-props
   (s/keys :req [:workflow-producer/execution-function
                 :workflow-producer/signals
-                :workflow-producer/context
                 :workflow-producer/output]))
 
 ;; =============================================================================
@@ -68,10 +65,7 @@
  {:ontology/for :atlas/workflow-producer
   :ontology/keys [:workflow-producer/execution-function
                   :workflow-producer/signals
-                  :workflow-producer/context
                   :workflow-producer/output]
-  :dataflow/context-key :workflow-producer/context
-  :dataflow/context-verb :entity/consumes
   :dataflow/response-key :workflow-producer/output
   :dataflow/response-verb :entity/produces
   :dataflow/deps-key :workflow-producer/execution-function})
@@ -100,7 +94,10 @@
       (let [dev-id (:atlas/dev-id props)
             signals (:workflow-producer/signals props)
             ef-id (:workflow-producer/execution-function props)
-            context-keys (:workflow-producer/context props)
+            ;; Context comes from the linked execution-function — single
+            ;; source of truth (no duplication on the producer).
+            context-keys (when ef-id
+                           (:execution-function/context (entity/props-for ef-id)))
             output-keys (:workflow-producer/output props)]
         (vec
          (concat
