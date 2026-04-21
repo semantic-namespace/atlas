@@ -215,6 +215,15 @@
   []
   (check (all-invariants)))
 
+(defn check-against
+  "Run all currently-registered invariants against a specific registry map.
+   Invariant fns are collected from the live registry first, then executed
+   with *registry-override* bound to reg — so each fn sees reg, not @registry."
+  [reg]
+  (let [invs (all-invariants)]
+    (binding [cid/*registry-override* reg]
+      (check invs))))
+
 (defn report
   "Print human-readable invariant report."
   []
