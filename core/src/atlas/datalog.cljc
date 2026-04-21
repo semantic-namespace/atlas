@@ -237,21 +237,35 @@
 ;;
 ;; For testing or explicit reload scenarios, use `reset-db-cache!`.
 
-;; Cached Datascript database. Created lazily on first access via `get-db`.
-(defonce ^:private db-cache (atom nil))
+;; Cached Datascript database, keyed on the registry map reference it was
+;; built from. When `*registry-override*` is bound (e.g. cloud version-scoped
+;; query), the override map is a different reference than the live atom value,
+;; so `identical?` forces a rebuild and the live-registry DB is not polluted.
+(defonce ^:private db-cache (atom {:registry nil :db nil}))
 
 (defn get-db
   "Get the cached Datascript DB, creating it on first call.
 
-   The DB is built from the current registry state and cached indefinitely,
-   since the registry is stable after app startup.
+   The DB is built from the current registry (honoring `*registry-override*`)
+   and cached per registry map identity. A registry change — live registrations
+   producing a new atom value, or binding an override snapshot — invalidates
+   the cache via `identical?` check.
 
    For complex queries, prefer this over `create-db` to avoid rebuilding
    the database on every query."
   []
-  (or @db-cache
-      (swap! db-cache (fn [existing]
-                        (or existing (create-db))))))
+  (let [reg (registry/current-registry)
+        {cached-reg :registry cached-db :db} @db-cache]
+    (if (and cached-db (identical? reg cached-reg))
+      cached-db
+      (let [new-db (if registry/*registry-override*
+                     ;; Override snapshots have no extractor fns — use
+                     ;; generic metadata-driven extraction.
+                     (create-db reg)
+                     ;; Live registry — use extractor fns (0-arity).
+                     (create-db))]
+        (swap! db-cache assoc :registry reg :db new-db)
+        new-db))))
 
 (defn reset-db-cache!
   "Reset the cached DB, forcing recreation on next `get-db` call.
@@ -261,12 +275,12 @@
    - After explicit registry modifications (rare)
    - When ontology extensions are registered after initial load"
   []
-  (reset! db-cache nil))
+  (reset! db-cache {:registry nil :db nil}))
 
 (defn db-cached?
   "Check if the DB has been cached (useful for diagnostics)."
   []
-  (some? @db-cache))
+  (some? (:db @db-cache)))
 
 (defn reset-all!
   "Reset DB cache (useful for testing).

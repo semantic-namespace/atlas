@@ -52,7 +52,7 @@
    (entity-snapshot-fast dev-id nil))
   ([dev-id _props]
    (try
-     (when-let [cid (q/find-by-dev-id @reg/registry dev-id)]
+     (when-let [[cid] (q/find-by-dev-id @reg/registry dev-id)]
        {:atlas/dev-id      dev-id
         :atlas/compound-id cid
         :atlas/type        (reg/entity-type cid)
@@ -73,10 +73,11 @@
   ([dev-id]
    (entity-snapshot dev-id (some->> dev-id
                                     (q/find-by-dev-id @reg/registry)
+                                    first
                                     reg/fetch)))
   ([dev-id props]
    (try
-     (when-let [cid (q/find-by-dev-id @reg/registry dev-id)]
+     (when-let [[cid] (q/find-by-dev-id @reg/registry dev-id)]
        {:atlas/dev-id       dev-id
         :atlas/compound-id  cid
         :atlas/type         (reg/entity-type cid)

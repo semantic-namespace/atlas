@@ -28,11 +28,11 @@
 ;; CACHES
 ;; =============================================================================
 
-(def ^:private data-key-cache (atom {:time 0 :entity/produces {} :entity/consumes {}}))
-(def ^:private reverse-deps-cache (atom {:time 0 :data {}}))
+(def ^:private data-key-cache (atom {:time 0 :registry nil :entity/produces {} :entity/consumes {}}))
+(def ^:private reverse-deps-cache (atom {:time 0 :registry nil :data {}}))
 (def ^:private cache-ttl-ms 5000)
 
-(defn- build-data-key-cache []
+(defn- build-data-key-cache [reg]
   (reduce (fn [acc [_ props]]
             (let [id (:atlas/dev-id props)
                   context (ot/context-for id)
@@ -43,21 +43,23 @@
                   consumer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) consumes context)]
               (assoc acc :entity/produces producer-updated :entity/consumes consumer-updated)))
           {:entity/produces {} :entity/consumes {}}
-          (cid/current-registry)))
+          reg))
 
 (defn- get-data-key-cache []
-  (let [now (platform/now-ms)
-        cache @data-key-cache
-        time (:time cache)
-        produces (:entity/produces cache)
-        consumes (:entity/consumes cache)]
-    (if (and (pos? time) (< (- now time) cache-ttl-ms))
+  (let [reg (cid/current-registry)
+        now (platform/now-ms)
+        {:keys [time registry] :entity/keys [produces consumes]} @data-key-cache]
+    (if (and (pos? time)
+             (identical? reg registry)
+             (< (- now time) cache-ttl-ms))
       {:entity/produces produces :entity/consumes consumes}
-      (let [new-cache (build-data-key-cache)
-            new-produces (:entity/produces new-cache)
-            new-consumes (:entity/consumes new-cache)]
-        (swap! data-key-cache assoc :time now :entity/produces new-produces :entity/consumes new-consumes)
-        {:entity/produces new-produces :entity/consumes new-consumes}))))
+      (let [new-cache (build-data-key-cache reg)]
+        (swap! data-key-cache assoc
+               :time now
+               :registry reg
+               :entity/produces (:entity/produces new-cache)
+               :entity/consumes (:entity/consumes new-cache))
+        new-cache))))
 
 (defn- dataflow-dependencies-for
   [dev-id]
@@ -86,12 +88,15 @@
             all-ids)))
 
 (defn- get-reverse-deps []
-  (let [now (platform/now-ms)
-        {:keys [time data]} @reverse-deps-cache]
-    (if (and (pos? time) (< (- now time) cache-ttl-ms))
+  (let [reg (cid/current-registry)
+        now (platform/now-ms)
+        {:keys [time registry data]} @reverse-deps-cache]
+    (if (and (pos? time)
+             (identical? reg registry)
+             (< (- now time) cache-ttl-ms))
       data
       (let [new-data (build-reverse-deps)]
-        (swap! reverse-deps-cache assoc :time now :data new-data)
+        (swap! reverse-deps-cache assoc :time now :registry reg :data new-data)
         new-data))))
 
 (defn- dep-entity?
