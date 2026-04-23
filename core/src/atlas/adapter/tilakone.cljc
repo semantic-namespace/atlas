@@ -264,6 +264,20 @@
          runtime-meta (assoc :tilakone/runtime-meta runtime-meta))))
     workflow-dev-id))
 
+(defn def-register-atlas
+  "alias to register-atlas! but for returning only the workflow entity"
+  [atlas-data {:keys [workflow-dev-id workflow-aspects]
+               :or {workflow-aspects #{}}}]
+  (let [{:keys [workflow]} atlas-data
+        runtime-meta (:runtime-meta workflow)]
+    [workflow-dev-id
+     :atlas/workflow
+     workflow-aspects
+     (cond-> {:workflow/producers (:producers workflow)
+              :workflow/initial-producer (:initial-producer workflow)
+              :workflow/transitions (:transitions workflow)}
+       runtime-meta (assoc :tilakone/runtime-meta runtime-meta))]))
+
 ;; =============================================================================
 ;; EXECUTION BRIDGE (migration helper)
 ;; =============================================================================
