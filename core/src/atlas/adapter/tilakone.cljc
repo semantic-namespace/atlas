@@ -298,10 +298,10 @@
                       <dispatch-key> data}"
   [dispatch-key]
   (let [response-keys [:workflow/signal :async/seconds-to-delay dispatch-key]]
-    (fn [deps context]
+    (fn [args]
       (let [init-fn (requiring-resolve 'integrant.core/init-key)
-            [_ producer-fn] (init-fn dispatch-key deps)
-            result (producer-fn context)]
+            [_ producer-fn] (init-fn dispatch-key args)
+            result (producer-fn args)]
         (zipmap response-keys result)))))
 
 ;; =============================================================================

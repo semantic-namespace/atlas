@@ -28,9 +28,9 @@
                       <dispatch-key>      <result-value>}"
   [dispatch-key]
   (let [response-keys [:workflow/signal :async/seconds-to-delay dispatch-key]]
-    (fn [deps context]
+    (fn [args]
       (let [producer (requiring-resolve 'accounts-by-email.boundaries.port.workflow/producer)
-            result   (producer dispatch-key context deps)]
+            result   (producer dispatch-key args args)]
         (zipmap response-keys result)))))
 
 
