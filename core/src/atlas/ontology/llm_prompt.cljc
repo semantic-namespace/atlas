@@ -39,13 +39,14 @@
                   :llm-prompt/produces]})
 
 ;; Type-ref: prompt → mcp tools (many)
+;; Uses :entity/depends so consumers-of / blast-radius work on tool dev-ids
 (registry/register!
  :type-ref/llm-prompt-mcp-deps
  :atlas/type-ref
  #{:meta/ref-llm-prompt-mcp-deps}
  {:type-ref/source       :atlas/llm-prompt
   :type-ref/property     :llm-prompt/mcp-deps
-  :type-ref/datalog-verb :llm-prompt/uses
+  :type-ref/datalog-verb :entity/depends
   :type-ref/cardinality  :db.cardinality/many})
 
 ;; Type-ref: prompt → produced entity type (one)
@@ -68,8 +69,7 @@
     (when (contains? compound-id :atlas/llm-prompt)
       (type-ref/extract-reference-facts :atlas/llm-prompt compound-id props)))
   :datalog-extractor/schema
-  {:llm-prompt/uses     {:db/cardinality :db.cardinality/many}
-   :llm-prompt/produces {:db/cardinality :db.cardinality/one}}})
+  {:llm-prompt/produces {:db/cardinality :db.cardinality/one}}})
 
 ;; ---------------------------------------------------------------------------
 ;; Invariants
