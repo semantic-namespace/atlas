@@ -56,21 +56,49 @@
       result)))
 
 (defn- impl-map-for
-  "Build impl-map from :atlas/impl in registry for target and its direct deps.
-   Each impl is wrapped with h/record! so trace capture works."
+  "Build impl-map for target and its component (non-execution-function) deps.
+   Execution-function deps are injected via ::fn-injected in context instead,
+   so they never participate in executor pipeline context validation.
+   Falls back to :atlas/impl then :execution-function/impl."
   [target-id]
-  (let [deps    (o/deps-for target-id)
-        all-ids (conj (vec deps) target-id)]
+  (let [deps           (o/deps-for target-id)
+        component-deps (remove #(entity/has-aspect? % :atlas/execution-function) deps)
+        all-ids        (conj (vec component-deps) target-id)]
     (into {}
           (keep (fn [dev-id]
-                  (when-let [impl (:atlas/impl (entity/props-for dev-id))]
-                    [dev-id (wrap-with-record dev-id impl)])))
+                  (let [props (entity/props-for dev-id)
+                        impl  (or (:atlas/impl props)
+                                  (:execution-function/impl props))]
+                    (when impl [dev-id (wrap-with-record dev-id impl)]))))
           all-ids)))
 
 (defn- resolve-components
   "Merge real subsystem with mock overrides."
   [system mocks]
   (merge system (or mocks {})))
+
+(defn- fn-dep-ids
+  "Returns the subset of target's direct deps that are execution-functions."
+  [target-id]
+  (filter #(entity/has-aspect? % :atlas/execution-function)
+          (o/deps-for target-id)))
+
+(defn- build-fn-dep-ctx
+  "Build the ::fn-injected map for fn-dep impls and return it as a single
+   context entry.  exec-fn reads (get-in arg [::fn-injected ref]) so
+   injected impls are namespaced away from domain keys — no collision risk.
+   Prefers mock override from :test-case/mocks; falls back to the registry
+   impl wrapped with h/record! so trace capture still works."
+  [target-id mocks]
+  (let [injected (into {}
+                       (keep (fn [dep-id]
+                               (let [impl (or (get mocks dep-id)
+                                              (when-let [i (:atlas/impl (entity/props-for dep-id))]
+                                                (wrap-with-record dep-id i)))]
+                                 (when impl [dep-id impl]))))
+                       (fn-dep-ids target-id))]
+    (when (seq injected)
+      {::fn-injected injected})))
 
 ;; ============================================================================
 ;; EXPECTATION CHECKING
@@ -186,15 +214,19 @@
   (let [{:test-case/keys [target fixture mocks expectations]}
         (entity/props-for case-dev-id)
 
-        mock-keys  (set (keys (or mocks {})))
-        sub-config (when ig-config
-                     (ig-adapter/subsystem-config ig-config target mock-keys))
-        init-fn    (or init-key-fn identity)
-        halt-fn    (or halt-key-fn (fn [_ _]))
-        system     (when sub-config
-                     (ig-adapter/start-system sub-config init-fn))]
+        ;; fn-dep mocks stay in context; only component mocks affect ig subsystem
+        component-mocks (into {} (remove (fn [[k _]] (entity/has-aspect? k :atlas/execution-function))
+                                         (or mocks {})))
+        mock-keys       (set (keys component-mocks))
+        sub-config      (when ig-config
+                          (ig-adapter/subsystem-config ig-config target mock-keys))
+        init-fn         (or init-key-fn identity)
+        halt-fn         (or halt-key-fn (fn [_ _]))
+        system          (when sub-config
+                          (ig-adapter/start-system sub-config init-fn))]
     (try
-      (let [ctx      (merge (resolve-components system mocks)
+      (let [ctx      (merge (resolve-components system component-mocks)
+                            (build-fn-dep-ctx target mocks)
                             (or fixture {}))
             impl     (impl-map-for target)
             pipeline (executor/build-pipeline target impl)
@@ -284,9 +316,9 @@
   [{:keys [trace-id test-dev-id]}]
   (when-not (h/enabled?) (h/enable!))
   (let [burst   (:exec/entries
-                  (h/query {:query/trace-id trace-id
-                            :query/compact  false
-                            :query/limit    200}))
+                 (h/query {:query/trace-id trace-id
+                           :query/compact  false
+                           :query/limit    200}))
         _       (when (empty? burst)
                   (throw (ex-info "No entries found for trace-id"
                                   {:trace-id trace-id})))
@@ -316,13 +348,13 @@
         dev-id  (or test-dev-id
                     (keyword "test" (name target)))
         edn-str (pr-str
-                  (list 'registry/register!
-                        dev-id
-                        :atlas/test-case
-                        #{:atlas/test-case}
-                        {:test-case/target       target
-                         :test-case/fixture      fixture
-                         :test-case/expectations all-expectations}))]
+                 (list 'registry/register!
+                       dev-id
+                       :atlas/test-case
+                       #{:atlas/test-case}
+                       {:test-case/target       target
+                        :test-case/fixture      fixture
+                        :test-case/expectations all-expectations}))]
     {:test-case/target       target
      :test-case/fixture      fixture
      :test-case/expectations all-expectations
