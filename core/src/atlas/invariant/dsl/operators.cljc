@@ -7,12 +7,16 @@
 ;; =============================================================================
 ;; DSL OPERATOR REGISTRY
 ;; =============================================================================
-;; Each operator is a semantic entity with compile-time and runtime behavior
+;; Operators are compiler lookup tables, not architectural entities.
+;; Stored in a private atom so they never appear in @registry/registry
+;; (which would cause cloud-push to fail — no :atlas/* type on the entry).
+
+(def ^:private operators (atom {}))
 
 (defn register-operator!
-  "Register a DSL operator as a semantic entity."
+  "Register a DSL operator."
   [id operator-def]
-  (swap! cid/registry assoc
+  (swap! operators assoc
          (conj id :semantic-namespace.invariant/operator)
          operator-def))
 
@@ -201,7 +205,7 @@
     ;; Simple predicate node: {:op :dsl.op/entity-has-aspect :args :tier/service}
     (and (map? node) (:op node))
     (let [op-id (conj #{(:op node)} :semantic-namespace.invariant/operator)
-          op-def (get (cid/current-registry) op-id)]
+          op-def (get @operators op-id)]
       (when-not op-def
         (throw (ex-info "Unknown DSL operator" {:op (:op node)})))
       (let [compile-fn (:operator/compile-fn op-def)

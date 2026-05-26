@@ -48,11 +48,19 @@
 (s/def :workflow/transitions
   (s/map-of :atlas/dev-id :workflow/producer-transitions :min-count 1))
 
+;; Input data keys the workflow requires to start (parallel to :execution-function/context)
+(s/def :workflow/context (s/coll-of qualified-keyword? :kind set? :min-count 1))
+
+;; Durable async side-effects the workflow creates or mutates (registered entity dev-ids)
+(s/def :workflow/async-effect (s/coll-of :atlas/dev-id :kind set? :min-count 1))
+
 ;; Full workflow props spec
 (s/def :atlas/workflow-props
   (s/keys :req [:workflow/producers
                 :workflow/initial-producer
-                :workflow/transitions]))
+                :workflow/transitions
+                :workflow/async-effect
+                :workflow/context]))
 
 ;; =============================================================================
 ;; ONTOLOGY
@@ -65,7 +73,11 @@
  {:ontology/for :atlas/workflow
   :ontology/keys [:workflow/producers
                   :workflow/initial-producer
-                  :workflow/transitions]
+                  :workflow/transitions
+                  :workflow/async-effect
+                  :workflow/context]
+  :dataflow/context-key :workflow/context
+  :dataflow/context-verb :entity/consumes
   :dataflow/deps-key :workflow/producers})
 
 ;; Type-ref: workflow → workflow-producer (producers)
@@ -76,6 +88,16 @@
  {:type-ref/source :atlas/workflow
   :type-ref/property :workflow/producers
   :type-ref/datalog-verb :workflow/has-producer
+  :type-ref/cardinality :db.cardinality/many})
+
+;; Type-ref: workflow → async-effect entities
+(registry/register!
+ :type-ref/workflow-async-effect
+ :atlas/type-ref
+ #{:meta/ref-workflow-async-effect}
+ {:type-ref/source :atlas/workflow
+  :type-ref/property :workflow/async-effect
+  :type-ref/datalog-verb :workflow/affects
   :type-ref/cardinality :db.cardinality/many})
 
 ;; =============================================================================
@@ -158,6 +180,7 @@
                              :workflow/starts-at {:db/cardinality :db.cardinality/one}
                              :workflow/transition-signal {:db/cardinality :db.cardinality/many}
                              :workflow/transition-target {:db/cardinality :db.cardinality/many}
+                             :workflow/affects {:db/cardinality :db.cardinality/many}
                              :entity/depends {:db/cardinality :db.cardinality/many}
                              :entity/consumes {:db/cardinality :db.cardinality/many}
                              :entity/produces {:db/cardinality :db.cardinality/many}}})

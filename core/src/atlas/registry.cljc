@@ -109,10 +109,10 @@
          value-with-meta (assoc value :atlas/dev-id dev-id :atlas/type type)]
      ;; Append to registration log
      (swap! registrations conj {:dev-id  dev-id
-                                 :type    type
-                                 :aspects aspects
-                                 :value   value
-                                 :ns      #?(:clj (str *ns*) :cljs nil)})
+                                :type    type
+                                :aspects aspects
+                                :value   value
+                                :ns      #?(:clj (str *ns*) :cljs nil)})
      ;; Keep map + index warm for backward compatibility
      (swap! dev-id-index assoc dev-id compound-id)
      (swap! registry assoc compound-id value-with-meta)
@@ -336,6 +336,30 @@
   (reset! registry {})
   (reset! dev-id-index {}))
 
+(defn unregister-ns!
+  "Remove all registrations contributed by ns-sym from the log and registry.
+   Called from before-ns-unload hooks so incremental reloads keep @registrations
+   accurate without needing a full reset-all!."
+  [ns-sym]
+  (let [ns-str     (str ns-sym)
+        removed-ids (into #{} (comp (filter #(= ns-str (:ns %))) (map :dev-id)) @registrations)]
+    (swap! registrations #(vec (clojure.core/remove (comp #{ns-str} :ns) %)))
+    (swap! registry      #(apply dissoc % (map @dev-id-index removed-ids)))
+    (swap! dev-id-index  #(apply dissoc % removed-ids))))
+
+#?(:clj
+   (defn load!
+     "Require each namespace in ns-syms and intern a before-ns-unload hook so
+      clj-reload can call unregister-ns! before unloading it.
+      Pass :reload? true to force re-require (used in hard-reset path)."
+     [ns-syms & {:keys [reload?]}]
+     (doseq [ns-sym ns-syms]
+       (if reload?
+         (require ns-sym :reload)
+         (require ns-sym))
+       (intern (the-ns ns-sym) 'before-ns-unload
+               (fn [] (unregister-ns! ns-sym))))))
+
 ;; =============================================================================
 ;; Entity Type Helpers
 ;; =============================================================================
@@ -365,7 +389,7 @@
     type-in-id
     #_(or type-in-id
         ;; Fallback: return first keyword if no registered type found
-        (first identity))))
+          (first identity))))
 
 (defn aspects
   "Extract all aspects (non-entity-type members) from identity.
@@ -444,10 +468,10 @@
                       (if (s/valid? (dyn-spec required-keys) props)
                         true
                         (do (tel/log! {:level :warn}
-                                   ["NOT VALID"
-                                    {:dev-id (:atlas/dev-id props)
-                                     :compound-id compound-id
-                                     :message (s/explain-str (dyn-spec required-keys) props)}])
+                                      ["NOT VALID"
+                                       {:dev-id (:atlas/dev-id props)
+                                        :compound-id compound-id
+                                        :message (s/explain-str (dyn-spec required-keys) props)}])
                             false))
                       true))))
             @registry)))

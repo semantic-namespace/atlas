@@ -8,20 +8,21 @@
  :atlas/ontology
  #{:atlas/value-proposition}
  {:ontology/for :atlas/value-proposition
-   :ontology/keys [:value-proposition/business-problem
-                   :value-proposition/before-state
-                   :value-proposition/after-state
-                   :value-proposition/time-saved
-                   :value-proposition/solution
-                   :value-proposition/metrics-improved
-                   :value-proposition/user-segment
-                   :value-proposition/business-value-quantified
-                   :value-proposition/business-value
-                   :value-proposition/competitive-advantage
-                   :value-proposition/implements-pattern
-                   :value-proposition/trust-factors
-                   :value-proposition/risk-mitigation
-                   :value-proposition/compliance-benefit]})
+  :ontology/keys [:value-proposition/business-problem
+                  :value-proposition/before-state
+                  :value-proposition/after-state
+                  :value-proposition/time-saved
+                  :value-proposition/solution
+                  :value-proposition/metrics-improved
+                  :value-proposition/user-segment
+                  :value-proposition/business-value-quantified
+                  :value-proposition/business-value
+                  :value-proposition/competitive-advantage
+                  :value-proposition/implements-pattern
+                  :value-proposition/trust-factors
+                  :value-proposition/risk-mitigation
+                  :value-proposition/compliance-benefit
+                  :value-proposition/external-boundaries]})
 
 ;; Type-refs
 (registry/register!
@@ -60,6 +61,15 @@
   :type-ref/datalog-verb :value-proposition/trust-factors
   :type-ref/cardinality :db.cardinality/many})
 
+(registry/register!
+ :type-ref/value-proposition-external-boundaries
+ :atlas/type-ref
+ #{:meta/ref-value-proposition-external-boundaries}
+ {:type-ref/source      :atlas/value-proposition
+  :type-ref/property    :value-proposition/external-boundaries
+  :type-ref/datalog-verb :value-proposition/external-boundaries
+  :type-ref/cardinality :db.cardinality/many})
+
 ;; Datalog extractor
 (registry/register!
  :datalog-extractor/value-proposition
@@ -72,6 +82,7 @@
                              compound-id
                              props)))
   :datalog-extractor/schema {:value-proposition/implements-pattern {:db/cardinality :db.cardinality/one}
-   :value-proposition/metrics-improved {:db/cardinality :db.cardinality/many}
-   :value-proposition/user-segment {:db/cardinality :db.cardinality/many}
-   :value-proposition/trust-factors {:db/cardinality :db.cardinality/many}}})
+                             :value-proposition/metrics-improved {:db/cardinality :db.cardinality/many}
+                             :value-proposition/user-segment {:db/cardinality :db.cardinality/many}
+                             :value-proposition/trust-factors {:db/cardinality :db.cardinality/many}
+                             :value-proposition/external-boundaries {:db/cardinality :db.cardinality/many}}})

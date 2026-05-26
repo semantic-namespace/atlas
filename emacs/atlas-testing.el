@@ -26,7 +26,12 @@
 
 (defun atlas-testing--candidates-for-type (entity-type)
   "Get all dev-ids of ENTITY-TYPE for completion."
-  (let* ((result (atlas--eval (format "(list-entities-of-type %s)" entity-type)))
+  (let* ((result (atlas--eval
+                  (format "(do (require '[atlas.registry :as registry])
+                               (mapv str
+                                 (filter #(contains? (get @registry/dev-id-index %%) %s)
+                                         (keys @registry/dev-id-index))))"
+                          entity-type)))
          (entries (when result (atlas--to-list result))))
     (mapcar (lambda (e)
               (let ((s (atlas--to-string e)))

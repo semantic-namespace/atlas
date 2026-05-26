@@ -5,22 +5,22 @@
 
 ;;; Commentary:
 ;;
-;; Atlas Lens Mode overlays `register!` forms with template-driven views.
-;; Three lens modes cycle with C-c C-l m:
+;; Atlas Lens Mode overlays `register!' forms with template-driven views.
+;; Modes cycle with C-c C-l m — available modes are derived from
+;; `atlas-render-specs' plus the special :raw (no-overlay) mode:
 ;;
 ;;   :raw      — no overlay, show the actual register! source
 ;;   :semantic — signature card (aspects, context, response, deps)
 ;;   :impl     — implementation view (impl fn, context, deps)
 ;;
-;; Templates are user-customizable per entity type via `atlas-lens-specs'.
-;; Placeholders like ${execution-function/context} are substituted with
-;; entity values fetched from the registry.
-;;
-;; When no user template exists for a type, the ontology's :ontology/keys
-;; are fetched from the registry as a fallback.
+;; Rendering is fully delegated to atlas-render.el.  This file owns only:
+;;   - register! form scanning (LSP + regex fallback)
+;;   - batch REPL entity fetch
+;;   - Emacs overlay apply/clear/cursor-reveal lifecycle
+;;   - minor mode + keybindings
 ;;
 ;; The overlay is purely visual — buffer content is untouched, so
-;; LSP/CIDER/paredit work normally. When the cursor enters a form,
+;; LSP/CIDER/paredit work normally.  When the cursor enters a form,
 ;; the overlay auto-reveals the real code.
 ;;
 ;; Uses clojure-lsp (via lsp-mode) to find register! call sites, so it
@@ -29,11 +29,15 @@
 ;;; Code:
 
 (require 'atlas-core)
+(require 'atlas-render)
 
 ;;; Lens Mode State
+;;
+;; atlas-lens--mode is intentionally global (not buffer-local) so the
+;; active mode is consistent across all Clojure buffers in a session.
 
 (defvar atlas-lens--mode :semantic
-  "Current lens mode. One of :raw, :semantic, :impl.")
+  "Current lens mode: :raw, or any mode declared in `atlas-render-specs'.")
 
 (defvar atlas-lens--overlays nil
   "List of active lens overlays in the current buffer.")
@@ -55,229 +59,26 @@
   "Cached form positions from last scan, reused across mode switches.")
 (make-variable-buffer-local 'atlas-lens--forms-cache)
 
-;;; Template Specs — user-customizable per entity type, per lens mode
-;;
-;; Each entry maps an entity type keyword to an alist of (mode . template).
-;; Templates use ${key} placeholders substituted with entity values.
-;; Special keys: ${dev-id}, ${entity-type}, ${entity/aspects}.
+;;; Form Filter Hook
 
-(defvar atlas-lens-specs
-  '((:atlas/execution-function
-     (:semantic . "── ${dev-id} ── ${entity-type}\n  aspects: ${entity/aspects}\n  context: ${execution-function/context}\n  response: ${execution-function/response}\n  deps: ${execution-function/deps}")
-     (:impl . ";; ${dev-id}\n${execution-function/impl}\n  :context ${execution-function/context}\n  :deps ${execution-function/deps}"))
+(defvar atlas-lens-form-filter-functions nil
+  "Abnormal hook to selectively overlay register! forms.
+Each function is called with two args: FORM (plist :start :end :dev-id)
+and ENTITY-INFO (hash-table from registry).  Return non-nil to include
+the form, nil to skip it.  All functions must return non-nil to include.
+When nil (default), all forms with resolved entity info are overlaid.")
 
-    (:atlas/interface-endpoint
-     (:semantic . "── ${dev-id} ── ${entity-type}\n  aspects: ${entity/aspects}\n  context: ${interface-endpoint/context}\n  response: ${interface-endpoint/response}\n  deps: ${interface-endpoint/deps}")
-     (:impl . ";; ${dev-id}\n${interface-endpoint/impl}\n  :context ${interface-endpoint/context}\n  :deps ${interface-endpoint/deps}"))
-
-    (:atlas/structure-component
-     (:semantic . "── ${dev-id} ── ${entity-type}\n  aspects: ${entity/aspects}\n  deps: ${structure-component/deps}")
-     (:impl . ";; ${dev-id}\n  :deps ${structure-component/deps}"))
-
-    (:atlas/data-schema
-     (:semantic . "── ${dev-id} ── ${entity-type}\n  aspects: ${entity/aspects}\n  fields: ${atlas/fields}")
-     (:impl . ";; ${dev-id}\n  :fields ${atlas/fields}")))
-
-  "Template specs for lens rendering, per entity type and lens mode.
-Each entry is (ENTITY-TYPE (MODE . TEMPLATE) ...).
-Templates use ${key} placeholders.
-
-Special keys:
-  ${dev-id}          — the entity's dev-id
-  ${entity-type}     — the :atlas/* entity type
-  ${entity/aspects}  — semantic aspects (computed from identity)
-
-All other keys are looked up from the entity's properties.
-
-Users can customize this to control what each lens mode shows.
-When no template is found for a type+mode, the ontology's :ontology/keys
-are fetched from the registry and rendered as key: value lines.")
-
-;;; Type Badges
-
-(defvar atlas-lens-type-badges
-  '(("execution-function"  . (" fn " . atlas-lens-badge-fn-face))
-    ("interface-endpoint"   . (" ep " . atlas-lens-badge-ep-face))
-    ("structure-component"  . (" co " . atlas-lens-badge-co-face))
-    ("data-schema"          . (" ds " . atlas-lens-badge-ds-face)))
-  "Mapping of entity type short names to (LABEL . FACE) for badge rendering.
-Users can customize badge labels and faces here.")
-
-(defun atlas-lens--type-badge (entity-type)
-  "Return a propertized badge string for ENTITY-TYPE (e.g. \":atlas/execution-function\").
-Badge is a short colored label like ` fn ` with a type-specific background."
-  (let* ((short (if (string-prefix-p ":atlas/" entity-type)
-                    (substring entity-type 7)
-                  entity-type))
-         (entry (assoc short atlas-lens-type-badges))
-         (label (if entry (car (cdr entry)) (format " %s " (truncate-string-to-width short 2))))
-         (face (if entry (cdr (cdr entry)) 'atlas-lens-badge-default-face)))
-    (propertize label 'face face)))
-
-;;; Template Engine
-
-(defun atlas-lens--get-entity-type (info)
-  "Extract the :atlas/* entity type keyword from entity INFO."
-  (let ((identity-vec (atlas--get info :entity/identity))
-        (type-kw nil))
-    (mapc (lambda (k)
-            (let ((s (atlas--to-string k)))
-              (when (string-prefix-p ":atlas/" s)
-                (setq type-kw s))))
-          (atlas--to-list identity-vec))
-    (or type-kw "")))
-
-(defun atlas-lens--get-template (entity-type mode)
-  "Get template for ENTITY-TYPE and MODE from user specs.
-Returns template string or nil."
-  (let ((type-spec (assoc (intern entity-type) atlas-lens-specs)))
-    (when type-spec
-      (cdr (assoc mode (cdr type-spec))))))
-
-(defun atlas-lens--ontology-fallback-template (entity-type mode)
-  "Build a fallback template from ontology keys for ENTITY-TYPE and MODE.
-Fetches :ontology/keys from the registry via REPL."
-  (let* ((keys (atlas--eval-safe
-                (format "(mapv str (:ontology/keys (atlas.ontology/ontology-for %s)))"
-                        entity-type)))
-         (key-list (when keys (atlas--to-list keys))))
-    (if key-list
-        (concat
-         (format "── ${dev-id} ── %s\n" entity-type)
-         (if (eq mode :semantic)
-             (concat "  aspects: ${entity/aspects}\n"
-                     (mapconcat (lambda (k)
-                                  (let ((ks (atlas--to-string k)))
-                                    (format "  %s: ${%s}" ks ks)))
-                                key-list "\n"))
-           ;; :impl mode — show impl key first if present, then others
-           (mapconcat (lambda (k)
-                        (let ((ks (atlas--to-string k)))
-                          (format "  %s: ${%s}" ks ks)))
-                      key-list "\n")))
-      ;; Ultimate fallback — just dev-id and aspects
-      "── ${dev-id} ── ${entity-type}\n  aspects: ${entity/aspects}")))
-
-(defun atlas-lens--resolve-value (key info)
-  "Resolve KEY to a display string from entity INFO."
-  (cond
-   ((string= key "dev-id")
-    (let ((s (atlas--to-string (or (atlas--get info :atlas/dev-id)
-                                   (atlas--get info :entity/dev-id) ""))))
-      (if (string-prefix-p ":" s) (substring s 1) s)))
-
-   ((string= key "entity-type")
-    (atlas-lens--get-entity-type info))
-
-   ((string= key "entity/aspects")
-    (let ((aspects (atlas--get info :entity/aspects)))
-      (if aspects
-          (atlas-lens--format-kw-list aspects)
-        "")))
-
-   (t
-    (let ((val (atlas--get info key)))
-      (cond
-       ((null val) "")
-       ((vectorp val) (format "[%s]" (atlas-lens--format-kw-list val)))
-       ((atlas--edn-set-p val) (atlas-lens--format-set val))
-       ((listp val) (atlas-lens--format-kw-list val))
-       (t (format "%s" val)))))))
-
-(defun atlas-lens--render-template (template info)
-  "Render TEMPLATE string by substituting ${key} with values from INFO.
-Returns a propertized string."
-  (let ((result (replace-regexp-in-string
-                 "\\${\\([^}]+\\)}"
-                 (lambda (match)
-                   (let ((key (match-string 1 match)))
-                     (save-match-data
-                       (atlas-lens--resolve-value key info))))
-                 template t t)))
-    ;; Apply faces to the rendered result
-    (atlas-lens--propertize-rendered result)))
-
-(defun atlas-lens--propertize-rendered (text)
-  "Apply faces to rendered TEXT with visual hierarchy.
-Dev-id: large/bold. Entity type: dim/italic. Labels: dim. Values: bright."
-  (let ((lines (split-string text "\n"))
-        (result-lines '()))
-    (dolist (line lines)
-      (push
-       (cond
-        ;; Header line: ── dev-id ──  :atlas/type → badge dev-id  :atlas/type
-        ((string-match "^\\(── \\)\\([^ ]+\\)\\( ── *\\)\\(.*\\)" line)
-         (let ((entity-type (string-trim (match-string 4 line))))
-           (concat (atlas-lens--type-badge entity-type)
-                   " "
-                   (propertize (match-string 2 line) 'face 'atlas-lens-dev-id-face)
-                   "  "
-                   (propertize entity-type 'face 'atlas-lens-type-face))))
-        ;; Comment line (;; impl mode)
-        ((string-match "^;;" line)
-         (propertize line 'face 'font-lock-comment-face))
-        ;; aspects: line — color each aspect individually
-        ((string-match "^\\(\\s-*aspects:\\s-*\\)\\(.*\\)" line)
-         (concat (propertize (match-string 1 line) 'face 'atlas-lens-label-face)
-                 (atlas-lens--propertize-aspects (match-string 2 line))))
-        ;; Key: value line
-        ((string-match "^\\(\\s-*\\)\\([^ \t\n:]+:\\)\\(.*\\)" line)
-         (concat (match-string 1 line)
-                 (propertize (match-string 2 line) 'face 'atlas-lens-label-face)
-                 (propertize (match-string 3 line) 'face 'atlas-lens-value-face)))
-        ;; Separator line (just dashes)
-        ((string-match "^─+$" line)
-         (propertize line 'face 'atlas-lens-separator-face))
-        (t line))
-       result-lines))
-    (concat (string-join (nreverse result-lines) "\n") "\n")))
-
-(defun atlas-lens--propertize-aspects (aspects-str)
-  "Apply per-aspect coloring to ASPECTS-STR (aspects separated by \" · \")."
-  (if (string-empty-p aspects-str)
-      aspects-str
-    (let* ((aspects (split-string aspects-str " · " t))
-           (colored (mapcar (lambda (a) (propertize a 'face 'atlas-aspect-face))
-                            aspects)))
-      (mapconcat #'identity colored
-                 (propertize " · " 'face 'atlas-lens-separator-face)))))
-
-;;; Card Rendering (dispatches to template engine)
-
-(defun atlas-lens--render-card (dev-id info mode)
-  "Render a card for DEV-ID with entity INFO in lens MODE.
-Uses template from user specs, falling back to ontology keys.
-Appends a thin separator line at the bottom."
-  (let* ((entity-type (atlas-lens--get-entity-type info))
-         (template (or (atlas-lens--get-template entity-type mode)
-                       (atlas-lens--ontology-fallback-template entity-type mode)))
-         (card (atlas-lens--render-template template info)))
-    (concat card (propertize "────────────────────────────────\n"
-                             'face 'atlas-lens-separator-face))))
-
-;;; Formatting Helpers (kept from original for template value resolution)
-
-(defun atlas-lens--format-kw-list (items)
-  "Format a list of keyword ITEMS as a compact string."
-  (mapconcat (lambda (item)
-               (let ((s (atlas--to-string item)))
-                 (if (string-prefix-p ":" s) (substring s 1) s)))
-             (atlas--to-list items)
-             " · "))
-
-(defun atlas-lens--format-set (items)
-  "Format a set/vector of ITEMS as #{...} string."
-  (let ((formatted (mapconcat (lambda (item)
-                                (let ((s (atlas--to-string item)))
-                                  (if (string-prefix-p ":" s) s (concat ":" s))))
-                              (atlas--to-list items)
-                              " ")))
-    (format "#{%s}" formatted)))
+(defun atlas-lens--form-included-p (form info)
+  "Return non-nil if FORM should receive an overlay.
+Checks all functions in `atlas-lens-form-filter-functions'."
+  (or (null atlas-lens-form-filter-functions)
+      (seq-every-p (lambda (fn) (funcall fn form info))
+                   atlas-lens-form-filter-functions)))
 
 ;;; Scanning — find register! forms via LSP references
 
 (defun atlas-lens--lsp-find-register-refs ()
-  "Use clojure-lsp to find all references to `atlas.registry/register!` in the current buffer.
+  "Use clojure-lsp to find all references to `atlas.registry/register!' in the current buffer.
 Returns list of (LINE . COL) positions (0-indexed) for each reference in this file."
   (when (and (fboundp 'lsp-request) (fboundp 'lsp-workspaces) (lsp-workspaces))
     (let* ((buf-uri (lsp--buffer-uri))
@@ -289,7 +90,6 @@ Returns list of (LINE . COL) positions (0-indexed) for each reference in this fi
                           :position (list :line (car ref-pos)
                                           :character (cdr ref-pos))
                           :context (list :includeDeclaration :json-false))))))
-      ;; Filter to only references in this file
       (let (positions)
         (dolist (ref refs)
           (let* ((loc-uri (gethash "uri" (gethash "location" ref
@@ -306,7 +106,7 @@ Returns list of (LINE . COL) positions (0-indexed) for each reference in this fi
         (nreverse positions)))))
 
 (defun atlas-lens--find-any-register-pos ()
-  "Find the position of any register! symbol in the buffer for LSP querying.
+  "Find position of any register! symbol in the buffer for LSP querying.
 Returns (LINE . COL) 0-indexed, or nil."
   (save-excursion
     (goto-char (point-min))
@@ -327,35 +127,30 @@ Returns list of plists (:start N :end M :dev-id \"keyword-string\")."
 
 (defun atlas-lens--forms-from-lsp-refs (refs)
   "Build form list from LSP reference positions REFS.
-Each ref is (LINE . COL) 0-indexed pointing to `register!`."
+Each ref is (LINE . COL) 0-indexed pointing to `register!'."
   (let (forms)
     (save-excursion
       (dolist (ref refs)
         (goto-char (point-min))
         (forward-line (car ref))
         (move-to-column (cdr ref))
-        ;; We're on `register!` — go back to the opening `(` of the call
         (let ((reg-pos (point)))
           (when (re-search-backward "(" (line-beginning-position 0) t)
             (let ((form-start (point)))
               (condition-case nil
                   (let ((form-end (save-excursion (forward-sexp 1) (point))))
-                    ;; Extract dev-id: first keyword after register!
                     (save-excursion
                       (goto-char reg-pos)
-                      (forward-sexp 1) ;; skip `register!` symbol
-                      (when (atlas-lens--extract-dev-id form-end)
-                        (let ((kw (atlas-lens--extract-dev-id form-end)))
-                          (push (list :start form-start
-                                      :end form-end
-                                      :dev-id kw)
-                                forms)))))
+                      (forward-sexp 1)
+                      (when-let ((kw (atlas-lens--extract-dev-id form-end)))
+                        (push (list :start form-start :end form-end :dev-id kw)
+                              forms))))
                 (scan-error nil)))))))
     (nreverse forms)))
 
 (defun atlas-lens--extract-dev-id (form-end)
   "Extract the dev-id keyword from point to FORM-END.
-Skips whitespace, finds first keyword. Returns nil if first keyword is :atlas/* (3-arity)."
+Returns nil when the first keyword is :atlas/* (3-arity call without explicit dev-id)."
   (save-excursion
     (skip-chars-forward " \t\n\r")
     (when (and (< (point) form-end)
@@ -368,8 +163,7 @@ Skips whitespace, finds first keyword. Returns nil if first keyword is :atlas/* 
             kw))))))
 
 (defun atlas-lens--forms-from-regex ()
-  "Fallback: find register! forms using regex scanning.
-Matches any namespace-qualified or bare register! call."
+  "Fallback: find register! forms using regex scanning."
   (save-excursion
     (goto-char (point-min))
     (let (forms)
@@ -383,23 +177,22 @@ Matches any namespace-qualified or bare register! call."
                 (save-excursion
                   (goto-char (match-end 0))
                   (when-let ((kw (atlas-lens--extract-dev-id form-end)))
-                    (push (list :start form-start
-                                :end form-end
-                                :dev-id kw)
+                    (push (list :start form-start :end form-end :dev-id kw)
                           forms)))
                 (goto-char form-end))
             (scan-error (forward-char 1)))))
       (nreverse forms))))
 
-;;; Batch fetch — get entity info for all dev-ids
+;;; Batch fetch
 
 (defun atlas-lens--fetch-entities (dev-ids)
   "Fetch entity info for DEV-IDS (list of keyword strings) via CIDER.
-Returns hash-table of dev-id symbol -> entity-info hash-table."
+Returns hash-table of dev-id symbol -> entity-info hash-table, or nil."
   (when dev-ids
     (let* ((ids-str (mapconcat #'identity dev-ids " "))
-           (form (format "(entities-info [%s])" ids-str))
-           (result (atlas--eval form)))
+           (result (atlas--eval
+                    (format "(do (require '[atlas.ide :as ide]) (ide/entities-info [%s]))"
+                            ids-str))))
       (or result (make-hash-table :test 'equal)))))
 
 ;;; Overlay management
@@ -409,22 +202,19 @@ Returns hash-table of dev-id symbol -> entity-info hash-table."
   (dolist (ov atlas-lens--overlays)
     (when (overlay-buffer ov)
       (delete-overlay ov)))
-  (setq atlas-lens--overlays nil)
-  (setq atlas-lens--revealed-overlay nil))
+  (setq atlas-lens--overlays nil
+        atlas-lens--revealed-overlay nil))
 
 (defun atlas-lens--apply-overlays (forms entities mode)
   "Create overlays for FORMS using ENTITIES info in lens MODE."
   (atlas-lens--clear-overlays)
   (dolist (form forms)
     (let* ((start (plist-get form :start))
-           (end (plist-get form :end))
+           (end   (plist-get form :end))
            (dev-id-str (plist-get form :dev-id))
-           (dev-id-sym (intern (if (string-prefix-p ":" dev-id-str)
-                                   (substring dev-id-str 1)
-                                 dev-id-str)))
-           (info (atlas-lens--lookup-entity entities dev-id-str)))
-      (when info
-        (let* ((card (atlas-lens--render-card dev-id-sym info mode))
+           (info (atlas-render--lookup-entity entities dev-id-str)))
+      (when (and info (atlas-lens--form-included-p form info))
+        (let* ((card (atlas-render-form info mode))
                (ov (make-overlay start end)))
           (overlay-put ov 'display card)
           (overlay-put ov 'atlas-lens t)
@@ -432,54 +222,32 @@ Returns hash-table of dev-id symbol -> entity-info hash-table."
           (overlay-put ov 'evaporate t)
           (push ov atlas-lens--overlays))))))
 
-(defun atlas-lens--lookup-entity (entities dev-id-str)
-  "Look up DEV-ID-STR in ENTITIES hash-table.
-Tries both with and without leading colon."
-  (when (hash-table-p entities)
-    (let ((bare (if (string-prefix-p ":" dev-id-str)
-                    (substring dev-id-str 1)
-                  dev-id-str)))
-      (or (gethash (intern dev-id-str) entities)
-          (gethash (intern bare) entities)
-          (gethash (intern (concat ":" bare)) entities)
-          ;; Try atlas--get for flexible key matching
-          (atlas--get entities dev-id-str)
-          (atlas--get entities bare)))))
-
 ;;; Cursor reveal/hide
 
 (defun atlas-lens--cursor-update ()
-  "Check cursor position and reveal/hide overlays accordingly."
+  "Debounced check for cursor entering/leaving an overlay."
   (when atlas-lens--debounce-timer
     (cancel-timer atlas-lens--debounce-timer))
   (setq atlas-lens--debounce-timer
-        (run-with-idle-timer
-         0.05 nil
-         #'atlas-lens--do-cursor-update)))
+        (run-with-idle-timer 0.05 nil #'atlas-lens--do-cursor-update)))
 
 (defun atlas-lens--do-cursor-update ()
-  "Perform the actual cursor reveal/hide check."
+  "Reveal overlay at cursor; restore previous revealed overlay if cursor left."
   (let ((pos (point))
-        (found nil))
-    ;; Find overlay at cursor position
+        found)
     (dolist (ov atlas-lens--overlays)
       (when (and (overlay-buffer ov)
                  (<= (overlay-start ov) pos)
                  (< pos (overlay-end ov)))
         (setq found ov)))
-    ;; Reveal/hide logic
     (cond
-     ;; Cursor entered a new overlay
      ((and found (not (eq found atlas-lens--revealed-overlay)))
-      ;; Hide previously revealed overlay
       (when (and atlas-lens--revealed-overlay
                  (overlay-buffer atlas-lens--revealed-overlay))
         (overlay-put atlas-lens--revealed-overlay 'display
                      (overlay-get atlas-lens--revealed-overlay 'atlas-lens-card)))
-      ;; Reveal current overlay
       (overlay-put found 'display nil)
       (setq atlas-lens--revealed-overlay found))
-     ;; Cursor left all overlays
      ((and (not found) atlas-lens--revealed-overlay)
       (when (overlay-buffer atlas-lens--revealed-overlay)
         (overlay-put atlas-lens--revealed-overlay 'display
@@ -490,27 +258,26 @@ Tries both with and without leading colon."
 
 (defun atlas-lens-cycle-mode ()
   "Cycle lens mode: :raw → :semantic → :impl → :raw.
-Re-renders overlays without re-fetching entity data."
+Re-renders from cache when possible; falls back to full refresh.
+For prose narrative, use `atlas-slice' instead."
   (interactive)
-  (setq atlas-lens--mode
-        (pcase atlas-lens--mode
-          (:raw :semantic)
-          (:semantic :impl)
-          (:impl :raw)))
-  (if (eq atlas-lens--mode :raw)
-      (progn
-        (atlas-lens--clear-overlays)
-        (message "Atlas Lens: raw (overlays off)"))
-    ;; Re-render with cached data
-    (if (and atlas-lens--forms-cache atlas-lens--entities-cache)
+  (let* ((modes (cons :raw (seq-remove (lambda (m) (eq m :narrative))
+                                       (atlas-render--available-modes))))
+         (pos   (or (seq-position modes atlas-lens--mode #'eq) 0))
+         (next  (nth (mod (1+ pos) (length modes)) modes)))
+    (setq atlas-lens--mode next)
+    (if (eq next :raw)
         (progn
-          (atlas-lens--apply-overlays atlas-lens--forms-cache
-                                      atlas-lens--entities-cache
-                                      atlas-lens--mode)
-          (message "Atlas Lens: %s (%d overlays)"
-                   atlas-lens--mode (length atlas-lens--overlays)))
-      ;; No cache — do a full refresh
-      (atlas-lens-refresh))))
+          (atlas-lens--clear-overlays)
+          (message "Atlas Lens: raw (overlays off)"))
+      (if (and atlas-lens--forms-cache atlas-lens--entities-cache)
+          (progn
+            (atlas-lens--apply-overlays atlas-lens--forms-cache
+                                        atlas-lens--entities-cache
+                                        next)
+            (message "Atlas Lens: %s (%d overlays)"
+                     next (length atlas-lens--overlays)))
+        (atlas-lens-refresh)))))
 
 ;;; Refresh
 
@@ -518,10 +285,13 @@ Re-renders overlays without re-fetching entity data."
   "Re-scan buffer and refresh all lens overlays."
   (interactive)
   (when atlas-lens-mode
-    (if (eq atlas-lens--mode :raw)
-        (progn
-          (atlas-lens--clear-overlays)
-          (message "Atlas Lens: raw (overlays off)"))
+    (cond
+     ((eq atlas-lens--mode :raw)
+      (atlas-lens--clear-overlays)
+      (message "Atlas Lens: raw (overlays off)"))
+     ((not (cider-connected-p))
+      (message "Atlas Lens: REPL unavailable — connect CIDER first"))
+     (t
       (let ((forms (atlas-lens--find-register-forms)))
         (if (null forms)
             (progn
@@ -531,12 +301,11 @@ Re-renders overlays without re-fetching entity data."
               (message "Atlas Lens: no register! forms found"))
           (let* ((dev-ids (mapcar (lambda (f) (plist-get f :dev-id)) forms))
                  (entities (atlas-lens--fetch-entities dev-ids)))
-            ;; Cache for mode switching
             (setq atlas-lens--forms-cache forms
                   atlas-lens--entities-cache entities)
             (atlas-lens--apply-overlays forms entities atlas-lens--mode)
             (message "Atlas Lens: %s (%d overlays)"
-                     atlas-lens--mode (length atlas-lens--overlays))))))))
+                     atlas-lens--mode (length atlas-lens--overlays)))))))))
 
 (defun atlas-lens--after-save ()
   "Refresh overlays after saving the buffer."
@@ -555,21 +324,21 @@ Re-renders overlays without re-fetching entity data."
 ;;;###autoload
 (define-minor-mode atlas-lens-mode
   "Toggle Atlas Lens mode.
-Overlays `register!' forms with template-driven views.
+Overlays `register!' forms with template-driven semantic views.
 
-Three lens modes (cycle with C-c C-l m):
-  :raw      — no overlay, show actual source
-  :semantic — signature card (aspects, context, response, deps)
-  :impl     — implementation view (impl fn, context, deps)
+Modes cycle with C-c C-l m (derived from `atlas-render-specs'):
+  :raw       — no overlay, show actual source
+  :semantic  — signature card (aspects, context, response, deps)
+  :impl      — implementation view (impl fn, context, deps)
 
-Templates are customizable via `atlas-lens-specs'.
-When no template exists, ontology keys are used as fallback.
+For prose narrative view use `atlas-slice' (generates an org-mode buffer).
+Templates are customizable via `atlas-render-specs'.
+When no template exists for a type+mode, a minimal default is shown.
 
 Uses clojure-lsp to find register! calls (alias-independent),
 with regex fallback when LSP is unavailable.
 
-When the cursor enters a form, the overlay reveals the real code.
-When the cursor leaves, the card overlay is restored.
+Cursor entering a form reveals the real code; leaving restores the card.
 
 \\{atlas-lens-mode-map}"
   :lighter " Lens"

@@ -515,22 +515,24 @@
                       freq-map (into {} (map (fn [{:keys [aspect/aspect aspect/count]}]
                                                [aspect count])
                                              aspects))
-                      sparse (->> freq-map
-                                  (filter #(= 1 (val %)))
-                                  (map key)
-                                  vec)
+                      all-sparse (->> freq-map
+                                      (filter #(= 1 (val %)))
+                                      (map key)
+                                      vec)
                       aspect-names (keys freq-map)
-                      similar-pairs (->> (for [a aspect-names
-                                               b aspect-names
-                                               :when (and (not= a b)
-                                                          (= (namespace a) (namespace b))
-                                                          (< (Math/abs (- (count (name a)) (count (name b)))) 2))]
-                                           #{a b})
-                                         distinct
-                                         (map vec)
-                                         vec)]
-                  {:sparse sparse
-                   :similar-names similar-pairs}))})
+                      all-similar (->> (for [a aspect-names
+                                             b aspect-names
+                                             :when (and (not= a b)
+                                                        (= (namespace a) (namespace b))
+                                                        (< (Math/abs (- (count (name a)) (count (name b)))) 2))]
+                                         #{a b})
+                                       distinct
+                                       (map vec)
+                                       vec)]
+                  {:sparse (vec (take 50 all-sparse))
+                   :sparse-count (count all-sparse)
+                   :similar-names (vec (take 50 all-similar))
+                   :similar-names-count (count all-similar)}))})
 
 (registry/register!
  :atlas.llm-ide/structural-gaps

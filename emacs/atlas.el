@@ -53,6 +53,8 @@
 (require 'atlas-interactive)
 (require 'atlas-history)
 (require 'atlas-lens)
+(require 'atlas-render)
+(require 'atlas-slice)
 (require 'atlas-recent)
 (require 'atlas-at-point)
 (require 'atlas-testing)
@@ -124,6 +126,10 @@ This is the main menu for daily use. Press 'z' for advanced features."
     ("L" "Toggle lens mode" atlas-lens-mode)
     ("m" "Cycle lens (raw/semantic/impl)" atlas-lens-cycle-mode)
     ("r" "Refresh lens" atlas-lens-refresh)]
+   ["Slice"
+    ("v" "Slice by entity" atlas-slice-entity)
+    ("V" "Slice by aspect" atlas-slice-aspect)
+    ("/" "Slice dispatcher" atlas-slice)]
    ["Recent (git)"
     ("g" "Recent entities" atlas-recent-entities)
     ("G" "Recent aspects" atlas-recent-aspects)
@@ -149,7 +155,8 @@ This is the main menu for daily use. Press 'z' for advanced features."
    ["Authoring Tools"
     ("n" "Create new aspect" atlas-authoring-create-aspect)
     ("d" "Create new dev-id" atlas-authoring-create-dev-id)
-    ("e" "Scaffold entity" atlas-authoring-scaffold-entity)]
+    ("e" "Scaffold entity" atlas-authoring-scaffold-entity)
+    ("M" "Scaffold from defmethod" atlas-authoring-scaffold-from-defmethod)]
    ["Business Semantics"
     ("N" "Implementations of aspect" atlas-business-implementations)]
    ["Impact & Refactoring"
