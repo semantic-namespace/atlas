@@ -81,8 +81,10 @@
  #{:meta/llm-prompt-intent-check}
  {:invariant/fn
   (fn []
-    (let [violations (for [id (entity/all-with-aspect :atlas/llm-prompt)
-                           :when (empty? (filter #(= "intent" (namespace %)) id))]
+    (let [violations (for [id  (entity/all-with-aspect :atlas/llm-prompt)
+                           :let [cid (entity/identity-for id)]
+                           :when (not (contains? cid :atlas/ontology))
+                           :when (empty? (filter #(= "intent" (namespace %)) cid))]
                        {:entity id})]
       (when (seq violations)
         {:invariant :llm-prompt-intent-required
@@ -98,7 +100,7 @@
  {:invariant/fn
   (fn []
     (let [violations (for [id (entity/all-with-aspect :atlas/llm-prompt)
-                           :when (contains? id :intent/write)
+                           :when (contains? (entity/identity-for id) :intent/write)
                            :when (nil? (:llm-prompt/produces (entity/props-for id)))]
                        {:entity id})]
       (when (seq violations)

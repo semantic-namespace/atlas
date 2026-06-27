@@ -157,7 +157,6 @@
 ;; These functions trace data flow based on context/response patterns
 ;; defined by ontologies via :dataflow/* keys.
 
-
 ;; =============================================================================
 ;; DATAFLOW LOOKUPS
 ;; =============================================================================
@@ -178,11 +177,12 @@
 (defn- dataflow-keys
   "Find all dataflow keys of given type from registered ontologies.
    key-type is one of: :dataflow/context-key, :dataflow/response-key, :dataflow/deps-key
-   Merges defaults with ontology-defined keys."
+   Merges defaults with ontology-defined keys. Supports vector values per ontology."
   [key-type]
   (let [from-ontologies (->> (all-ontologies)
-                              (keep (fn [[_ ont]] (get ont key-type)))
-                              vec)
+                             (keep (fn [[_ ont]] (get ont key-type)))
+                             (mapcat #(if (coll? %) % [%]))
+                             vec)
         defaults (get default-dataflow-keys key-type [])]
     (vec (distinct (concat defaults from-ontologies)))))
 
@@ -195,12 +195,17 @@
 
 (defn deps-for [dev-id]
   (let [deps-keys (dataflow-keys :dataflow/deps-key)
-        deps (first-present (entity/props-for dev-id) deps-keys)]
-    (cond
-      (set? deps) deps
-      (coll? deps) (set deps)
-      (qualified-keyword? deps) #{deps}  ; Single reference (e.g., :endpoint/serialisation :serial/user)
-      :else #{})))
+        props     (entity/props-for dev-id)]
+    (->> deps-keys
+         (filter #(contains? props %))
+         (reduce (fn [acc k]
+                   (let [v (get props k)]
+                     (into acc (cond
+                                 (set? v)               v
+                                 (coll? v)              (set v)
+                                 (qualified-keyword? v) #{v}
+                                 :else                  #{}))))
+                 #{}))))
 
 (defn context-for [dev-id]
   (let [context-keys (dataflow-keys :dataflow/context-key)]
@@ -239,7 +244,7 @@
        :satisfied? (seq producer-ids)})))
 
 (defn compute-data-deps
- "Compute dependencies based on context/response data flow.
+  "Compute dependencies based on context/response data flow.
 
    Finds all entities whose response keys can satisfy the context
    requirements of the given entity.
@@ -503,32 +508,32 @@
 
 ;; loading this namespace already registers entities
 (registry/register!
-   :ontology/ontology
-   :atlas/ontology
-   #{:atlas/ontology}
-   {:ontology/for :atlas/ontology
-    :ontology/keys [:ontology/for :ontology/keys
-                    :ontology/not-serialisable-keys
-                    :dataflow/context-key :dataflow/context-verb
-                    :dataflow/response-key :dataflow/response-verb
-                    :dataflow/deps-key
-                    :dataflow/extra-verbs]})
+ :ontology/ontology
+ :atlas/ontology
+ #{:atlas/ontology}
+ {:ontology/for :atlas/ontology
+  :ontology/keys [:ontology/for :ontology/keys
+                  :ontology/not-serialisable-keys
+                  :dataflow/context-key :dataflow/context-verb
+                  :dataflow/response-key :dataflow/response-verb
+                  :dataflow/deps-key
+                  :dataflow/extra-verbs]})
 
 (registry/register!
-   :ontology/datalog-extractor
-   :atlas/ontology
-   #{:atlas/datalog-extractor}
-   {:ontology/for :atlas/datalog-extractor
-    :ontology/keys [:datalog-extractor/fn :datalog-extractor/schema]
-    :ontology/not-serialisable-keys [:datalog-extractor/fn]})
+ :ontology/datalog-extractor
+ :atlas/ontology
+ #{:atlas/datalog-extractor}
+ {:ontology/for :atlas/datalog-extractor
+  :ontology/keys [:datalog-extractor/fn :datalog-extractor/schema]
+  :ontology/not-serialisable-keys [:datalog-extractor/fn]})
 
 (registry/register!
-   :ontology/invariant
-   :atlas/ontology
-   #{:atlas/invariant}
-   {:ontology/for :atlas/invariant
-    :ontology/keys [:invariant/fn]
-    :ontology/not-serialisable-keys [:invariant/fn]})
+ :ontology/invariant
+ :atlas/ontology
+ #{:atlas/invariant}
+ {:ontology/for :atlas/invariant
+  :ontology/keys [:invariant/fn]
+  :ontology/not-serialisable-keys [:invariant/fn]})
 
 ;; =============================================================================
 ;; ONTOLOGY MODULES

@@ -1,6 +1,7 @@
 (ns atlas.ontology.business-pattern
   "Business-pattern ontology module. Auto-registers on require."
   (:require [atlas.registry :as registry]
+            [atlas.registry.lookup :as entity]
             [atlas.ontology.type-ref :as type-ref]))
 
 (registry/register!
@@ -35,6 +36,40 @@
   :type-ref/property    :business-pattern/metrics-improved
   :type-ref/datalog-verb :business-pattern/metrics-improved
   :type-ref/cardinality :db.cardinality/many})
+
+;; Invariant — existence implies wiring
+
+(defn- all-business-patterns
+  "All registered business-pattern entities, excluding the ontology definition itself."
+  []
+  (->> (entity/all-with-aspect :atlas/business-pattern)
+       (filter #(= :atlas/business-pattern (:atlas/type (entity/props-for %))))))
+
+(defn- all-value-propositions
+  "All registered value-proposition entities, excluding the ontology definition itself."
+  []
+  (->> (entity/all-with-aspect :atlas/value-proposition)
+       (filter #(= :atlas/value-proposition (:atlas/type (entity/props-for %))))))
+
+(registry/register!
+ :invariant/business-pattern-has-implementors
+ :atlas/invariant
+ #{:meta/business-pattern-invariant}
+ {:invariant/fn
+  (fn []
+    (let [implemented (set (keep #(:value-proposition/implements-pattern
+                                   (entity/props-for %))
+                                 (all-value-propositions)))
+          violations  (for [bp-id (all-business-patterns)
+                            :when (not (implemented bp-id))]
+                        {:business-pattern bp-id})]
+      (when (seq violations)
+        {:invariant :business-pattern-has-implementors
+         :violation :no-implementing-value-proposition
+         :details   violations
+         :severity  :error
+         :message   (str "Business patterns without an implementing value proposition: "
+                         (mapv :business-pattern violations))})))})
 
 ;; Datalog extractor
 (registry/register!
