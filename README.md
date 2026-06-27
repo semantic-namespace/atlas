@@ -21,7 +21,7 @@ What if identity was determined by **semantics** - what something means and how 
 
 ## What Atlas Does
 
-Atlas offers a semantic registry and tooling layer for software architecture: you describe components, functions, endpoints, protocols, and business concepts as **compound identities** (sets of aspects) plus structured properties - without thinking about implementation details.
+Atlas offers a semantic registry and tooling layer for software architecture: you describe any system entities,  like components, functions, endpoints, protocols,  business concepts ...  as **compound identities** (sets of aspects) plus structured properties - without thinking about implementation details.
 
 ```clojure
 ;; A function's identity IS its semantic meaning
@@ -41,6 +41,7 @@ From this registry, Atlas can:
 - **Validate** - Check that data flows are satisfiable, dependencies exist, tiers are respected
 - **Visualize** - Explore the semantic graph interactively
 - **Document** - Generate architecture docs from the registry
+- **Diff** - Compare with previous registry version
 
 It's a **data-first approach** where the system's structure is queryable, visualizable, and validated via a shared ontology - rather than hard-coded diagrams or ad-hoc documentation.
 
