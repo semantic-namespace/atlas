@@ -63,3 +63,24 @@ ui/resources/public-v2/atlas-ui/js/
 /ui/resources/public-v4/
 /ui/resources/public-v5/
 /dev-tools/.cpcache/
+
+
+/cloud/.cpcache/
+
+# cloud/ is tracked in its own private repo (semantic-namespace/atlas-cloud)
+/cloud/
+
+# Public docs are tracked; internal working notes stay local.
+/docs/internal/
+
+# Local tooling / editor / MCP config — not for the shared repo
+/.claude/
+/.mcp.json
+*.nrepl-port
+
+# Vendored third-party source (depend on it properly instead of committing)
+/co/
+
+# Personal writing, not library material
+/posts/
+/on-the-clojure-move/
