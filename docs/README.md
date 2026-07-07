@@ -45,6 +45,7 @@ single queryable graph.
 | [UI v3](ui-v3.md) | SSE-driven semantic browser (experimental) |
 | [atlas-dev module](atlas-dev-module.md) | Dev-tooling library |
 | [Overarch Adapter](adapter-overarch.md) | Export to C4/UML/GraphViz diagrams (experimental) |
+| [YAML-LD / JSON-LD Adapter](adapter-yaml-ld.md) | Export to W3C linked data / RDF (experimental) |
 
 ## Modules
 
