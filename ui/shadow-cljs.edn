@@ -29,6 +29,15 @@
    :devtools
    {:after-load atlas-ui-v2.core/mount-root}}
 
+  :atlas-ui-v3
+  {:target :browser
+   :output-dir "resources/public-v3/atlas-ui/js"
+   :asset-path "/atlas-ui/js"
+   :modules {:main {:init-fn atlas-ui-v3.core/init}}
+
+   :devtools
+   {:after-load atlas-ui-v3.core/mount-root}}
+
   :test
   {:target :node-test
    :output-to "target/cljs-tests.js"

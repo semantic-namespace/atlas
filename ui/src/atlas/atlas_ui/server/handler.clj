@@ -13,11 +13,36 @@
            "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
            "Access-Control-Allow-Headers" "Content-Type, Accept"}))
 
+(defn- transit-safe-leaf? [v]
+  (or (nil? v) (string? v) (number? v) (boolean? v)
+      (keyword? v) (symbol? v) (inst? v) (uuid? v)))
+
+(defn- clean-value
+  "Recursively strip non-transit-safe leaves from any value."
+  [v]
+  (cond
+    (transit-safe-leaf? v) v
+    (map? v)        (reduce-kv (fn [m k val]
+                                 (let [c (clean-value val)]
+                                   (if (nil? c) m (assoc m k c))))
+                               {} v)
+    (set? v)        (into #{} (keep clean-value v))
+    (sequential? v) (into [] (keep clean-value v))
+    :else           nil))
+
+(defn- sanitize-registry
+  "Prepare registry for UI serialization: recursively strip non-transit-safe values."
+  [registry]
+  (reduce-kv (fn [m id entity]
+               (assoc m id (clean-value entity)))
+             {} registry))
+
 (defn- registry-payload [registry]
-  {:atlas-ui.api.response/registry registry
-   :atlas-ui.api.response/aspect-stats (ide/list-aspects registry)
-   :timestamp (System/currentTimeMillis)
-   :count (count registry)})
+  (let [sanitized (sanitize-registry registry)]
+    {:atlas-ui.api.response/registry sanitized
+     :atlas-ui.api.response/aspect-stats (ide/list-aspects registry)
+     :timestamp (System/currentTimeMillis)
+     :count (count registry)}))
 
 (defn- registry-edn-handler
   "Handler that returns the current registry as EDN.
@@ -31,7 +56,7 @@
     :body (pr-str (registry-payload registry))}))
 
 (defn- transit-bytes [data]
-  (let [out (ByteArrayOutputStream.)
+  (let [out    (ByteArrayOutputStream.)
         writer (transit/writer out :json)]
     (transit/write writer data)
     (.toByteArray out)))

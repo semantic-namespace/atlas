@@ -5,14 +5,23 @@
   - Registry API from atlas.atlas-ui.api.handler
   - Static file serving for the compiled UI
   - Developer-friendly API (start!/stop!/status)
-  - Browser auto-opening and registry watching"
+  - Browser auto-opening and registry watching
+  - V3: SSE-driven two-momentum layout viewer (POST /api/v3/state, GET /api/v3/events)"
   (:require [atlas.registry :as reg]
             [atlas.atlas-ui.server.handler :as handler]
             [atlas-ui.sample-registry :as sample]
-            [ring.adapter.jetty :as jetty]
             [ring.middleware.resource :as resource]
+            [ring.middleware.file :as file]
             [ring.middleware.content-type :as content-type]
-            [ring.util.response :as response]))
+            [ring.util.response :as response]
+            [ring.util.servlet :as servlet]
+            [clojure.java.io :as io]
+            [clojure.data.json :as json])
+  (:import [org.eclipse.jetty.server Server ServerConnector
+            HttpConfiguration HttpConnectionFactory]
+           [org.eclipse.jetty.server.handler AbstractHandler]
+           [javax.servlet DispatcherType]
+           [javax.servlet.http HttpServletRequest HttpServletResponse]))
 
 ;; =============================================================================
 ;; State Management
@@ -22,33 +31,150 @@
 (defonce ^:private registry-watchers (atom {}))
 
 ;; =============================================================================
+;; V3 — SSE state (LLM-controlled two-momentum layout)
+;; =============================================================================
+
+(defonce v3-state
+  (atom {:mode "home" :entity nil :aspect nil :data-key nil :narrative nil
+         :scenario nil :step nil :step-total nil}))
+
+;; id -> LinkedBlockingQueue<String>; sse-aware-handler polls per client
+(defonce ^:private v3-sse-clients (atom {}))
+
+(defn- setup-v3-sse-watcher! []
+  (add-watch v3-state ::sse-broadcast
+             (fn [_ _ _ new-state]
+               (let [msg (json/write-str new-state)]
+                 (doseq [[_id ^java.util.concurrent.LinkedBlockingQueue q] @v3-sse-clients]
+                   (.offer q msg))))))
+
+(defn- v3-state-get-handler [_req]
+  {:status  200
+   :headers {"Content-Type"                "application/json"
+             "Access-Control-Allow-Origin" "*"}
+   :body    (json/write-str @v3-state)})
+
+(defn- v3-state-post-handler [req]
+  (try
+    (let [new-state (json/read-str (slurp (:body req)) :key-fn keyword)]
+      (swap! v3-state merge new-state)
+      {:status  200
+       :headers {"Content-Type"                "application/json"
+                 "Access-Control-Allow-Origin" "*"}
+       :body    (json/write-str @v3-state)})
+    (catch Exception e
+      {:status  400
+       :headers {"Content-Type" "application/json"}
+       :body    (json/write-str {:error (.getMessage e)})})))
+
+(defn- v3-narrative-post-handler [req]
+  (try
+    (let [{:keys [text]} (json/read-str (slurp (:body req)) :key-fn keyword)]
+      (swap! v3-state assoc :narrative text)
+      {:status  200
+       :headers {"Content-Type"                "application/json"
+                 "Access-Control-Allow-Origin" "*"}
+       :body    (json/write-str {:ok true})})
+    (catch Exception e
+      {:status  400
+       :headers {"Content-Type" "application/json"}
+       :body    (json/write-str {:error (.getMessage e)})})))
+
+;; =============================================================================
 ;; HTTP Handlers
 ;; =============================================================================
 
+(defn- serve-index [ui-root file-root]
+  (or (when file-root (response/file-response "index.html" {:root file-root}))
+      (response/resource-response "index.html" {:root ui-root})))
+
+(defn- static-middleware [ui-root file-root]
+  (if file-root
+    #(file/wrap-file % file-root)
+    #(resource/wrap-resource % ui-root)))
+
 (defn- app-handler
-  "Ring handler that serves static files and the registry API"
-  [registry-atom ui-root]
+  "Ring handler for all routes except /api/v3/events (SSE handled natively).
+  file-root is an absolute filesystem path used when classpath resources
+  aren't available (e.g. when the JAR version predates the UI version)."
+  [registry-atom ui-root file-root]
   (fn [request]
     (cond
-      ;; API endpoint for registry - reuse existing handler
-      (= (:uri request) "/api/atlas/registry")
-      (handler/registry-handler registry-atom request)
+      (and (= (:uri request) "/api/v3/state")
+           (= (:request-method request) :get))
+      (v3-state-get-handler request)
 
-      ;; CORS preflight
+      (and (= (:uri request) "/api/v3/state")
+           (= (:request-method request) :post))
+      (v3-state-post-handler request)
+
+      (and (= (:uri request) "/api/v3/narrative")
+           (= (:request-method request) :post))
+      (v3-narrative-post-handler request)
+
+      (= (:uri request) "/api/atlas/registry")
+      (handler/registry-handler @registry-atom request)
+
       (and (= (:uri request) "/api/atlas/registry")
            (= (:request-method request) :options))
       (handler/options-handler request)
 
-      ;; Serve index.html for root
       (= (:uri request) "/")
-      (response/resource-response "index.html" {:root ui-root})
+      (serve-index ui-root file-root)
 
-      ;; Serve static files from resources/public or public-v2
       :else
       ((-> (constantly (response/not-found "Not found"))
-           (resource/wrap-resource ui-root)
+           ((static-middleware ui-root file-root))
            (content-type/wrap-content-type))
        request))))
+
+(defn- sse-aware-handler
+  "Jetty AbstractHandler wrapping the Ring app-handler.
+  /api/v3/events is handled natively: headers are committed via flushBuffer
+  before the blocking loop, so each flush delivers data immediately.
+  All other requests delegate to the Ring handler via servlet/build-request-map."
+  [ring-handler]
+  (proxy [AbstractHandler] []
+    (handle [_target base-request
+             ^HttpServletRequest request
+             ^HttpServletResponse response]
+      (when-not (= (.getDispatcherType request) DispatcherType/ERROR)
+        (.setHandled base-request true)
+        (if (= (.getRequestURI request) "/api/v3/events")
+          (let [id    (str (java.util.UUID/randomUUID))
+                queue (java.util.concurrent.LinkedBlockingQueue.)]
+            (.offer queue (json/write-str @v3-state))
+            (swap! v3-sse-clients assoc id queue)
+            (doto response
+              (.setStatus 200)
+              (.setContentType "text/event-stream;charset=UTF-8")
+              (.setHeader "Cache-Control" "no-cache")
+              (.setHeader "Connection" "keep-alive")
+              (.setHeader "X-Accel-Buffering" "no")
+              (.setHeader "Access-Control-Allow-Origin" "*")
+              .flushBuffer)
+            (try
+              (let [^java.io.PrintWriter writer (.getWriter response)]
+                (loop []
+                  (let [msg (.poll queue 25 java.util.concurrent.TimeUnit/SECONDS)]
+                    (.print writer (if msg (str "data: " msg "\n\n") ": keepalive\n\n"))
+                    (.flush writer)
+                    (recur))))
+              (catch Exception _
+                (swap! v3-sse-clients dissoc id))))
+          (let [resp-map (ring-handler (servlet/build-request-map request))]
+            (when resp-map
+              (servlet/update-servlet-response response resp-map))))))))
+
+(defn- create-jetty-server! [ring-handler port]
+  (let [server    (Server.)
+        http-cfg  (doto (HttpConfiguration.) (.setSendServerVersion false))
+        connector (doto (ServerConnector. server (into-array [(HttpConnectionFactory. http-cfg)]))
+                    (.setPort port))]
+    (.addConnector server connector)
+    (.setHandler server (sse-aware-handler ring-handler))
+    (.start server)
+    server))
 
 ;; =============================================================================
 ;; Server Lifecycle
@@ -90,12 +216,11 @@
    (if (map? opts-or-registry)
      (start! reg/registry opts-or-registry)
      (start! opts-or-registry {})))
-  ([registry-atom {:keys [port open-browser? load-sample? ui-version]
+  ([registry-atom {:keys [port open-browser? load-sample? ui-version file-root]
                    :or {port 8082
                         open-browser? true
                         load-sample? false
-                        ui-version :v1}
-                   :as opts}]
+                        ui-version :v1}}]
    (when (get @servers port)
      (println (str "⚠️  Atlas UI already running on port " port ". Stopping it first..."))
      (stop! port))
@@ -106,10 +231,25 @@
      (reset! registry-atom sample/sample-registry)
      (println "✓ Loaded" (count @registry-atom) "entities"))
 
-   (let [ui-root (if (= ui-version :v2) "public-v2" "public")
-         server (jetty/run-jetty (app-handler registry-atom ui-root)
-                                  {:port port
-                                   :join? false})]
+   (reset! v3-sse-clients {})
+   (setup-v3-sse-watcher!)
+   (let [ui-root   (case ui-version
+                     :v2 "public-v2"
+                     :v3 "public-v3"
+                     "public")
+         ;; file-root: explicit override beats classpath (use when JAR fd is stale).
+         ;; Auto-fallback to local filesystem when classpath resource is unavailable.
+         file-root (or file-root
+                       (when (nil? (io/resource (str ui-root "/index.html")))
+                         (some (fn [base]
+                                 (let [f (java.io.File. (str base "/" ui-root))]
+                                   (when (.exists f) (.getAbsolutePath f))))
+                               [(System/getProperty "user.dir")
+                                (str (System/getProperty "user.home") "/git/semantic-namespace/atlas/ui/resources")
+                                "ui/resources"
+                                "resources"])))
+         _         (when file-root (println (str "│   Static files from: " file-root)))
+         server    (create-jetty-server! (app-handler registry-atom ui-root file-root) port)]
      (swap! servers assoc port server)
 
      ;; Watch registry for changes
@@ -257,5 +397,4 @@
 
   ;; Legacy API
   (start-server!) ; Port 3000, sample data
-  (stop-server!)
-  )
+  (stop-server!))
