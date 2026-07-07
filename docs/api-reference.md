@@ -6,11 +6,12 @@
 
 | Namespace | Purpose |
 |-----------|---------|
-| `atlas.registry` | Core registration and identity operations |
+| `atlas.core` | Public API facade (register, find*, identity-for, deps-of, invariants) |
+| `atlas.registry` | Core registration and compound identity operations |
 | `atlas.query` | Querying entities by aspects |
-| `atlas.entity` | Runtime entity resolution |
+| `atlas.ontology` | Data-flow resolution (context/response/deps), tools, templates |
+| `atlas.registry.lookup` | Entity resolution (props-for, has-aspect?, all-with-aspect) |
 | `atlas.invariant` | Architectural validation |
-| `atlas.ontology` | Tools and templates |
 
 ---
 
@@ -230,13 +231,18 @@ Find all entities affected by changing an entity.
 
 ---
 
-## atlas.entity
+## Entity resolution
 
-Runtime entity resolution.
+Runtime entity resolution. These functions live in `atlas.registry.lookup`
+(`identity-for`, `props-for`, `has-aspect?`, `all-with-aspect`),
+`atlas.ontology` (`context-for`, `response-for`, `deps-for`), and
+`atlas.query.dataflow` (`trace-data-flow`). The most-used ones are re-exported
+through the `atlas.core` facade (`identity-for`, `deps-of`). There is **no**
+`atlas.entity` namespace.
 
 ### identity-for
 
-Get semantic identity for dev-id.
+Get semantic identity for dev-id. (`atlas.registry.lookup` / `atlas.core`)
 
 ```clojure
 (identity-for dev-id) => #{...}

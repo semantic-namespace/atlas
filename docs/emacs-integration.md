@@ -87,7 +87,7 @@ Both provide complementary views of your registry.
 
 ## Main Menu
 
-The main menu (`M-x semantic-ns`) provides:
+The main menu (`M-x atlas`) provides:
 
 ### Browse
 | Key | Command | Description |
@@ -99,14 +99,16 @@ The main menu (`M-x semantic-ns`) provides:
 ### Authoring
 | Key | Command | Description |
 |-----|---------|-------------|
-| `N` | Interactive author entity | **NEW!** Guided entity creation with similarity feedback |
-| `+` | Add aspect to set | **NEW!** Add aspect to #{...} with real-time similarity |
+| `N` | Interactive author entity | Guided entity creation with live similarity feedback |
+| `+` | Add aspect to set | Add aspect to `#{...}` with real-time similarity score |
 | `s` | Aspect stats | Show how many entities share each aspect with an entity |
 | `S` | Aspect stats at point | Show aspect stats for entity at cursor |
 | `I` | Insert aspect | Two-step completion: select namespace, then name |
 | `D` | Insert dev-id | Insert existing dev-id with type annotation |
 | `P` | Aspect palette | Browse all available aspects (click to copy) |
-| `~` | Similar at point | Show similar entities with aspect differences |
+| `~` | Similar at point | Show similar entities with aspect differences (✓/−/+) |
+
+See [Authoring Guide](authoring-guide.md) for how suggestion and similarity work under the hood.
 
 ### Entity Details
 | Key | Command | Description |
@@ -151,15 +153,53 @@ The main menu (`M-x semantic-ns`) provides:
 | `m` | Cycle lens mode | Cycle: raw → semantic → impl |
 | `r` | Refresh lens | Re-scan and re-fetch overlays |
 
-**Lens Mode** replaces verbose `register!` forms with compact signature cards showing the entity's semantic identity. Three views cycle with `m`:
+### Slice Buffers
 
-- **`:semantic`** — badge + dev-id + aspects, context, response, deps
-- **`:impl`** — implementation function, context, deps
-- **`:raw`** — no overlay, actual source code
+`atlas-slice` opens a **dedicated org-mode buffer** assembled from the live registry — not tied to any source file. Each entity becomes an org heading with a prose narrative body. Entities are **topologically sorted** (dependencies appear before dependents) and **tagged** by type, domain, and intent for native org filtering.
 
-Cards are template-driven and customizable per entity type via `atlas-lens-specs`. The overlay is purely visual — buffer content is untouched, so LSP/CIDER/paredit work normally. Moving the cursor into a form reveals the real code.
+```
+M-x atlas-slice-entity   RET :fn.ide/data-flow RET      ; entity only (depth 0)
+C-u 1 M-x atlas-slice-entity RET :fn.ide/data-flow RET  ; entity + direct deps
+M-x atlas-slice-aspect   RET :domain/ide RET            ; all entities in a domain
+M-x atlas-slice          RET                            ; interactive dispatcher
+```
 
-Uses clojure-lsp to find `register!` calls regardless of namespace alias. See [Lens Design](atlas-lens-design.md) for template customization and visual styling details.
+Inside a slice buffer:
+
+| Key | Action |
+|-----|--------|
+| `TAB` | Expand / collapse heading |
+| `i` | Inspect entity at point — compact `:semantic` card in a bottom window |
+| `s` | Jump to source — grep for the `register!` call of entity at point |
+| `g` / `C-c C-l r` | Refresh (re-fetch from REPL) |
+| `C-c \` | Org tag filter — e.g. `:trace:`, `:ide:`, `:execution_function:` |
+| `q` | Bury buffer |
+
+The buffer opens **folded** — all headings visible, bodies collapsed. Use `TAB` to expand individually or `S-TAB` to cycle global fold state. Requires an active CIDER connection and `atlas.ide.narrative` on the classpath.
+
+**Tags** on each heading are derived from the entity's type, domain, and intent:
+```
+* fn.ide/data-flow  :execution_function:ide:trace:
+```
+Use `C-c \` then `:trace:` to sparse-tree only trace-intent entities, or `:ide:` for the full IDE domain.
+
+**Internal links**: entity refs in `deps-prose` are clickable org links — `C-c C-o` on `[[*fn.ide/entity-info][fn.ide/entity-info]]` jumps to that entity's heading.
+
+**Summary section**: a `* Summary` heading at the top shows total entity count and breakdown by type.
+
+**Lens Mode** replaces verbose `register!` forms with template-driven views of the entity's semantic identity. Three modes cycle with `C-c C-l m`:
+
+| Mode | What you see | Fetch |
+|---|---|---|
+| `:raw` | Actual source, no overlay | — |
+| `:semantic` | Badge · dev-id · aspects · context · response · deps | entity props from registry |
+| `:impl` | Implementation function · context · deps | entity props from registry |
+
+For prose narrative view use `atlas-slice` instead — it generates a dedicated org-mode buffer with full graph-derived context.
+
+Cards are purely visual — buffer content is untouched, so LSP/CIDER/paredit work normally. Moving the cursor into a form reveals the real source code.
+
+Uses clojure-lsp to find `register!` calls regardless of namespace alias.
 
 ## Advanced Menu
 
@@ -335,10 +375,7 @@ Both Emacs integration and Visual Explorer support remote development:
 
 ```elisp
 ;; Cache TTL (default 5 seconds)
-(setq semantic-ns--cache-ttl 10)
-
-;; IDE namespace (if you've wrapped atlas.ide)
-(setq semantic-ns-ide-ns "my.custom.ide")
+(setq atlas--cache-ttl 10)
 ```
 
 ## Running Emacs + Visual Explorer Together

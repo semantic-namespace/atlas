@@ -63,7 +63,7 @@ Add to your `deps.edn`:
 
 
 ```clojure
-{:deps {com.github.semantic-namespace/atlas {:mvn/version "0.0.1-SNAPSHOT"}}
+{:deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.11-SNAPSHOT"}}}
 ```
 
 
