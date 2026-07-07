@@ -415,7 +415,7 @@ Converts backtick spans to =verbatim=, then linkifies bare ns/name refs
                         no-empty-bold)))
          ;; Convert all `...` spans → =org-verbatim=
          ;; (backtick-to-link was removed: data keys with dotted namespaces
-         ;;  like co.yorba.spec.*/x are indistinguishable from entity dev-ids)
+         ;;  like com.example.spec.*/x are indistinguishable from entity dev-ids)
          (verbatim    (replace-regexp-in-string "`\\([^`\n]+\\)`" "=\\1=" stripped t)))
     ;; Linkify bare entity dev-id refs outside protected spans
     (atlas-render--org-linkify-body verbatim)))

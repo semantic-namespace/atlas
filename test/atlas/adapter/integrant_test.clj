@@ -424,23 +424,23 @@
 
 (deftest test-find-shared-bases
   (testing "Detects when multiple composite keys share the same base (first element)"
-    (let [config {[:co.yorba.services.search.inbox/update-search-status
-                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
-                  [:co.yorba.services.search.inbox/update-search-status
-                   :accounts-by-email.spec.workers.gmail-threads/success] {}
-                  [:co.yorba.services.search.inbox/reset-failed-state
-                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
-                  [:co.yorba.services.search.inbox/reset-failed-state
-                   :accounts-by-email.spec.workers.gmail-threads/success] {}
-                  [:co.yorba.services.search.logins/schedule-periodical
-                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}}
+    (let [config {[:com.shop.services.search.inbox/update-search-status
+                   :com.shop.spec.workers.logins-by-inbox/success] {}
+                  [:com.shop.services.search.inbox/update-search-status
+                   :com.shop.spec.workers.gmail-threads/success] {}
+                  [:com.shop.services.search.inbox/reset-failed-state
+                   :com.shop.spec.workers.logins-by-inbox/success] {}
+                  [:com.shop.services.search.inbox/reset-failed-state
+                   :com.shop.spec.workers.gmail-threads/success] {}
+                  [:com.shop.services.search.logins/schedule-periodical
+                   :com.shop.spec.workers.logins-by-inbox/success] {}}
           shared (find-shared-bases config)]
-      ;; :co.yorba.services.search.inbox/update-search-status is shared by 2 keys
-      (is (contains? shared :co.yorba.services.search.inbox/update-search-status))
-      ;; :co.yorba.services.search.inbox/reset-failed-state is shared by 2 keys
-      (is (contains? shared :co.yorba.services.search.inbox/reset-failed-state))
-      ;; :co.yorba.services.search.logins/schedule-periodical is not shared
-      (is (not (contains? shared :co.yorba.services.search.logins/schedule-periodical)))))
+      ;; :com.shop.services.search.inbox/update-search-status is shared by 2 keys
+      (is (contains? shared :com.shop.services.search.inbox/update-search-status))
+      ;; :com.shop.services.search.inbox/reset-failed-state is shared by 2 keys
+      (is (contains? shared :com.shop.services.search.inbox/reset-failed-state))
+      ;; :com.shop.services.search.logins/schedule-periodical is not shared
+      (is (not (contains? shared :com.shop.services.search.logins/schedule-periodical)))))
 
   (testing "Returns empty set when no bases are shared"
     (let [config {[:persistence/base :accounts/db] {}
@@ -468,25 +468,25 @@
   (testing "Creates adapted dev-id with ___ separator"
     (is (= :foo.zz___bar/yy
            (adapted-dev-id [:foo/zz :bar/yy])))
-    (is (= :co.yorba.services.search.logins.schedule-periodical___accounts-by-email.spec.workers.logins-by-inbox/success
-           (adapted-dev-id [:co.yorba.services.search.logins/schedule-periodical
-                            :accounts-by-email.spec.workers.logins-by-inbox/success])))))
+    (is (= :com.shop.services.search.logins.schedule-periodical___com.shop.spec.workers.logins-by-inbox/success
+           (adapted-dev-id [:com.shop.services.search.logins/schedule-periodical
+                            :com.shop.spec.workers.logins-by-inbox/success])))))
 
 (deftest test-shared-base-conversion
   (testing "Composite keys with shared bases (first element) get adapted dev-ids"
-    (let [config {[:co.yorba.services.search.inbox/update-search-status
-                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}
-                  [:co.yorba.services.search.inbox/update-search-status
-                   :accounts-by-email.spec.workers.gmail-threads/success] {}
-                  [:co.yorba.services.search.logins/schedule-periodical
-                   :accounts-by-email.spec.workers.logins-by-inbox/success] {}}
+    (let [config {[:com.shop.services.search.inbox/update-search-status
+                   :com.shop.spec.workers.logins-by-inbox/success] {}
+                  [:com.shop.services.search.inbox/update-search-status
+                   :com.shop.spec.workers.gmail-threads/success] {}
+                  [:com.shop.services.search.logins/schedule-periodical
+                   :com.shop.spec.workers.logins-by-inbox/success] {}}
           defs (ig-adapter/config->atlas-defs config)
           dev-ids (set (map :atlas/dev-id defs))]
       ;; update-search-status is shared, so both get adapted dev-ids
-      (is (contains? dev-ids :co.yorba.services.search.inbox.update-search-status___accounts-by-email.spec.workers.logins-by-inbox/success))
-      (is (contains? dev-ids :co.yorba.services.search.inbox.update-search-status___accounts-by-email.spec.workers.gmail-threads/success))
+      (is (contains? dev-ids :com.shop.services.search.inbox.update-search-status___com.shop.spec.workers.logins-by-inbox/success))
+      (is (contains? dev-ids :com.shop.services.search.inbox.update-search-status___com.shop.spec.workers.gmail-threads/success))
       ;; schedule-periodical is unique, so uses first element as dev-id
-      (is (contains? dev-ids :co.yorba.services.search.logins/schedule-periodical))))
+      (is (contains? dev-ids :com.shop.services.search.logins/schedule-periodical))))
 
   (testing "Composite keys with unique bases use first element as dev-id"
     (let [config {[:persistence/base :accounts/db] {}

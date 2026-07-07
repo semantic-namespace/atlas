@@ -17,7 +17,7 @@
     (datalog/reset-all!)))
 
 ;; =============================================================================
-;; TEST DATA — gmail-message workflow (simplified from yorba)
+;; TEST DATA — gmail-message workflow (simplified from a real inbox-scanning app)
 ;; =============================================================================
 
 (def gmail-message-fsm

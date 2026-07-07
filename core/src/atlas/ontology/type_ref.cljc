@@ -26,8 +26,8 @@
   "Find all type-refs where source matches the given ontology.
 
    Example:
-     (type-refs-for-source :atlas/yorba-cache)
-     ;; => #{:type-ref/cache-serialisation}"
+     (type-refs-for-source :atlas/execution-function)
+     ;; => [:type-ref/execution-function-deps]"
   [source-ontology]
   (->> (all-type-refs)
        (filter (fn [ref-id]
@@ -46,8 +46,8 @@
    This is a GENERIC extractor that automatically generates facts based on
    registered type-ref metadata. Use this in your ontology's datalog extractor.
 
-   Example usage in yorba-cache extractor:
-     (type-ref/extract-reference-facts :atlas/yorba-cache compound-id props)
+   Example usage in a custom ontology's extractor:
+     (type-ref/extract-reference-facts :myapp/event compound-id props)
 
    Returns a collection of [:db/add ...] facts."
   [source-ontology compound-id props]

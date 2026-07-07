@@ -43,8 +43,8 @@
 (defn- seed-endpoints! []
   (registry/register!
    :endpoint/logins-search
-   :atlas/yorba-endpoint
-   #{:atlas/yorba-endpoint :domain/logins}
+   :shop/endpoint
+   #{:shop/endpoint :domain/logins}
    {:endpoint/method :get
     :endpoint/deps []
     :endpoint/input []
@@ -53,8 +53,8 @@
 
   (registry/register!
    :endpoint/inbox-provider
-   :atlas/yorba-endpoint
-   #{:atlas/yorba-endpoint :domain/inbox}
+   :shop/endpoint
+   #{:shop/endpoint :domain/inbox}
    {:endpoint/method :get
     :endpoint/deps []
     :endpoint/input []
