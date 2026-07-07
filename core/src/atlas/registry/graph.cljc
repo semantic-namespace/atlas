@@ -73,10 +73,12 @@
   []
   (let [all-ids (all-dev-ids)
         deps-map (into {} (map (fn [id] [id (ontology/deps-for id)]) all-ids))]
+    ;; `visited` is the set of ancestors on the current DFS branch; reaching an
+    ;; id already in it means we looped back = a cycle. (Was `(contains? path id)`
+    ;; on a vector, which tests indices, so cycles were never detected.)
     (letfn [(has-cycle? [id visited path]
               (cond
-                (contains? path id) {:cycle (conj (vec path) id)}
-                (contains? visited id) nil
+                (contains? visited id) {:cycle (conj (vec path) id)}
                 :else (some #(has-cycle? % (conj visited id) (conj path id))
                             (get deps-map id #{}))))]
       (when-let [cycle (some #(has-cycle? % #{} []) all-ids)]
@@ -86,10 +88,33 @@
          :severity :error
          :message (str "Dependency cycle detected: " (:cycle cycle))}))))
 
+(defn invariant-no-compound-id-collision
+  "No two different dev-ids may share the same compound identity.
+   A collision means the second registration silently overwrites the first
+   in the registry map — the earlier dev-id is lost without any error.
+   Severity: :error — silent data loss."
+  []
+  (let [registrations @registry/registrations
+        by-compound-id (group-by (fn [r] (conj (:aspects r) (:type r)))
+                                 registrations)
+        collisions (for [[compound-id entries] by-compound-id
+                         :let [dev-ids (distinct (map :dev-id entries))]
+                         :when (> (count dev-ids) 1)]
+                     {:compound-id compound-id :dev-ids dev-ids})]
+    (when (seq collisions)
+      {:invariant :no-compound-id-collision
+       :violation :duplicate-compound-identity
+       :details collisions
+       :severity :error
+       :message (str "Multiple dev-ids share the same compound identity — "
+                     "only the last registration survives: "
+                     (mapv :dev-ids collisions))})))
+
 (def graph-invariants
   "Graph invariants in check order."
   [invariant-deps-exist
-   invariant-no-circular-deps])
+   invariant-no-circular-deps
+   invariant-no-compound-id-collision])
 
 (defn- result-level [result]
   (or (:level result) (:severity result)))

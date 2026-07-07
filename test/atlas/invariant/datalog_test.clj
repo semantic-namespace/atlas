@@ -389,6 +389,36 @@
       (is (true? (check-fn :fn/oauth-handler)))
       (is (true? (check-fn :component/oauth))))))
 
+(defn- seed-cyclic-registry!
+  "Registry with a dependency cycle: :fn/a -> :fn/b -> :fn/a.
+   Distinct aspects give distinct compound identities (the registry is keyed by
+   compound-id, so identical aspects would collide into one entity)."
+  []
+  (registry/register!
+   :fn/a :atlas/execution-function #{:tier/service :domain/a}
+   {:atlas/dev-id :fn/a :execution-function/deps #{:fn/b}})
+  (registry/register!
+   :fn/b :atlas/execution-function #{:tier/service :domain/b}
+   {:atlas/dev-id :fn/b :execution-function/deps #{:fn/a}}))
+
+(deftest query-acyclic-deps-detects-cycle
+  ;; Regression: has-cycle? tested `(contains? path id)` where `path` was a
+  ;; vector, so it checked indices (always false) and the visited-set branch
+  ;; returned nil — cycles were silently never detected.
+  (seed-cyclic-registry!)
+  (let [db (a.datalog/create-db)
+        result (a.datalog/query-acyclic-deps db)]
+    (testing "a dependency cycle is reported"
+      (is (some? result))
+      (is (contains? (set (:cycle result)) :fn/a))
+      (is (contains? (set (:cycle result)) :fn/b)))))
+
+(deftest query-acyclic-deps-passes-on-dag
+  (seed-oauth-registry!)
+  (let [db (a.datalog/create-db)]
+    (testing "an acyclic graph reports no cycle"
+      (is (nil? (a.datalog/query-acyclic-deps db))))))
+
 ;; =============================================================================
 ;; AXIOM COMPILATION AND CHECKING TESTS
 ;; =============================================================================

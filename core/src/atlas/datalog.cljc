@@ -93,9 +93,11 @@
    for dataflow verb mappings (context→consumes, response→produces)."
   [reg compound-id props]
   (let [dev-id (:atlas/dev-id props)
-        ;; Find which entity type this entity belongs to
+        ;; Use :atlas/type from props as the authoritative entity type.
+        ;; Compound-ids can contain inherited types (e.g. VPs inherit :atlas/business-pattern),
+        ;; so scanning compound-id with `first` risks picking the wrong ontology.
         ontologies (ontology-entries reg)
-        entity-type (first (filter #(contains? compound-id %) (map :ontology/for ontologies)))
+        entity-type (:atlas/type props)
         ont-props (first (filter #(= entity-type (:ontology/for %)) ontologies))]
     (when (and dev-id entity-type)
       (concat
@@ -120,7 +122,7 @@
          (letfn [(extract-dataflow [raw-key verb]
                    (when (and raw-key verb)
                      (let [keys (if (and (vector? raw-key)
-                                        (every? keyword? raw-key))
+                                         (every? keyword? raw-key))
                                   raw-key [raw-key])]
                        (mapcat (fn [k]
                                  (when-let [values (get props k)]
@@ -438,10 +440,12 @@
         deps-map (into {} (map (fn [id]
                                  [id (set (query-dependencies db id))])
                                all-entities))]
+    ;; `visited` tracks ancestors on the current DFS branch; hitting an id
+    ;; already in it is a cycle. (Was `(contains? path id)` on a vector, which
+    ;; tests indices, so cycles were never detected.)
     (letfn [(has-cycle? [id visited path]
               (cond
-                (contains? path id) {:cycle (conj path id)}
-                (contains? visited id) nil
+                (contains? visited id) {:cycle (conj path id)}
                 :else (some #(has-cycle? % (conj visited id) (conj path id))
                             (get deps-map id #{}))))]
       (some #(has-cycle? % #{} []) all-entities))))
@@ -471,7 +475,6 @@
 (defn query-protocol-functions          [db protocol-id]    ((requiring-resolve 'atlas.datalog.protocol/query-protocol-functions) db protocol-id))
 (defn query-components-implementing-protocol [db protocol-aspect] ((requiring-resolve 'atlas.datalog.protocol/query-components-implementing-protocol) db protocol-aspect))
 (defn query-undefined-protocols         [db]                ((requiring-resolve 'atlas.datalog.protocol/query-undefined-protocols) db))
-
 
 ;; =============================================================================
 ;; ADVANCED QUERIES
@@ -601,7 +604,6 @@
          [?e :entity/aspect ?aspect]]
        db))
 
-
 ;; Delegation stubs — explorer queries moved to atlas.datalog.explorer
 (defn query-entity-aspects             [db dev-id]                     ((requiring-resolve 'atlas.datalog.explorer/query-entity-aspects) db dev-id))
 (defn query-entity-type                [db dev-id]                     ((requiring-resolve 'atlas.datalog.explorer/query-entity-type) db dev-id))
@@ -730,9 +732,6 @@
       ;; Other result format - return as is
       results)))
 
-
-
-
 ;; Delegation stubs — protocol-oriented queries moved to atlas.datalog.protocol
 (defn query-protocol-implementers-by-domain [db]             ((requiring-resolve 'atlas.datalog.protocol/query-protocol-implementers-by-domain) db))
 (defn query-functions-using-protocol        [db protocol-kw] ((requiring-resolve 'atlas.datalog.protocol/query-functions-using-protocol) db protocol-kw))
@@ -753,14 +752,10 @@
 (comment
   (reset-db-cache!)
 
-
-
   (query-consumes (get-db) :mcp-api.endpoint/bank-fees-search)
   (query-produces (get-db) :mcp-api.endpoint/inbox-provider)
   (query-consumes (get-db) :endpoint/subscription)
   (query-dependencies (get-db) :endpoint/subscription)
   (query-dependencies (get-db) :endpoint/subscription)
   (query-entity-aspects (get-db) :endpoint/subscription)
-  (query-produces (get-db) :endpoint/subscription)
-
-  )
+  (query-produces (get-db) :endpoint/subscription))
