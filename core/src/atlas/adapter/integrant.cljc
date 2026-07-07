@@ -1,5 +1,6 @@
 (ns atlas.adapter.integrant
-  "Adapter to convert Integrant system configurations to Atlas registry definitions."
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — Adapter to convert Integrant system
+   configurations to Atlas registry definitions."
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]

@@ -1,5 +1,6 @@
 (ns atlas.adapter.tilakone
-  "Adapter: bidirectional transformer between tilakone FSMs and atlas workflows.
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — bidirectional transformer between
+   tilakone FSMs and atlas workflows.
 
    tilakone FSM → atlas workflow registrations:
      (tilakone->atlas fsm-def opts)

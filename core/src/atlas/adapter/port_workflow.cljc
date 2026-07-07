@@ -1,5 +1,6 @@
 (ns atlas.adapter.port-workflow
-  "Adapter: execution bridge for port.workflow/producer multimethods.
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — execution bridge for
+   port.workflow/producer multimethods.
 
    port.workflow/producer dispatch convention:
      (port.workflow/producer dispatch-key opts deps)
