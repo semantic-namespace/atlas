@@ -235,7 +235,7 @@ Falls back to the original order on error."
 (defun atlas-slice-refresh ()
   "Re-fetch from the REPL and re-render the current slice buffer."
   (interactive)
-  (if (not (cider-connected-p))
+  (if (not (or (cider-connected-p) (atlas--any-cider-repl)))
       (message "Atlas Slice: REPL unavailable — connect CIDER first")
     (let* ((seed-type atlas-slice--seed-type)
            (seed-arg  atlas-slice--seed-arg)

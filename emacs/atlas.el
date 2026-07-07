@@ -55,6 +55,7 @@
 (require 'atlas-lens)
 (require 'atlas-render)
 (require 'atlas-slice)
+(require 'atlas-layout)
 (require 'atlas-recent)
 (require 'atlas-at-point)
 (require 'atlas-testing)

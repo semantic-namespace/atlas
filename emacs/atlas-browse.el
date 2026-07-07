@@ -309,10 +309,7 @@ Step 3: display entity info for the selected entity."
                           'face 'font-lock-comment-face))
       (let ((deps-list (atlas--to-list deps)))
         (if (and deps-list (> (length deps-list) 0))
-            (dolist (d deps-list)
-              (insert "  ")
-              (atlas--insert-entity d)
-              (insert "\n"))
+            (atlas--insert-entity-list deps-list 10)
           (insert "  (nothing depends on this)\n")))
       (goto-char (point-min))
       (read-only-mode 1))
@@ -744,6 +741,86 @@ entity references recursively.  C-g exits at any step."
             (message "%s is not a registered entity" kw)
           ;; Strip leading colon for display / internal use
           (atlas--drill-entity (if (string-prefix-p ":" kw) (substring kw 1) kw)))))))
+
+;;;###autoload
+(defun atlas-browse-home ()
+  "Show registry overview: total entity count and breakdown by type.
+Each type is a clickable entry — click to open domain-survey for that type."
+  (interactive)
+  (let* ((result (atlas--eval-safe
+                  "(let [reg @atlas.registry/registry]
+                     {:total (count reg)
+                      :by-type (->> reg
+                                    (map (fn [[_ props]] (:atlas/type props)))
+                                    (remove nil?)
+                                    frequencies
+                                    (map (fn [[t cnt]] {:type (str t) :count cnt}))
+                                    (sort-by :type)
+                                    vec)})"))
+         (buf (atlas--buffer "home")))
+    (with-current-buffer buf
+      (setq atlas--last-command #'atlas-browse-home)
+      (atlas--insert-header "Atlas Registry")
+      (if (not result)
+          (insert (propertize "  (registry unavailable)\n" 'face 'font-lock-comment-face))
+        (let ((total   (atlas--get result 'total))
+              (by-type (atlas--to-list (atlas--get result 'by-type))))
+          (insert (propertize (format "  %d entities registered\n\n" total)
+                              'face 'font-lock-warning-face))
+          (atlas--insert-subheader "By type")
+          (dolist (entry by-type)
+            (let ((type-str (atlas--get entry 'type))
+                  (cnt      (atlas--get entry 'count)))
+              (insert "  ")
+              (atlas--insert-type type-str)
+              (insert (propertize (format "  (%d)" cnt)
+                                  'face 'font-lock-comment-face))
+              (insert "\n")))))
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
+
+;;;###autoload
+(defun atlas-browse-aspect-entities (aspect)
+  "Show all entities carrying ASPECT, grouped by type.
+Each type group collapses to 10 entities with a '… N more' button to reveal
+the rest — same collapsing model as the browser UI."
+  (interactive (list (read-string "Aspect (e.g. :domain/auth): " ":")))
+  (let* ((aspect-kw (if (string-prefix-p ":" aspect) aspect (concat ":" aspect)))
+         (result (atlas--eval-safe
+                  (format
+                   "(let [reg @atlas.registry/registry
+                          kw %s]
+                      (->> reg
+                           (filter (fn [[cid _]] (contains? cid kw)))
+                           (map (fn [[_ props]] props))
+                           (group-by :atlas/type)
+                           (map (fn [[t entities]]
+                                  {:type    (str t)
+                                   :count   (count entities)
+                                   :entities (vec (sort (map (fn [p] (str (:atlas/dev-id p)))
+                                                             entities)))}))
+                           (sort-by :type)
+                           vec))"
+                   aspect-kw)))
+         (buf (atlas--buffer (format "aspect:%s" aspect))))
+    (with-current-buffer buf
+      (setq atlas--last-command (lambda () (atlas-browse-aspect-entities aspect)))
+      (atlas--insert-header (format "Domain: %s" aspect))
+      (if (or (not result) (zerop (length result)))
+          (insert (propertize "  (no entities found for this aspect)\n"
+                              'face 'font-lock-comment-face))
+        (let ((groups (atlas--to-list result)))
+          (dolist (group groups)
+            (let* ((type-str (atlas--get group 'type))
+                   (count    (atlas--get group 'count))
+                   (entities (atlas--to-list (atlas--get group 'entities))))
+              (atlas--insert-subheader (format "%s (%d)" type-str count))
+              (atlas--insert-entity-list entities 10)
+              (insert "\n")))))
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (pop-to-buffer buf)))
 
 (provide 'atlas-browse)
 ;;; atlas-browse.el ends here

@@ -147,16 +147,64 @@
 
 ;;; Entity/Aspect Display
 
+(defun atlas--insert-entity-list (entities &optional threshold indent)
+  "Insert ENTITIES as clickable buttons, collapsing to THRESHOLD (default 10).
+INDENT is the prefix string (default \"  \").
+When the list exceeds threshold, show a clickable '… N more' button that
+reveals the remainder in-place.  Works with TAB / forward-button navigation."
+  (let* ((threshold (or threshold 10))
+         (indent    (or indent "  "))
+         (all       (if (vectorp entities) (append entities nil) entities))
+         (visible   (seq-take all threshold))
+         (hidden    (seq-drop all threshold))
+         (n-hidden  (length hidden)))
+    (dolist (e visible)
+      (insert indent)
+      (atlas--insert-entity e)
+      (insert "\n"))
+    (when (> n-hidden 0)
+      (insert indent)
+      (insert-text-button
+       (format "… %d more" n-hidden)
+       'face 'font-lock-comment-face
+       'hidden-entities hidden
+       'indent indent
+       'action (lambda (btn)
+                 (let ((hidden (button-get btn 'hidden-entities))
+                       (pfx    (button-get btn 'indent))
+                       (inhibit-read-only t))
+                   (delete-region (line-beginning-position) (1+ (line-end-position)))
+                   (dolist (e hidden)
+                     (insert pfx)
+                     (atlas--insert-entity e)
+                     (insert "\n"))))
+       'follow-link t
+       'help-echo "Click to reveal remaining entities")
+      (insert "\n"))))
+
+(defvar-local atlas-layout--entity-nav-fn nil
+  "Buffer-local navigation function for entity clicks.
+When non-nil, called with the entity string instead of the default
+atlas-browse-entity-info.  Set by layout functions to implement linked
+pane navigation (e.g. updating entity-info and source panes in place).
+Resolved dynamically at click time from the buffer containing the button.")
+
 (defun atlas--insert-entity (entity)
-  "Insert ENTITY with proper face and make it clickable."
+  "Insert ENTITY with proper face and make it clickable.
+If the current buffer has atlas-layout--entity-nav-fn set, entity clicks
+call that function instead of the default atlas-browse-entity-info.
+This enables linked-pane navigation from within a layout."
   (let ((entity-str (if (symbolp entity) (symbol-name entity) entity)))
     (insert-text-button entity-str
                         'face 'atlas-entity-face
                         'entity entity-str
                         'action (let ((e entity-str))
-                                  (lambda (_) (atlas-browse-entity-info e)))
+                                  (lambda (_)
+                                    (if atlas-layout--entity-nav-fn
+                                        (funcall atlas-layout--entity-nav-fn e)
+                                      (atlas-browse-entity-info e))))
                         'follow-link t
-                        'help-echo "Click: show info, d: jump to definition")))
+                        'help-echo "Click: update layout / show info")))
 
 (defun atlas--insert-aspect (aspect)
   "Insert ASPECT with proper face and make it clickable.
@@ -183,15 +231,15 @@ Handles edn-set objects by unwrapping and displaying as a set."
       (insert-text-button aspect-str
                           'face 'atlas-aspect-face
                           'action (let ((a aspect-str))
-                                    (lambda (_) (atlas-browse-find-by-aspect a)))
+                                    (lambda (_) (atlas-browse-aspect-entities a)))
                           'follow-link t
-                          'help-echo "Click to find entities with this aspect")))))
+                          'help-echo "Click to see all entities with this aspect")))))
 
 (defun atlas--insert-data-key (key)
   "Insert data KEY with proper face and make it clickable."
   (let ((key-str (if (symbolp key) (symbol-name key) key)))
     (insert-text-button key-str
-                        'face 'font-lock-variable-name-face
+                        'face 'atlas-data-key-face
                         'action (let ((k key-str))
                                   (lambda (_) (atlas-browse-producers k)))
                         'follow-link t
@@ -225,15 +273,32 @@ Handles edn-set representations from parseedn or other set formats."
 
 ;;; Business Semantics Display Helpers
 
+(defconst atlas--entity-ns-roots
+  '("fn" "endpoint" "function" "component" "schema" "protocol"
+    "pattern" "constraint" "failure-mode" "value" "role" "experience"
+    "business-pattern" "invariant" "workflow" "serial" "accounts-by-email")
+  "Known first namespace segments for entity dev-ids.
+Used to classify keywords in property values as entity refs vs data-keys.
+Dotted namespaces like :fn.auth0/... are matched by their first segment 'fn'.")
+
 (defun atlas--entity-keyword-p (value)
   "Check if VALUE is an entity reference keyword.
-Returns t if the namespace indicates it's an entity (endpoint, fn, component, etc.)."
-  (let ((name (cond ((symbolp value) (symbol-name value))
-                    ((stringp value) value)
-                    (t nil))))
-    (and name
-         (string-prefix-p ":" name)
-         (string-match-p "^:\\(endpoint\\|fn\\|function\\|component\\|schema\\|protocol\\|pattern\\|constraint\\|failure-mode\\|value\\|role\\|experience\\)/" name))))
+Extracts the first segment of the namespace (before any '.' or '/') and
+checks it against known entity namespace roots — so :fn.auth0/foo matches
+the same as :fn/foo."
+  (let ((s (cond ((symbolp value) (symbol-name value))
+                 ((stringp value) value)
+                 (t nil))))
+    (and s
+         (string-match "^:\\([^./]+\\)" s)
+         (member (match-string 1 s) atlas--entity-ns-roots))))
+
+(defun atlas--type-keyword-p (value)
+  "Return t if VALUE is an entity-type keyword like :atlas/execution-function."
+  (let ((s (cond ((symbolp value) (symbol-name value))
+                 ((stringp value) value)
+                 (t nil))))
+    (and s (string-match-p "^:atlas/" s))))
 
 (defun atlas--keyword-like-p (value)
   "Return t if VALUE looks like a keyword string or symbol."
@@ -242,11 +307,22 @@ Returns t if the namespace indicates it's an entity (endpoint, fn, component, et
                     (t nil))))
     (and name (string-prefix-p ":" name))))
 
+(defun atlas--insert-type (type)
+  "Insert TYPE keyword as a clickable chip — navigates to domain-survey for that type."
+  (let ((type-str (if (symbolp type) (symbol-name type) type)))
+    (insert-text-button type-str
+                        'face 'atlas-type-face
+                        'action (let ((tp type-str))
+                                  (lambda (_) (atlas-browse-aspect-entities tp)))
+                        'follow-link t
+                        'help-echo "Click to see all entities of this type")))
+
 (defun atlas--insert-keyword-value (value)
-  "Insert keyword VALUE as entity or data-key link."
-  (if (atlas--entity-keyword-p value)
-      (atlas--insert-entity value)
-    (atlas--insert-data-key value)))
+  "Insert keyword VALUE as entity, type, or data-key link."
+  (cond
+   ((atlas--entity-keyword-p value) (atlas--insert-entity value))
+   ((atlas--type-keyword-p value)   (atlas--insert-type value))
+   (t                               (atlas--insert-data-key value))))
 
 (defun atlas--insert-value (value)
   "Insert VALUE with basic formatting and links when possible."

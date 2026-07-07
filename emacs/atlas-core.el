@@ -49,12 +49,36 @@
   "Face for subheaders in atlas buffers.")
 
 (defface atlas-entity-face
-  '((t :inherit font-lock-function-name-face))
-  "Face for entity names.")
+  '((t :foreground "#2563eb" :weight bold))
+  "Face for entity dev-id buttons. Blue — matches the browser's entity chip color.")
 
 (defface atlas-aspect-face
-  '((t :inherit font-lock-type-face))
-  "Face for aspect keywords.")
+  '((t :foreground "#16a34a"))
+  "Face for aspect keyword buttons. Green — matches the browser's aspect chip color.")
+
+(defface atlas-type-face
+  '((t :foreground "#d97706"))
+  "Face for entity-type keyword buttons (:atlas/*). Amber — matches the browser's type chip color.")
+
+(defface atlas-data-key-face
+  '((t :foreground "#9333ea"))
+  "Face for data-key buttons. Purple — matches the browser's data-key chip color.")
+
+(defun atlas--apply-faces ()
+  "Apply atlas color palette. Re-apply after theme changes or file reload.
+defface does not override an already-defined face, so this function uses
+set-face-attribute to force the colors on every load."
+  (let ((dark (eq (frame-parameter nil 'background-mode) 'dark)))
+    (set-face-attribute 'atlas-entity-face nil
+      :foreground (if dark "#93c5fd" "#2563eb") :weight 'bold :inherit 'unspecified)
+    (set-face-attribute 'atlas-aspect-face nil
+      :foreground (if dark "#86efac" "#16a34a") :weight 'unspecified :inherit 'unspecified)
+    (set-face-attribute 'atlas-type-face nil
+      :foreground (if dark "#fcd34d" "#d97706") :weight 'unspecified :inherit 'unspecified)
+    (set-face-attribute 'atlas-data-key-face nil
+      :foreground (if dark "#d8b4fe" "#9333ea") :weight 'unspecified :inherit 'unspecified)))
+
+(atlas--apply-faces)
 
 (defface atlas-error-face
   '((t :inherit error :weight bold))
@@ -301,17 +325,32 @@ symbol syntax).  Only returns namespaced keywords (must contain '/')."
           (replace-match (concat atlas-ide-ns "/" sym) t t form 1)))
     form))
 
+(defun atlas--any-cider-repl ()
+  "Return any live CIDER REPL buffer, regardless of current buffer context.
+Used as a fallback when cider-connected-p returns nil in non-project buffers
+such as *atlas:* display buffers."
+  (seq-find (lambda (buf)
+              (with-current-buffer buf
+                (eq major-mode 'cider-repl-mode)))
+            (buffer-list)))
+
 (defun atlas--eval (form)
   "Evaluate FORM in CIDER and return parsed result.
-Returns nil on error with message to user."
-  (unless (cider-connected-p)
-    (user-error "CIDER not connected. Run cider-jack-in first"))
+Returns nil on error with message to user.
+When the current buffer has no CIDER project association (e.g. an *atlas:*
+display buffer), falls back to any live CIDER REPL buffer for the eval."
+  (let ((repl-buf (unless (cider-connected-p) (atlas--any-cider-repl))))
+    (unless (or (cider-connected-p) repl-buf)
+      (user-error "CIDER not connected. Run cider-jack-in first"))
   (let* ((qualified-form (atlas--qualify-ide-form form))
-         (code (format "(do 
+         (code (format "(do
 (set! *print-namespace-maps* false)
 (require '[%s]) %s)"
                        atlas-ide-ns qualified-form))
-         (result (cider-nrepl-sync-request:eval code)))
+         (result (if repl-buf
+                     (with-current-buffer repl-buf
+                       (cider-nrepl-sync-request:eval code))
+                   (cider-nrepl-sync-request:eval code))))
     (when atlas-debug
       (message "[atlas DEBUG] Evaluating: %s" form))
     (if-let ((err (nrepl-dict-get result "err")))
@@ -336,7 +375,7 @@ Returns nil on error with message to user."
                nil)))
         (progn
           (message "No value returned from evaluation")
-          nil)))))
+          nil))))))
 
 (defun atlas--eval-safe (form &optional default)
   "Evaluate FORM, returning DEFAULT (or nil) on any error."
