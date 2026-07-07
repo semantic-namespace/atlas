@@ -8,6 +8,7 @@
    - atlas.semantic-queries
    - atlas.registry.graph"
   (:require [atlas.registry]
+            [atlas.query.dataflow :as dataflow]
             [clojure.set :as set]))
 
 ;; =============================================================================
@@ -290,10 +291,14 @@
 ;; =============================================================================
 ;; Data Flow Queries — delegated to atlas.query.dataflow
 ;; =============================================================================
+;;
+;; atlas.query.dataflow has no requires (a leaf), so a direct require is
+;; cycle-free and works in both Clojure and ClojureScript (the browser UI uses
+;; these via atlas.ontology).
 
-(defn find-producers  [registry data-key property-key]              ((requiring-resolve 'atlas.query.dataflow/find-producers) registry data-key property-key))
-(defn find-consumers  [registry data-key property-key]              ((requiring-resolve 'atlas.query.dataflow/find-consumers) registry data-key property-key))
-(defn trace-data-flow [registry data-key producer-key consumer-key] ((requiring-resolve 'atlas.query.dataflow/trace-data-flow) registry data-key producer-key consumer-key))
+(defn find-producers  [registry data-key property-key]              (dataflow/find-producers registry data-key property-key))
+(defn find-consumers  [registry data-key property-key]              (dataflow/find-consumers registry data-key property-key))
+(defn trace-data-flow [registry data-key producer-key consumer-key] (dataflow/trace-data-flow registry data-key producer-key consumer-key))
 
 ;; =============================================================================
 ;; Algebraic Operations
@@ -345,17 +350,26 @@
 ;; =============================================================================
 ;; Architecture Analysis — delegated to atlas.query.architecture
 ;; =============================================================================
+;;
+;; JVM-only: atlas.query.architecture / atlas.query.compliance require back into
+;; atlas.query, so these delegate lazily via requiring-resolve to avoid a
+;; load-time cycle. cljs has no requiring-resolve and the browser UI does not
+;; use these (only JVM-side atlas.ide does), so they are elided in cljs.
 
-(defn dependency-graph  [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/dependency-graph) registry id-key deps-key))
-(defn by-tier           [registry id-key]                                   ((requiring-resolve 'atlas.query.architecture/by-tier) registry id-key))
-(defn domain-coupling   [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/domain-coupling) registry id-key deps-key))
-(defn impact-of-change  [registry entity-id id-key deps-key response-key]   ((requiring-resolve 'atlas.query.architecture/impact-of-change) registry entity-id id-key deps-key response-key))
+#?(:clj
+   (do
+     (defn dependency-graph  [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/dependency-graph) registry id-key deps-key))
+     (defn by-tier           [registry id-key]                                   ((requiring-resolve 'atlas.query.architecture/by-tier) registry id-key))
+     (defn domain-coupling   [registry id-key deps-key]                          ((requiring-resolve 'atlas.query.architecture/domain-coupling) registry id-key deps-key))
+     (defn impact-of-change  [registry entity-id id-key deps-key response-key]   ((requiring-resolve 'atlas.query.architecture/impact-of-change) registry entity-id id-key deps-key response-key))))
 
 ;; =============================================================================
 ;; Compliance & Coverage — delegated to atlas.query.compliance
 ;; =============================================================================
 
-(defn pii-surface              [registry id-key context-key response-key]  ((requiring-resolve 'atlas.query.compliance/pii-surface) registry id-key context-key response-key))
-(defn aspect-coverage          [registry entity-type id-key aspects]       ((requiring-resolve 'atlas.query.compliance/aspect-coverage) registry entity-type id-key aspects))
-(defn error-handler-coverage   [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/error-handler-coverage) registry id-key))
-(defn decisions-by-category    [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/decisions-by-category) registry id-key))
+#?(:clj
+   (do
+     (defn pii-surface              [registry id-key context-key response-key]  ((requiring-resolve 'atlas.query.compliance/pii-surface) registry id-key context-key response-key))
+     (defn aspect-coverage          [registry entity-type id-key aspects]       ((requiring-resolve 'atlas.query.compliance/aspect-coverage) registry entity-type id-key aspects))
+     (defn error-handler-coverage   [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/error-handler-coverage) registry id-key))
+     (defn decisions-by-category    [registry id-key]                           ((requiring-resolve 'atlas.query.compliance/decisions-by-category) registry id-key))))

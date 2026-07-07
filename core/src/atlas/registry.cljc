@@ -364,17 +364,23 @@
 ;; Entity Type Helpers
 ;; =============================================================================
 
-(defn registered-types
-  "Return all registered entity types (those with :atlas/type in their identity).
-   :deprecated Use (atlas.ontology/all-ontologies) instead — queries :atlas/ontology
-   compound-ids which are always present, unlike :atlas/type meta-registrations."
-  {:deprecated "0.2.0"}
+(defn- registered-types*
+  "Impl shared by the (deprecated) public `registered-types` and internal
+   callers, so internal use doesn't trip the deprecation warning."
   []
   (->> @registry
        keys
        (filter #(contains? % :atlas/type))
        (map (fn [id] (first (disj id :atlas/type))))
        set))
+
+(defn registered-types
+  "Return all registered entity types (those with :atlas/type in their identity).
+   :deprecated Use (atlas.ontology/all-ontologies) instead — queries :atlas/ontology
+   compound-ids which are always present, unlike :atlas/type meta-registrations."
+  {:deprecated "0.2.0"}
+  []
+  (registered-types*))
 
 (defn entity-type
   "Extract the entity type from a compound identity.
@@ -384,7 +390,7 @@
 
   Returns the entity type keyword or nil."
   [identity]
-  (let [types (registered-types)
+  (let [types (registered-types*)
         type-in-id (first (set/intersection identity types))]
     type-in-id
     #_(or type-in-id
@@ -418,7 +424,7 @@
 (defn validate-registry-types
   "Validate that all registered entities use known types."
   []
-  (let [types (registered-types)
+  (let [types (registered-types*)
         all-identities (vec (keys @registry))
         violations (for [id all-identities
                          :when (not (contains? id :atlas/type))
@@ -479,11 +485,17 @@
 ;; =============================================================================
 ;; Analytical Utilities — delegated to atlas.registry.analysis
 ;; =============================================================================
+;;
+;; JVM-only: these lazily resolve atlas.registry.analysis (which requires back
+;; into atlas.registry / atlas.query) to avoid a load-time cycle. cljs has no
+;; requiring-resolve and the browser UI does not use these, so they are elided.
 
-(defn clusters           [] ((requiring-resolve 'atlas.registry.analysis/clusters)))
-(defn correlation-matrix [] ((requiring-resolve 'atlas.registry.analysis/correlation-matrix)))
-(defn missing-aspects    [identity-set] ((requiring-resolve 'atlas.registry.analysis/missing-aspects) identity-set))
-(defn find-anomalies     [] ((requiring-resolve 'atlas.registry.analysis/find-anomalies)))
-(defn to-graphviz        [] ((requiring-resolve 'atlas.registry.analysis/to-graphviz)))
-(defn to-mermaid         [] ((requiring-resolve 'atlas.registry.analysis/to-mermaid)))
-(defn summary            [] ((requiring-resolve 'atlas.registry.analysis/summary)))
+#?(:clj
+   (do
+     (defn clusters           [] ((requiring-resolve 'atlas.registry.analysis/clusters)))
+     (defn correlation-matrix [] ((requiring-resolve 'atlas.registry.analysis/correlation-matrix)))
+     (defn missing-aspects    [identity-set] ((requiring-resolve 'atlas.registry.analysis/missing-aspects) identity-set))
+     (defn find-anomalies     [] ((requiring-resolve 'atlas.registry.analysis/find-anomalies)))
+     (defn to-graphviz        [] ((requiring-resolve 'atlas.registry.analysis/to-graphviz)))
+     (defn to-mermaid         [] ((requiring-resolve 'atlas.registry.analysis/to-mermaid)))
+     (defn summary            [] ((requiring-resolve 'atlas.registry.analysis/summary)))))
