@@ -140,9 +140,8 @@ dot -Tsvg export/myapp/orders-concept-view.dot -o orders.svg
 ```
 
 A full worked example (multi-domain slice, rendered C4 + concept diagrams) built
-against a real production registry lives in the **yorba-clj** repo under
-`atlas-docs/adapter-overarch/` — kept there because the diagrams embed
-company-specific entity data.
+against a real production registry is kept in the downstream consumer's own repo
+— out of this repo because the diagrams embed that project's entity data.
 
 ## Known limitations
 
