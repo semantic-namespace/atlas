@@ -31,7 +31,6 @@ EXAMPLES:
     $0 --install               # Install all to local Maven
     $0 --deploy                # Deploy all to Clojars
     $0 --install --core        # Install core only
-    $0 --install --core --dev  # Install core + dev-tools
     $0 --deploy --ui           # Deploy ui only
 
 EOF
@@ -56,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# No module flags = build all
+# No module flags = build all (public) modules
 if [ "$HAS_MODULE_FLAG" = false ]; then
     BUILD_CORE=true; BUILD_DEV=true; BUILD_UI=true
 fi
