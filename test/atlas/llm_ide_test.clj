@@ -29,6 +29,9 @@
 (defn setup-test-registry! []
   ;; Reset DB cache since we're adding new entities
   (datalog/reset-db-cache!)
+  ;; Register built-in entity types so entity-type/aspects resolve (documented
+  ;; first step; required by aspect-based tools like list-aspects).
+  (ontology/register-entity-types!)
   ;; Foundation - each needs unique identity
   (registry/register!
    :component/db

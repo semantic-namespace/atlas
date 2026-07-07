@@ -120,10 +120,13 @@
             :entity/identity [:atlas/execution-function :domain/alpha :tier/service]
             :entity/aspects [:domain/alpha :tier/service]
             :entity/definition-keys [:atlas/dev-id
+                                     :atlas/type
                                      :execution-function/context
                                      :execution-function/response
-                                     :execution-function/deps]
+                                     :execution-function/deps
+                                     :atlas/impl]
             :entity/definition-values {:atlas/dev-id :fn/alpha
+                                       :atlas/type :atlas/execution-function
                                        :execution-function/deps [:component/storage]}
             :interface-endpoint/context [:alpha/flag :alpha/input]
             :interface-endpoint/response [:alpha/output]

@@ -82,7 +82,9 @@
     :workflow/initial-producer :wp/fetch-inventory
     :workflow/transitions {:wp/fetch-inventory {:signal/in-stock :wp/reserve-stock
                                                 :signal/out-of-stock :wp/notify-shipping}
-                           :wp/reserve-stock   {:signal/reserved :wp/notify-shipping}}}))
+                           :wp/reserve-stock   {:signal/reserved :wp/notify-shipping}}
+    :workflow/context #{:warehouse/sku}
+    :workflow/async-effect #{:fn/notify-shipping}}))
 
 ;; =============================================================================
 ;; SPEC TESTS
@@ -116,7 +118,9 @@
     (is (s/valid? :atlas/workflow-props
                   {:workflow/producers #{:wp/a :wp/b}
                    :workflow/initial-producer :wp/a
-                   :workflow/transitions {:wp/a {:signal/x :wp/b}}})))
+                   :workflow/transitions {:wp/a {:signal/x :wp/b}}
+                   :workflow/context #{:data/in}
+                   :workflow/async-effect #{:fx/notify}})))
 
   (testing "missing transitions rejected"
     (is (not (s/valid? :atlas/workflow-props
@@ -134,7 +138,9 @@
                   {:workflow/producers #{:wp/a :wp/b :wp/c}
                    :workflow/initial-producer :wp/a
                    :workflow/transitions {:wp/a {:signal/success :wp/b}
-                                          :wp/b {:signal/success :wp/c}}}))))
+                                          :wp/b {:signal/success :wp/c}}
+                   :workflow/context #{:data/in}
+                   :workflow/async-effect #{:fx/notify}}))))
 
 ;; =============================================================================
 ;; ONTOLOGY REGISTRATION TESTS
@@ -149,7 +155,8 @@
 
   (testing "workflow ontology is registered"
     (is (some? (ontology/ontology-for :atlas/workflow)))
-    (is (= [:workflow/producers :workflow/initial-producer :workflow/transitions]
+    (is (= [:workflow/producers :workflow/initial-producer :workflow/transitions
+            :workflow/async-effect :workflow/context]
            (:ontology/keys (ontology/ontology-for :atlas/workflow))))))
 
 ;; =============================================================================

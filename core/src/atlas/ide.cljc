@@ -193,9 +193,7 @@
   ([]
    (list-aspects (cid/current-registry)))
   ([registry]
-   (let [;; Get registered entity types dynamically
-         entity-types (cid/registered-types)
-         ;; Count aspect usage, excluding entity types
+   (let [;; Count aspect usage (cid/aspects strips the entity type per identity)
          counts (reduce (fn [acc identity]
                           (let [aspects (cid/aspects identity)]
                             (reduce (fn [m aspect]
@@ -264,8 +262,9 @@
                        (keys registry))]
      (vec (sort names)))))
 
-(defn entities-with-aspect [aspect]
+(defn entities-with-aspect
   "Find all entities with given aspect."
+  [aspect]
   (->> (rt/all-with-aspect (ensure-keyword aspect))
        (remove nil?)
        sort
@@ -297,7 +296,7 @@
                                           :atlas/schema)))
          :entity/definition-keys definition-keys
          :entity/definition-values definition-values
-         :interface-endpoint/context (into (vec (sort (ot/deps-for dev-id-kw))) (vec (sort (ot/context-for dev-id-kw))))
+         :interface-endpoint/context (vec (sort (ot/context-for dev-id-kw)))
          :interface-endpoint/response (vec (sort (ot/response-for dev-id-kw)))
          :execution-function/deps (vec (sort (ot/deps-for dev-id-kw)))
          :atlas/fields (vec (sort (fields-for props)))}))))
@@ -331,8 +330,9 @@
 ;; VALIDATION API
 ;; =============================================================================
 
-(defn check-invariants []
+(defn check-invariants
   "Run all invariant checks and return results."
+  []
   (let [{:keys [valid? errors warnings]} (ax/check-all)]
     {:invariant/valid? valid?
      :invariant/error-count (count errors)
@@ -340,8 +340,9 @@
      :invariant/errors (mapv #(select-keys % [:invariant :message]) errors)
      :invariant/warnings (mapv #(select-keys % [:invariant :message]) warnings)}))
 
-(defn validate-entity [dev-id]
+(defn validate-entity
   "Check invariants relevant to a specific entity."
+  [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)
         {:keys [errors warnings]} (ax/check-all)
         dev-id-str (str dev-id-kw)
@@ -358,16 +359,19 @@
 ;; DOCUMENTATION API
 ;; =============================================================================
 
-(defn entity-doc [dev-id]
+(defn entity-doc
   "Get documentation for an entity."
+  [dev-id]
   (docs/enrich-with-descriptions (ensure-keyword dev-id)))
 
-(defn system-summary []
+(defn system-summary
   "Get system overview."
+  []
   (docs/system-overview))
 
-(defn generate-markdown []
+(defn generate-markdown
   "Generate full markdown documentation."
+  []
   (docs/generate-markdown))
 
 ;; =============================================================================

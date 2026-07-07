@@ -371,13 +371,17 @@
        :affected-count (count migrations)
        :migrations migrations
        :conflicts (filter :will-collide? migrations)}
-      (do
-        (doseq [{:keys [old-id new-id]} migrations
-                :when (not (:will-collide? (first migrations)))]
+      ;; Skip only the migrations that would collide with an existing identity
+      ;; (was checking (first migrations) for every element, so a single leading
+      ;; collision skipped everything and a non-colliding first let colliding
+      ;; ones silently overwrite existing entities).
+      (let [applied (remove :will-collide? migrations)]
+        (doseq [{:keys [old-id new-id]} applied]
           (let [value (registry/fetch old-id)]
             (registry/remove old-id)
             (swap! registry/registry assoc new-id value)))
-        {:migrated (count migrations)}))))
+        {:migrated (count applied)
+         :skipped-conflicts (count (filter :will-collide? migrations))}))))
 
 ;; =============================================================================
 ;; DOCUMENTATION TOOLS - Auto-generation
