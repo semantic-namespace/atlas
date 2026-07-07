@@ -63,7 +63,8 @@ fi
 
 if [ "$DEPLOY" = true ]; then
     echo -e "${GREEN}Deploying to Clojars...${NC}"
-    VERSION=$(grep "def version" build.clj | sed -e 's/.*"\(.*\)".*/\1/')
+    # Version comes from the single source of truth (root VERSION file)
+    VERSION=$(tr -d '[:space:]' < ../VERSION)
     JAR_FILE="target/atlas-dev-${VERSION}.jar"
     if [ ! -f "$JAR_FILE" ]; then
         echo -e "${RED}ERROR: JAR file not found: $JAR_FILE${NC}"

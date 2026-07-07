@@ -4,7 +4,11 @@
             [clojure.java.io :as io]))
 
 (def lib 'io.github.semantic-namespace/atlas-dev)
-(def version "0.1.10-SNAPSHOT")
+;; Single source of version truth for all modules: the root VERSION file.
+;; Build normally runs from the module dir (../VERSION); fall back to VERSION
+;; when invoked from the repo root.
+(def version
+  (.trim (slurp (if (.exists (io/file "../VERSION")) "../VERSION" "VERSION"))))
 (def class-dir "target/classes")
 (def basis (b/create-basis {:project "deps.edn"}))
 (def jar-file (format "target/%s-%s.jar" (name lib) version))

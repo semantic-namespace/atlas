@@ -130,8 +130,8 @@ fi
 if [ "$DEPLOY" = true ]; then
     echo -e "${GREEN}Deploying to Clojars...${NC}"
 
-    # Extract version from build.clj and find the JAR file
-    VERSION=$(grep "def version" build.clj | sed -e 's/.*"\(.*\)".*/\1/')
+    # Version comes from the single source of truth (root VERSION file)
+    VERSION=$(tr -d '[:space:]' < ../VERSION)
     JAR_FILE="target/atlas-ui-${VERSION}.jar"
 
     if [ ! -f "$JAR_FILE" ]; then
