@@ -3,6 +3,7 @@
   (:require [atlas.registry :as registry]
             [atlas.query :as q]
             [atlas.registry.lookup :as entity]
+            [atlas.ontology.type-ref :as type-ref]
             [clojure.set :as set]
             [clojure.string :as str]))
 
@@ -11,9 +12,15 @@
 ;; =============================================================================
 
 (defn all-ontologies
-  "Return all registered ontologies from the registry."
+  "Return all registered ontology DESCRIPTORS — entities whose :atlas/type is
+   :atlas/ontology. Aspect matching alone would also pick up the :atlas/type
+   registration for the ontology type itself (#{:atlas/type :atlas/ontology},
+   created by register-entity-types!), which is not a descriptor — that leak
+   made repeated register-entity-types! calls fail."
   []
-  (q/find-by-aspect (registry/current-registry) :atlas/ontology))
+  (into {}
+        (filter (fn [[_ props]] (= :atlas/ontology (:atlas/type props))))
+        (q/find-by-aspect (registry/current-registry) :atlas/ontology)))
 
 (defn ontology-for
   "Return the ontology definition for a given entity type from the registry.
@@ -495,12 +502,38 @@
   Validates that :ontology/not-serialisable-keys is a subset of :ontology/keys."
   []
   (let [ontologies (all-ontologies)]
-    (doseq [[_ ont] ontologies
+    (doseq [[k ont] ontologies
             :let [entity-type (:ontology/for ont)]]
+      ;; guard: a descriptor without :ontology/for would otherwise reach
+      ;; register! as a cryptic (assert ...) on the #{nil} compound-id
+      (when (nil? entity-type)
+        (throw (ex-info (str "Ontology descriptor has no :ontology/for — cannot "
+                             "register its entity type: " k)
+                        {:descriptor-key k :dev-id (:atlas/dev-id ont)})))
       ;; Validate ontology before registering type
       (validate-ontology ont)
+      ;; dev-id is :atlas.type/<name>, NOT entity-type itself.
+      ;;
+      ;; Atlas identity is a DOUBLE system — compound-id (what an entity means)
+      ;; and dev-id (how you address it) — and both must be unique. Registering
+      ;; this marker under `entity-type` gave it the same dev-id as the ONTOLOGY
+      ;; entity for that type (e.g. :atlas/decision is both the ontology and the
+      ;; type marker). Their compound-ids differ (#{:atlas/decision
+      ;; :atlas/ontology} vs #{:atlas/decision :atlas/type}) so both should
+      ;; coexist — but compile! collapses by dev-id FIRST (last-write-wins,
+      ;; which is what makes REPL re-evaluation work), so this marker silently
+      ;; overwrote the ontology entity.
+      ;;
+      ;; That destroyed every ontology-declared mechanism in any registry that
+      ;; calls this fn: :ontology/intrinsic-aspects and :ontology/dep-target?
+      ;; both vanished, and their features no-op'd with no error. Found
+      ;; 2026-07-16 via `discover-intrinsic-aspects` returning 0 in a registry
+      ;; whose ontologies demonstrably declared 16 aspects.
+      ;;
+      ;; The compound-id is unchanged, so aspect-based lookups
+      ;; (#{entity-type :atlas/type}) are unaffected.
       (registry/register!
-       entity-type
+       (keyword "atlas.type" (name entity-type))
        :atlas/type
        #{entity-type}  ; Include entity-type as aspect to prevent compound-id collision
        {:registry-definition/keys (vec (cons :atlas/dev-id (:ontology/keys ont)))}))
@@ -521,7 +554,57 @@
                   :dataflow/context-key :dataflow/context-verb
                   :dataflow/response-key :dataflow/response-verb
                   :dataflow/deps-key
-                  :dataflow/extra-verbs]})
+                  :dataflow/extra-verbs
+                  ;; :ontology/dep-target? — may an :execution-function/deps
+                  ;; legally point at an entity of this type?
+                  ;;
+                  ;; Declared here rather than hardcoded in
+                  ;; :invariant/deps-reference-valid-types, which until
+                  ;; 2026-07-16 carried a closed
+                  ;; #{:atlas/execution-function :atlas/structure-component}.
+                  ;; That list is unknowable from core: a downstream ontology
+                  ;; can define a perfectly real runtime dependency — yorba-clj
+                  ;; has 257 :atlas/yorba-mcp-tool and 64 :atlas/yorba-endpoint
+                  ;; entities, and a function calling an MCP tool IS depending
+                  ;; on it — with no way to opt in. Core would reject the true
+                  ;; fact and push authors to delete it.
+                  ;;
+                  ;; Openness is the point: core owns the seam, downstream owns
+                  ;; the specializations. An ontology declares its own
+                  ;; dep-ability, exactly as it already declares its keys and
+                  ;; its dataflow verbs.
+                  :ontology/dep-target?
+
+                  ;; :ontology/intrinsic-aspects — a set of aspects that are
+                  ;; properties of the ENTITY ITSELF and must never be inherited
+                  ;; through any edge.
+                  ;;
+                  ;; Aspect expansion propagates a dep's aspects to its
+                  ;; dependents, which is right for CHARACTERISTIC aspects (a
+                  ;; function calling a Gmail function does involve Gmail; a
+                  ;; subtree containing an llm leaf does involve an llm). It is
+                  ;; wrong for INTRINSIC ones, where inheriting produces a
+                  ;; contradiction rather than a fact:
+                  ;;
+                  ;;   node-type — declared mutually exclusive per node, yet a
+                  ;;     sequence inherited :behavior-tree/leaf from its
+                  ;;     children, so every node answered to every node-type and
+                  ;;     `by-aspect :behavior-tree/leaf` returned the whole tree
+                  ;;     instead of the leaves.
+                  ;;   lifecycle — a :status/superseded decision inherited
+                  ;;     :status/active from its authority and carried BOTH.
+                  ;;
+                  ;; The axis is NOT composition-vs-reference. That was tried
+                  ;; (2026-07-16, gating inheritance on :entity/depends) and cut
+                  ;; wrong: it collapsed yorba-clj's dataflow vocabulary
+                  ;; (:entity/id 131 -> 14 carriers) while still leaking
+                  ;; node-type through :behavior-tree/children, which is an
+                  ;; :entity/depends edge. Intrinsic-ness is a property of the
+                  ;; ASPECT, not of the edge — and :behavior-tree/leaf
+                  ;; (intrinsic) and :behavior-tree/llm (characteristic) share a
+                  ;; namespace, so it cannot be inferred from naming either.
+                  ;; Only the ontology that owns the vocabulary knows.
+                  :ontology/intrinsic-aspects]})
 
 (registry/register!
  :ontology/datalog-extractor
@@ -536,8 +619,34 @@
  :atlas/ontology
  #{:atlas/invariant}
  {:ontology/for :atlas/invariant
-  :ontology/keys [:invariant/fn]
+  ;; :invariant/fn is the executable body (in-process only); :invariant/severity
+  ;; and :invariant/docs are GENERIC invariant metadata as data, so a sanitised
+  ;; snapshot still carries what the rule MEANS even though the body was stripped.
+  ;; Domain-specific edge props (e.g. grain's :invariant/subject → :invariant/governs)
+  ;; are NOT enumerated here — a domain adds them via a type-ref sourced at
+  ;; :atlas/invariant, loaded in that domain's REPL, picked up by the generic
+  ;; extractor below.
+  :ontology/keys [:invariant/fn :invariant/severity :invariant/docs]
   :ontology/not-serialisable-keys [:invariant/fn]})
+
+;; The OPEN SEAM for invariants. Mirrors the data-schema / execution-function
+;; extractors: it delegates to extract-reference-facts, so ANY type-ref sourced
+;; at :atlas/invariant (registered by whatever domain wants it) becomes datalog
+;; edges — core never names the property or verb. Verb cardinality is derived
+;; from the type-ref itself (build-schema / derive-schema), so none is declared
+;; here. This is what lets a non-atlas-author extend invariants from their own
+;; REPL without touching core.
+(registry/register!
+ :datalog-extractor/invariant
+ :atlas/datalog-extractor
+ #{:meta/invariant-extractor}
+ {:datalog-extractor/fn
+  (fn [compound-id props]
+    (when (contains? compound-id :atlas/invariant)
+      (type-ref/extract-reference-facts :atlas/invariant compound-id props)))
+  ;; verbs and cardinalities come from the type-refs themselves via
+  ;; type-ref-verb-schema — no static schema contribution
+  :datalog-extractor/schema {}})
 
 ;; =============================================================================
 ;; ONTOLOGY MODULES

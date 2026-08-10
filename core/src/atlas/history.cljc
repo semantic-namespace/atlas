@@ -167,9 +167,15 @@
    rename-dev-ids:  map of {old-dev-id new-dev-id} from the transform spec (nil if none)"
   [conn registry version prev-registry rename-dev-ids]
   (let [inv-renames (set/map-invert (or rename-dev-ids {}))
-        ;; Build index of prev-registry by dev-id for fast lookup
+        ;; Build index of prev-registry by dev-id for fast lookup. A dev-id can
+        ;; legitimately map to several compound-ids (e.g. an ontology descriptor
+        ;; and its :atlas/type registration share the type keyword as dev-id),
+        ;; so keep them all and prefer an exact compound-id match at lookup —
+        ;; last-wins pairing here produced phantom type-changed diffs.
         prev-by-dev-id (when prev-registry
-                         (into {} (map (fn [[k v]] [(:atlas/dev-id v) k]) prev-registry)))
+                         (reduce (fn [m [k v]]
+                                   (update m (:atlas/dev-id v) (fnil conj #{}) k))
+                                 {} prev-registry))
         ;; Snap txdata for entities present in this version
         snap-txdata
         (mapcat
@@ -179,7 +185,10 @@
                  aspects     (disj compound-id etype)
                  prev-dev-id (get inv-renames dev-id)
                  lookup-id   (or prev-dev-id dev-id)
-                 prev-cid    (get prev-by-dev-id lookup-id)
+                 prev-cid    (when-let [cids (get prev-by-dev-id lookup-id)]
+                               (if (contains? cids compound-id)
+                                 compound-id
+                                 (first cids)))
                  prev-props  (when prev-cid (get prev-registry prev-cid))
                  prev-etype  (when prev-props (:atlas/type prev-props))
                  prev-asp    (when prev-cid (disj prev-cid (or prev-etype etype)))

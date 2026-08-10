@@ -85,6 +85,19 @@
   (->> (type-ref-entries reg)
        (filter #(= source-ontology (:type-ref/source %)))))
 
+(defn- type-ref-verb-schema
+  "Datascript schema contributed by type-refs: each type-ref's datalog-verb →
+   its cardinality. Lets any domain introduce a NEW verb just by registering a
+   type-ref — no extractor-schema needed. Both the live path (build-schema) and
+   the snapshot path (derive-schema) read verb cardinality from here, so an
+   extension works identically in-process and on a pulled snapshot."
+  [reg]
+  (->> (type-ref-entries reg)
+       (map (fn [tr]
+              {(:type-ref/datalog-verb tr)
+               {:db/cardinality (:type-ref/cardinality tr)}}))
+       (apply merge)))
+
 (defn generic-extract-facts
   "Extract datalog facts from a single entity using only registry metadata.
    Works on serialised snapshots — no extractor functions needed.
@@ -172,7 +185,10 @@
                                 vals
                                 (map :datalog-extractor/schema)
                                 (remove nil?))]
-     (apply merge (core-schema) extractor-schemas))))
+     ;; type-ref-derived verb schema first, extractor schemas last (authoritative
+     ;; on conflict). This is what lets a domain add a new type-ref verb (e.g.
+     ;; :invariant/governs) and have it schema'd in the live path with no core edit.
+     (apply merge (core-schema) (type-ref-verb-schema reg) extractor-schemas))))
 
 (defn derive-schema
   "Derive datascript schema from type-ref and ontology metadata in a registry.
@@ -181,11 +197,7 @@
   (merge
    (core-schema)
    ;; From type-refs
-   (->> (type-ref-entries reg)
-        (map (fn [tr]
-               {(:type-ref/datalog-verb tr)
-                {:db/cardinality (:type-ref/cardinality tr)}}))
-        (apply merge))
+   (type-ref-verb-schema reg)
    ;; From dataflow verbs
    (->> (ontology-entries reg)
         (mapcat (fn [ont]

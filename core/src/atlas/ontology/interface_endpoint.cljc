@@ -103,9 +103,14 @@
  :invariant/endpoints-are-api-tier
  :atlas/invariant
  #{:meta/api-tier-check}
- {:invariant/fn (fn []
+ {:invariant/severity :error
+  :invariant/docs
+  "Interface endpoints should carry :tier/api — the API layer is where the
+   system's surface lives."
+  :invariant/fn (fn []
                   (let [endpoints (->> (entity/all-with-aspect :atlas/interface-endpoint)
-                                       (remove #(entity/has-aspect? % :atlas/ontology)))
+                                       (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                                    (entity/has-aspect? % :atlas/type))))
                         violations (remove #(entity/has-aspect? % :tier/api) endpoints)]
                     (when (seq violations)
                       {:invariant :endpoints-are-api-tier
@@ -118,7 +123,11 @@
  :invariant/all-fns-reachable
  :atlas/invariant
  #{:meta/reachability-check}
- {:invariant/fn (fn []
+ {:invariant/severity :warning
+  :invariant/docs
+  "Every execution-function should be reachable from some interface-endpoint
+   via deps — business logic no endpoint can reach is dead code."
+  :invariant/fn (fn []
                   "Every execution-function should be reachable from some endpoint.
 
    This invariant expresses that all business logic (execution-functions)
@@ -133,7 +142,8 @@
                   (let [endpoints (entity/all-with-aspect :atlas/interface-endpoint)
         ;; Get all execution-functions but exclude ontology meta-entities
                         all-fns (->> (entity/all-with-aspect :atlas/execution-function)
-                                     (remove #(entity/has-aspect? % :atlas/ontology))
+                                     (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                                  (entity/has-aspect? % :atlas/type)))
                                      set)
         ;; Find reachable via BFS from endpoints
                         reachable (atom #{})

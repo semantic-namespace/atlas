@@ -45,6 +45,8 @@
  #{:atlas/structure-component}
  {:ontology/for :atlas/structure-component
   :ontology/keys [:structure-component/deps]
+  ;; a function may depend on an infrastructure component (using it)
+  :ontology/dep-target? true
   :dataflow/deps-key :structure-component/deps})
 
 ;; Type-ref: structure-component → structure-component (self-ref deps)
@@ -76,11 +78,16 @@
  :invariant/components-are-foundation
  :atlas/invariant
  #{:meta/foundation-tier-check}
- {:invariant/fn (fn []
+ {:invariant/severity :error
+  :invariant/docs
+  "Structure components should live in :tier/foundation — infrastructure sits
+   below the service and API tiers."
+  :invariant/fn (fn []
                   ;; "Components should be :tier/foundation."
                   (let [components (entity/all-with-aspect :atlas/structure-component)
 
                         violations (remove #(or (entity/has-aspect? % :atlas/ontology)
+                                                (entity/has-aspect? % :atlas/type)
                                                 (entity/has-aspect? % :tier/foundation)) components)]
                     (when (seq violations)
                       {:invariant :components-are-foundation
@@ -93,7 +100,12 @@
  :invariant/protocol-exists
  :atlas/invariant
  #{:meta/protocol-existence-check}
- {:invariant/fn (fn 
+ {:invariant/severity :error
+  :invariant/docs
+  "Components that declare protocol aspects must have those protocols
+   registered — a protocol aspect referencing no :atlas/interface-protocol
+   entity is a dangling contract."
+  :invariant/fn (fn
                   []
                   ;; "Components that declare protocol aspects must have those protocols registered."
                   (let [known-protocols (registered-protocol-ids)
@@ -121,7 +133,12 @@
  :invariant/protocol-conformance
  :atlas/invariant
  #{:meta/protocol-conformance-check}
- {:invariant/fn (fn []
+ {:invariant/severity :warning
+  :invariant/docs
+  "Components implementing a protocol must provide all functions declared in
+   the protocol's :protocol/functions — warning-level because implementations
+   may be supplied at runtime."
+  :invariant/fn (fn []
                   "Components implementing a protocol must provide all required protocol functions.
 
    Checks that component's implementation map contains all methods declared

@@ -139,9 +139,19 @@ clojure -Sdeps '{:deps {org.clojars.quoll/tiara {:mvn/version "0.5.2"}
 dot -Tsvg export/myapp/orders-concept-view.dot -o orders.svg
 ```
 
-A full worked example (multi-domain slice, rendered C4 + concept diagrams) built
-against a real production registry is kept in the downstream consumer's own repo
-— out of this repo because the diagrams embed that project's entity data.
+## Worked example — Internet Banking System
+
+The canonical C4 [Internet Banking System](https://c4model.com) is coded as an
+Atlas registry in [`test/app/internet_banking.clj`](../test/app/internet_banking.clj)
+(13 entities, passes `check-all`). Exporting it through this adapter and rendering
+with GraphViz:
+
+![Internet Banking System](adapter-overarch/banking/banking-concept-view.png)
+
+Artifacts in [`adapter-overarch/banking/`](adapter-overarch/banking/):
+`model.edn`, `views.edn`, `banking-concept-view.dot` / `.png`. Endpoints (API
+tier) depend on functions (service tier) which depend on components / external
+systems (foundation tier); the three data-schemas have no dependencies.
 
 ## Known limitations
 

@@ -140,20 +140,37 @@
 
 (defn- discover-type-refs
   "Read type-ref declarations from a base registry map (not the live atom).
-   Returns a seq of {:source kw :property kw :cardinality kw}."
+   Returns a seq of {:source kw :property kw :cardinality kw :datalog-verb kw}."
   [base-map]
   (->> (vals base-map)
        (filter #(= :atlas/type-ref (:atlas/type %)))
        (keep (fn [props]
                (when (:type-ref/property props)
-                 {:source      (:type-ref/source props)
-                  :property    (:type-ref/property props)
-                  :cardinality (:type-ref/cardinality props)})))
+                 {:source       (:type-ref/source props)
+                  :property     (:type-ref/property props)
+                  :cardinality  (:type-ref/cardinality props)
+                  :datalog-verb (:type-ref/datalog-verb props)})))
        vec))
 
+(defn- discover-intrinsic-aspects
+  "Union of every ontology's :ontology/intrinsic-aspects — the aspects that are
+   properties of an entity itself and must never be inherited through any edge.
+   Derived from the registry, so downstream ontologies declare their own; core
+   never hardcodes the set."
+  [base-map]
+  (->> (vals base-map)
+       (filter #(= :atlas/ontology (:atlas/type %)))
+       (mapcat :ontology/intrinsic-aspects)
+       (into #{})))
+
 (defn- build-dep-graph
-  "Build {dev-id -> #{dep-dev-ids}} by walking type-ref properties for each entity.
-   Only includes dep-ids that exist in dev-id->entry (known entities)."
+  "Build {dev-id -> #{dep-dev-ids}} by walking type-ref properties for each
+   entity. Only includes dep-ids that exist in dev-id->entry (known entities).
+
+   ALL type-refs contribute, regardless of :datalog-verb. Aspect propagation is
+   filtered by which ASPECTS are intrinsic (see discover-intrinsic-aspects), not
+   by which EDGE carried them — see :ontology/intrinsic-aspects for why the
+   edge-based cut was wrong."
   [dev-id->entry base-map ref-properties]
   (reduce (fn [graph [dev-id {:keys [type aspects]}]]
             (let [cid   (conj aspects type)
@@ -207,60 +224,183 @@
    After compile!, compound-ids include all aspects inherited from deps.
    The log preserves declared aspects — use declared-aspects to read them.
 
-   Returns a summary map."
-  []
-  (let [entries @registrations
-        ;; Last-write-wins by dev-id
-        dev-id->entry (reduce (fn [acc {:keys [dev-id] :as entry}]
-                                (assoc acc dev-id entry))
-                              {}
-                              entries)
-        ;; Pass 1: base map (declared compound-ids only)
-        base-map (into {}
-                       (map (fn [[_ {:keys [dev-id type aspects value]}]]
-                              [(conj aspects type)
-                               (assoc value :atlas/dev-id dev-id :atlas/type type)]))
-                       dev-id->entry)
+   Returns a summary map. Two DIFFERENT kinds of collapse are reported:
 
-        ;; Discover type-refs, build dep graph, topo-sort
-        ref-properties    (discover-type-refs base-map)
-        dep-graph         (build-dep-graph dev-id->entry base-map ref-properties)
-        topo-order        (topo-sort* dep-graph)
+     :compile/shadowed   log entries superseded by a later registration of the
+                         SAME dev-id. This is the normal dev loop — re-evaluating
+                         a file re-registers its entities and the latest wins.
+                         Expected and healthy; not a problem.
 
-        ;; Pass 2: walk bottom-to-top — each node gets own ∪ all deps' all-aspects
-        all-aspects-by-id
-        (reduce (fn [acc dev-id]
-                  (let [own      (get-in dev-id->entry [dev-id :aspects] #{})
-                        dep-ids  (get dep-graph dev-id #{})
-                        inherited (apply set/union (map #(get acc % #{}) dep-ids))]
-                    (assoc acc dev-id (into own inherited))))
-                {}
-                topo-order)
+     :compile/collisions two DIFFERENT dev-ids that compiled to the SAME
+                         compound-id. One silently shadows the other, and the
+                         loser is unaddressable. ALWAYS a modelling error.
 
-        expanded-map
-        (into {}
-              (map (fn [[dev-id {:keys [type aspects value]}]]
-                     (let [all-asp (get all-aspects-by-id dev-id aspects)
-                           cid     (conj all-asp type)]
-                       [cid (assoc value :atlas/dev-id dev-id :atlas/type type)])))
-              dev-id->entry)
+   Why collisions are detected *here* and not in register!: register! is
+   append-only and per-call, so it cannot tell a re-eval from a collision — and
+   it must stay that way, or every REPL reload would throw. By this point the
+   log is already deduped by dev-id, so any compound-id claimed by more than
+   one dev-id is a genuine collision by construction. It is also the last
+   moment it is knowable: afterwards the shadowed entity is simply absent from
+   the registry, so no invariant can ever see it.
 
-        ;; Build dev-id → expanded compound-id index
-        idx (into {}
-                  (map (fn [[cid props]] [(:atlas/dev-id props) cid]))
-                  expanded-map)
+   Options:
+     :strict? — throw on collisions instead of warning (for CI)."
+  ([] (compile! {}))
+  ([{:keys [strict?]}]
+   (let [entries @registrations
+         ;; Last-write-wins by dev-id — THE DEV LOOP. Re-evaluating a file
+         ;; re-registers its entities; the latest definition of each dev-id
+         ;; wins. Anything collapsed here is a re-eval, never a collision.
+         dev-id->entry (reduce (fn [acc {:keys [dev-id] :as entry}]
+                                 (assoc acc dev-id entry))
+                               {}
+                               entries)
 
-        aggregated (count (filter (fn [[dev-id all-asp]]
-                                    (> (count all-asp)
-                                       (count (get-in dev-id->entry [dev-id :aspects] #{}))))
-                                  all-aspects-by-id))]
-    (reset! registry expanded-map)
-    (reset! dev-id-index idx)
-    {:compile/entities     (count dev-id->entry)
-     :compile/from-entries (count entries)
-     :compile/shadowed     (- (count entries) (count dev-id->entry))
-     :compile/aggregated   aggregated
-     :compile/type-refs    (mapv :property ref-properties)}))
+         ;; DEV-ID CONFLICTS — the mirror of the compound-id collision check
+         ;; below. Atlas identity is a DOUBLE system: compound-id (what an
+         ;; entity means) and dev-id (how you address it). Two entities sharing
+         ;; a compound-id is a collision; two sharing a dev-id is a conflict.
+         ;; Both destroy addressing, so both are reported.
+         ;;
+         ;; A dev-id re-registered with the SAME compound-id is the REPL
+         ;; re-evaluation loop and stays silent — that is what last-write-wins
+         ;; above exists for. Only a dev-id claiming DIFFERENT compound-ids is
+         ;; reported: one address, two meanings, earlier meaning gone.
+         ;;
+         ;; Advisory, not an error: re-evaluating a file after EDITING an
+         ;; entity's aspects produces exactly this shape, and last-write-wins is
+         ;; then correct. Edit and duplicate are structurally indistinguishable
+         ;; from the log alone, so this warns and lets the author judge.
+         ;; (A real one: `register-entity-types!` registered its type marker
+         ;; under the ontology's own dev-id, silently destroying the ontology
+         ;; entity — and with it every mechanism declared on it.)
+         dev-id-conflicts
+         (->> entries
+              (group-by :dev-id)
+              (keep (fn [[dev-id es]]
+                      (let [cids (distinct (map #(conj (:aspects %) (:type %)) es))]
+                        (when (next cids)
+                          {:dev-id dev-id
+                           :claimed-compound-ids (vec cids)
+                           :winner (last cids)}))))
+              vec)
+
+         ;; Pass 1: base map (declared compound-ids only)
+         base-map (into {}
+                        (map (fn [[_ {:keys [dev-id type aspects value]}]]
+                               [(conj aspects type)
+                                (assoc value :atlas/dev-id dev-id :atlas/type type)]))
+                        dev-id->entry)
+
+         ;; Discover type-refs, build dep graph, topo-sort
+         ref-properties (discover-type-refs base-map)
+         intrinsic      (discover-intrinsic-aspects base-map)
+         dep-graph      (build-dep-graph dev-id->entry base-map ref-properties)
+         topo-order     (topo-sort* dep-graph)
+
+         ;; Pass 2: walk bottom-to-top — each node gets
+         ;;   own ∪ (deps' all-aspects MINUS the intrinsic ones)
+         ;;
+         ;; An entity always keeps its OWN intrinsic aspects; it just never
+         ;; acquires anyone else's. That is what makes a mutually-exclusive
+         ;; enum (node-type) and a per-entity lifecycle (:status/*) survive
+         ;; expansion, while characteristic aspects still propagate.
+         all-aspects-by-id
+         (reduce (fn [acc dev-id]
+                   (let [own       (get-in dev-id->entry [dev-id :aspects] #{})
+                         dep-ids   (get dep-graph dev-id #{})
+                         ;; set/difference, not (remove intrinsic) — this ns
+                         ;; defines its own `remove` (registry removal), which
+                         ;; shadows clojure.core/remove.
+                         inherited (set/difference
+                                    (apply set/union (map #(get acc % #{}) dep-ids))
+                                    intrinsic)]
+                     (assoc acc dev-id (into own inherited))))
+                 {}
+                 topo-order)
+
+         ;; Keep the pairs before `into {}` collapses them — a duplicate
+         ;; compound-id is invisible once it has landed in the map.
+         expanded-pairs
+         (mapv (fn [[dev-id {:keys [type aspects value]}]]
+                 (let [all-asp (get all-aspects-by-id dev-id aspects)
+                       cid     (conj all-asp type)]
+                   [cid (assoc value :atlas/dev-id dev-id :atlas/type type)]))
+               dev-id->entry)
+
+         expanded-map (into {} expanded-pairs)
+
+         ;; COLLISIONS — distinct dev-ids compiling to one compound-id.
+         ;; `into` keeps the last pair, so the last dev-id wins and the rest are
+         ;; silently unaddressable.
+         ;;
+         ;; Checked on the EXPANDED cid because that is what becomes @registry,
+         ;; and it catches a strict superset: a collision can also be INDUCED by
+         ;; expansion, when two entities with different declared aspects inherit
+         ;; their way onto the same expanded cid — invisible in base-map.
+         ;;
+         ;; Note a declared-cid collision can never be rescued by expansion:
+         ;; build-dep-graph reads `(get base-map cid)` by DECLARED cid, so both
+         ;; colliding dev-ids read the WINNER's props, resolve the winner's deps
+         ;; and inherit identical aspects. The loser silently adopts the
+         ;; winner's dependencies before disappearing — so a declared collision
+         ;; corrupts dep resolution, not just entity count.
+         collisions
+         (->> expanded-pairs
+              (group-by first)
+              (keep (fn [[cid pairs]]
+                      (let [dev-ids (mapv #(:atlas/dev-id (second %)) pairs)]
+                        (when (next dev-ids)
+                          {:compound-id cid
+                           :claimed-by  dev-ids
+                           :winner      (peek dev-ids)
+                           :shadowed    (vec (butlast dev-ids))}))))
+              vec)
+
+         ;; Build dev-id → expanded compound-id index
+         idx (into {}
+                   (map (fn [[cid props]] [(:atlas/dev-id props) cid]))
+                   expanded-map)
+
+         aggregated (count (filter (fn [[dev-id all-asp]]
+                                     (> (count all-asp)
+                                        (count (get-in dev-id->entry [dev-id :aspects] #{}))))
+                                   all-aspects-by-id))]
+     ;; Diagnostics ride along as METADATA rather than being printed. The
+     ;; registry value carries its own account of what was lost building it —
+     ;; `(meta @registry)` — so a caller can query it, a test can assert on it,
+     ;; and the UI can surface it, without compile! spraying stdout on every
+     ;; REPL reload. (:compile/dev-id-conflicts is advisory and lives ONLY here;
+     ;; an aspect edit followed by a re-eval produces the same shape as a real
+     ;; duplicate, so it is never printed and never thrown.)
+     (reset! registry (with-meta expanded-map
+                        {:compile/collisions       collisions
+                         :compile/dev-id-conflicts dev-id-conflicts}))
+     (reset! dev-id-index idx)
+     ;; A collision is always a modelling error: the shadowed entity is absent
+     ;; from the registry, so nothing downstream can ever see it. This is the
+     ;; last moment it is knowable — say so loudly rather than silently.
+     (when (seq collisions)
+       (let [msg (str "atlas: COMPOUND-ID COLLISION — "
+                      (count collisions)
+                      " compound-id(s) claimed by more than one dev-id."
+                      " The shadowed entities are NOT in the registry.\n"
+                      (str/join "\n"
+                                (map (fn [{:keys [compound-id winner shadowed]}]
+                                       (str "  " (pr-str compound-id)
+                                            "\n    kept:     " winner
+                                            "\n    shadowed: " (pr-str shadowed)))
+                                     collisions)))]
+         (if strict?
+           (throw (ex-info msg {:collisions collisions}))
+           (println msg))))
+     {:compile/entities         (count dev-id->entry)
+      :compile/from-entries     (count entries)
+      :compile/shadowed         (- (count entries) (count dev-id->entry))
+      :compile/collisions       collisions
+      :compile/dev-id-conflicts dev-id-conflicts
+      :compile/aggregated       aggregated
+      :compile/type-refs        (mapv :property ref-properties)})))
 
 ;; =============================================================================
 ;; Log queries — read declared vs compiled aspects

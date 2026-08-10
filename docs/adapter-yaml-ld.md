@@ -108,9 +108,19 @@ Example node (YAML-LD):
     - execution-function:create-order
 ```
 
-A full worked example (`.jsonld` + `.yaml`) built against a real production
-registry is kept in the downstream consumer's own repo — out of this repo
-because it embeds that project's entity data.
+## Worked example — Internet Banking System
+
+The canonical C4 [Internet Banking System](https://c4model.com) is coded as an
+Atlas registry in [`test/app/internet_banking.clj`](../test/app/internet_banking.clj).
+Exporting it produces [`adapter-yaml-ld/banking.jsonld`](adapter-yaml-ld/banking.jsonld)
+and [`adapter-yaml-ld/banking.yaml`](adapter-yaml-ld/banking.yaml) — 13 nodes
+that expand to 62 RDF triples (`atlas/aspect`, `entity/depends`, `rdf:type`).
+
+> Note: the core ontologies declare only `deps` as type-refs, so the banking
+> export shows `entity:depends` edges. `entity:consumes`/`entity:produces` appear
+> when a registry also declares context/response as type-refs (as the validation
+> registry above does) — the adapter faithfully reflects whatever the type-ref
+> meta-model declares.
 
 ## Known limitations / next steps
 

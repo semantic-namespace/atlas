@@ -16,12 +16,15 @@
             [ring.util.response :as response]
             [ring.util.servlet :as servlet]
             [clojure.java.io :as io]
+            [clojure.edn :as edn]
             [clojure.data.json :as json])
   (:import [org.eclipse.jetty.server Server ServerConnector
             HttpConfiguration HttpConnectionFactory]
            [org.eclipse.jetty.server.handler AbstractHandler]
            [javax.servlet DispatcherType]
-           [javax.servlet.http HttpServletRequest HttpServletResponse]))
+           [javax.servlet.http HttpServletRequest HttpServletResponse]
+           [java.net URI]
+           [java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers]))
 
 ;; =============================================================================
 ;; State Management
@@ -37,6 +40,76 @@
 (defonce v3-state
   (atom {:mode "home" :entity nil :aspect nil :data-key nil :narrative nil
          :scenario nil :step nil :step-total nil}))
+
+;; Which registry /api/atlas/registry currently serves: either the JVM's
+;; live local atom, or a static snapshot pulled from an atlas-cloud org.
+(defonce ^:private v3-registry-source (atom {:mode :local}))
+
+(defn- registry-snapshot
+  "Registry map currently backing /api/atlas/registry — the live local atom,
+  or a static cloud snapshot pulled in via POST /api/v3/registry."
+  [local-atom]
+  (let [{:keys [mode snapshot]} @v3-registry-source]
+    (if (= mode :cloud) snapshot @local-atom)))
+
+(defn- normalize-registry-map
+  "Cloud snapshots may key entities by a sorted vector of aspects; the local
+  registry always keys by set. Normalize so downstream code sees one shape."
+  [m]
+  (into {} (map (fn [[k v]] [(if (set? k) k (set k)) v])) m))
+
+(defn- pull-cloud-registry
+  "Fetch a full registry snapshot from an atlas-cloud server over plain EDN
+  HTTP (GET /:org/:project/:version) — same contract atlas.cloud/pull uses,
+  reimplemented here with java.net.http so the UI module needs no new deps."
+  [{:keys [cloud-url org project version api-key]}]
+  (let [url    (str cloud-url "/" org "/" project "/" version)
+        req-b  (doto (HttpRequest/newBuilder (URI/create url))
+                 (.header "Accept" "application/edn"))
+        _      (when api-key (.header req-b "Authorization" (str "Bearer " api-key)))
+        req    (.build req-b)
+        client (HttpClient/newHttpClient)
+        resp   (.send client req (HttpResponse$BodyHandlers/ofString))
+        status (.statusCode resp)]
+    (if (< status 400)
+      (normalize-registry-map (edn/read-string (.body resp)))
+      (throw (ex-info (str "cloud pull failed: " status " " url)
+                       {:status status :body (.body resp)})))))
+
+(defn- registry-source-info []
+  (let [{:keys [mode org project version]} @v3-registry-source]
+    (cond-> {:mode (name mode)}
+      org     (assoc :org org)
+      project (assoc :project project)
+      version (assoc :version version))))
+
+(defn- v3-registry-get-handler [_req]
+  {:status  200
+   :headers {"Content-Type"                "application/json"
+             "Access-Control-Allow-Origin" "*"}
+   :body    (json/write-str (registry-source-info))})
+
+(defn- v3-registry-post-handler [req]
+  (try
+    (let [{:keys [source org project version cloud-url api-key]}
+          (json/read-str (slurp (:body req)) :key-fn keyword)]
+      (case source
+        "local" (reset! v3-registry-source {:mode :local})
+        "cloud" (let [snapshot (pull-cloud-registry
+                                 {:cloud-url (or cloud-url "http://localhost:8090")
+                                  :org org :project project :version version
+                                  :api-key api-key})]
+                  (reset! v3-registry-source {:mode :cloud :org org :project project
+                                               :version version :snapshot snapshot}))
+        (throw (ex-info (str "unknown registry source: " source) {})))
+      {:status  200
+       :headers {"Content-Type"                "application/json"
+                 "Access-Control-Allow-Origin" "*"}
+       :body    (json/write-str (registry-source-info))})
+    (catch Exception e
+      {:status  400
+       :headers {"Content-Type" "application/json"}
+       :body    (json/write-str {:error (.getMessage e)})})))
 
 ;; id -> LinkedBlockingQueue<String>; sse-aware-handler polls per client
 (defonce ^:private v3-sse-clients (atom {}))
@@ -112,8 +185,16 @@
            (= (:request-method request) :post))
       (v3-narrative-post-handler request)
 
+      (and (= (:uri request) "/api/v3/registry")
+           (= (:request-method request) :get))
+      (v3-registry-get-handler request)
+
+      (and (= (:uri request) "/api/v3/registry")
+           (= (:request-method request) :post))
+      (v3-registry-post-handler request)
+
       (= (:uri request) "/api/atlas/registry")
-      (handler/registry-handler @registry-atom request)
+      (handler/registry-handler (registry-snapshot registry-atom) request)
 
       (and (= (:uri request) "/api/atlas/registry")
            (= (:request-method request) :options))
@@ -232,6 +313,7 @@
      (println "✓ Loaded" (count @registry-atom) "entities"))
 
    (reset! v3-sse-clients {})
+   (reset! v3-registry-source {:mode :local})
    (setup-v3-sse-watcher!)
    (let [ui-root   (case ui-version
                      :v2 "public-v2"

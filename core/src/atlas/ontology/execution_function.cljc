@@ -16,6 +16,10 @@
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ontology]
             [atlas.ontology.type-ref :as type-ref]
+            ;; used fully-qualified by :invariant/internal-fn-outputs-consumed;
+            ;; it resolved only when some OTHER ns happened to load clojure.set
+            ;; first, so that invariant's behaviour depended on load order
+            [clojure.set]
             [clojure.spec.alpha :as s]))
 
 (s/def :execution-function/context (s/coll-of qualified-keyword?))
@@ -33,6 +37,8 @@
                    :execution-function/deps
                    :atlas/impl]
    :ontology/not-serialisable-keys [:atlas/impl]
+   ;; a function may depend on another function (calling it)
+   :ontology/dep-target? true
    :dataflow/context-key :execution-function/context
    :dataflow/context-verb :entity/consumes
    :dataflow/response-key :execution-function/response
@@ -93,7 +99,12 @@
  :invariant/pure-has-no-deps
  :atlas/invariant
  #{:meta/pure-function-check}
- {:invariant/fn (fn []
+ {:invariant/severity :error
+  :invariant/docs
+  "Functions marked :effect/pure should have no component dependencies — a pure
+   function computes output solely from its inputs, so it should not depend on
+   infrastructure components that have side effects."
+  :invariant/fn (fn []
                   "Functions marked :effect/pure should have no component dependencies.
 
    A pure function computes output solely from its inputs, so it should not
@@ -117,7 +128,12 @@
  :invariant/external-is-async
  :atlas/invariant
  #{:meta/external-async-check}
- {:invariant/fn (fn []
+ {:invariant/severity :warning
+  :invariant/docs
+  "Functions marked :integration/external should also be :temporal/async —
+   external integrations block on the network and should not be called
+   synchronously."
+  :invariant/fn (fn []
                   ;; "Functions marked :integration/external should also be :temporal/async."
                   (let [external-fns (filter #(entity/has-aspect? % :atlas/execution-function)
                                              (entity/all-with-aspect :integration/external))
@@ -133,7 +149,12 @@
  :invariant/internal-fn-outputs-consumed
  :atlas/invariant
  #{:meta/output-consumption-check}
- {:invariant/fn (fn []
+ {:invariant/severity :warning
+  :invariant/docs
+  "Internal (non-endpoint) function outputs should be consumed by some other
+   function's context — catches dead code in service layers where everything
+   should chain."
+  :invariant/fn (fn []
                   "Internal function outputs (non-endpoint) should be consumed by other functions.
 
    This checks that execution-functions that are NOT endpoints have their
@@ -164,15 +185,32 @@
  :invariant/deps-reference-valid-types
  :atlas/invariant
  #{:meta/deps-type-check}
- {:invariant/fn (fn []
-                  "Execution-function deps should only reference entities of type
-                   :atlas/execution-function or :atlas/structure-component.
+ {:invariant/severity :error
+  :invariant/docs
+  "Execution-function deps may only reference entity types whose ontology
+   declares :ontology/dep-target? true — deps model runtime dependencies
+   (calling a function, using a component, calling an MCP tool or endpoint);
+   any other entity type is a structural mistake.
 
-                   Deps model runtime dependencies — either calling another function
-                   or using an infrastructure component. Any other entity type in deps
-                   is a structural mistake."
+   The allowed set is DERIVED from ontology declarations, never hardcoded.
+   Until 2026-07-16 this carried a closed
+   #{:atlas/execution-function :atlas/structure-component}, which core cannot
+   possibly know is complete: downstream ontologies define real runtime
+   dependency targets (yorba-clj's :atlas/yorba-mcp-tool and
+   :atlas/yorba-endpoint — a function calling an MCP tool IS depending on it)
+   with no way to opt in. The closed list made core reject true facts and
+   pushed authors to delete them, which is the opposite of what an invariant
+   is for. Core owns the seam; downstream declares its own dep-ability."
+  :invariant/fn (fn []
                   (let [exec-fns (entity/all-with-aspect :atlas/execution-function)
-                        allowed-types #{:atlas/execution-function :atlas/structure-component}
+                        ;; derived from the registry, so a downstream ontology
+                        ;; opts in by declaring :ontology/dep-target? true
+                        allowed-types
+                        (into #{}
+                              (comp (filter #(= :atlas/ontology (:atlas/type %)))
+                                    (filter :ontology/dep-target?)
+                                    (map :ontology/for))
+                              (vals @registry/registry))
                         violations
                         (for [fn-id exec-fns
                               :let [deps (ontology/deps-for fn-id)
@@ -189,13 +227,19 @@
                        :violation :deps-wrong-type
                        :details (vec violations)
                        :severity :error
-                       :message "Deps should only reference execution-functions or structure-components"})))})
+                       :message (str "Deps reference entity types whose ontology does not declare "
+                                     ":ontology/dep-target? true. Allowed: " (vec (sort allowed-types)))})))})
 
 (registry/register!
  :invariant/context-not-entity-refs
  :atlas/invariant
  #{:meta/context-not-entity-check}
- {:invariant/fn (fn []
+ {:invariant/severity :warning
+  :invariant/docs
+  "Execution-function context keys should be data descriptors (:pet/id,
+   :user/email), not references to execution-functions or structure-components —
+   entity dependencies belong in deps."
+  :invariant/fn (fn []
                   "Execution-function context keys should be data descriptors, not references
                    to execution-functions or structure-components.
 

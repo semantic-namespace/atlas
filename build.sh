@@ -20,6 +20,7 @@ OPTIONS:
     -h, --help          Show this help message
     -i, --install       Build and install to local Maven (~/.m2)
     -d, --deploy        Build and deploy to Clojars
+    --all               Build all public modules (core, dev-tools, ui)
     --core              Include core module
     --dev               Include dev-tools module
     --ui                Include ui module

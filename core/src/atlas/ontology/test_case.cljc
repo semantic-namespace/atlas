@@ -88,10 +88,17 @@
 ;; =============================================================================
 
 (defn- user-test-cases
-  "All test-case dev-ids, excluding the ontology meta-entity."
+  "All test-case INSTANCE dev-ids, excluding the ontology/type meta-entities.
+
+   Discriminates by props :atlas/type — instances are :atlas/test-case, the
+   descriptors are :atlas/ontology / :atlas/type. Filtering on props is robust
+   where an :atlas/ontology aspect-check is not: the :atlas/test-case meta dev-id
+   carries two compound-ids (#{:atlas/test-case :atlas/ontology} and
+   #{:atlas/test-case :atlas/type}), and has-aspect? may resolve to the latter —
+   which has no :atlas/ontology aspect, so it would slip through."
   []
   (->> (entity/all-with-aspect :atlas/test-case)
-       (remove #(entity/has-aspect? % :atlas/ontology))))
+       (filter #(= :atlas/test-case (:atlas/type (entity/props-for %))))))
 
 (registry/register!
  :invariant/test-case-target-exists

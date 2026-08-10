@@ -2,7 +2,8 @@
   "Verification suite for the IDE integration layer. Ensures IDE-facing APIs
    return stable, editor-friendly data (sorted vectors, namespaced keys)
    without mutating shared state."
-  (:require [clojure.test :refer [deftest is use-fixtures]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.set :as set]
             [atlas.registry :as cid]
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as ot]
@@ -128,12 +129,40 @@
             :entity/definition-values {:atlas/dev-id :fn/alpha
                                        :atlas/type :atlas/execution-function
                                        :execution-function/deps [:component/storage]}
+            ;; :fn/alpha is an execution-function carrying :interface-endpoint/*
+            ;; props, which that type's ontology does not declare. They are stored
+            ;; and pushed all the same, so entity-info reports them here instead of
+            ;; hiding everything outside :ontology/keys (the REQUIRED-key contract).
+            :entity/extra-props {:interface-endpoint/context [:alpha/input :alpha/flag]
+                                 :interface-endpoint/response [:alpha/output]}
             :interface-endpoint/context [:alpha/flag :alpha/input]
             :interface-endpoint/response [:alpha/output]
             :execution-function/deps [:component/storage]
             :atlas/fields []}
            info)
         "entity-info preserves namespaced keys and sorted vectors")))
+
+;; ---------------------------------------------------------------------------
+;; 🔍 Undeclared props stay visible
+;; ---------------------------------------------------------------------------
+
+(deftest entity-info-surfaces-undeclared-props
+  (seed-registry!)
+  (testing "props outside :ontology/keys are reported, not dropped"
+    (is (= {:interface-endpoint/context [:alpha/input :alpha/flag]
+            :interface-endpoint/response [:alpha/output]}
+           (:entity/extra-props (ide/entity-info :fn/alpha)))))
+  (testing "declared props are NOT duplicated into extra-props"
+    (let [{:keys [entity/definition-values entity/extra-props]} (ide/entity-info :fn/alpha)]
+      (is (empty? (set/intersection (set (keys definition-values))
+                                    (set (keys extra-props)))))))
+  (testing "non-serialisable values (fns) never leak in"
+    (cid/register! :fn/with-impl :atlas/execution-function #{:tier/service :domain/impl}
+                   {:execution-function/context []
+                    :execution-function/response []
+                    :execution-function/deps #{}
+                    :some/handler (fn [_] :nope)})
+    (is (not (contains? (:entity/extra-props (ide/entity-info :fn/with-impl)) :some/handler)))))
 
 ;; ---------------------------------------------------------------------------
 ;; 🔗 Dependency navigation is vectorized and ordered
@@ -161,6 +190,14 @@
                        (let [dev-id (:entity/dev-id entity)]
                          (and (keyword? dev-id)
                               (or (= "atlas" (namespace dev-id))
+                                  ;; entity-type markers from
+                                  ;; ontology/register-entity-types!. They used
+                                  ;; to be registered under the ontology's own
+                                  ;; dev-id (:atlas/foo) and so were caught by
+                                  ;; the "atlas" clause above — while silently
+                                  ;; overwriting the ontology entity. They now
+                                  ;; carry their own :atlas.type/foo dev-id.
+                                  (= "atlas.type" (namespace dev-id))
                                   (= "ontology" (namespace dev-id))
                                   (= "datalog-extractor" (namespace dev-id))
                                   (= "invariant" (namespace dev-id))
@@ -314,10 +351,15 @@
 (deftest validation-and-docs-apis-are-namespaced
   (seed-registry!)
 
-  ;; Filter out ontology entity from structure-component query
+  ;; Filter out the meta-entities carrying this aspect: the ONTOLOGY
+  ;; (:atlas/structure-component) and the entity-type MARKER
+  ;; (:atlas.type/structure-component). The marker used to be registered under
+  ;; the ontology's own dev-id, so one `remove` covered both — while the marker
+  ;; silently overwrote the ontology entity. They are now distinct.
   (is (= [:component/audit :component/cache :component/storage]
-         (vec (remove #{:atlas/structure-component} (ide/entities-with-aspect :atlas/structure-component))))
-      "entities-with-aspect returns sorted vector (excluding ontology)")
+         (vec (remove #{:atlas/structure-component :atlas.type/structure-component}
+                      (ide/entities-with-aspect :atlas/structure-component))))
+      "entities-with-aspect returns sorted vector (excluding ontology + type marker)")
 
   (let [result (with-redefs [atlas.invariant/check-all
                              (fn [] {:valid? true :errors [] :warnings []})]

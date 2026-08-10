@@ -9,6 +9,7 @@
    • Provide readable, narrative test documentation for developers"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [atlas.registry :as id]
+            [atlas.registry.lookup :as entity]
             [atlas.query :as q]))
 
 ;; ---------------------------------------------------------------------------
@@ -44,7 +45,6 @@
       (is (nil? (id/fetch cid)) "Value removed from registry"))))
 
 (deftest registry-uniqueness
-  "Tests that register! enforces uniqueness of both compound IDs and dev-ids."
   (testing "find-by-dev-id helper function"
     (let [cid #{:test/epsilon :test/five}]
       (id/register! :entity/finder :test/epsilon #{:test/five} {:data "value"})
@@ -53,6 +53,106 @@
           "Should find entity by dev-id")
       (is (nil? (q/find-by-dev-id @id/registry :entity/nonexistent))
           "Should return nil for nonexistent dev-id"))))
+
+;; ---------------------------------------------------------------------------
+;; 🧬 Aspect Expansion — intrinsic aspects never inherit
+;; ---------------------------------------------------------------------------
+;; Expansion propagates a dep's aspects to its dependents. That is right for
+;; CHARACTERISTIC aspects (a function calling a Gmail function does involve
+;; Gmail) and wrong for INTRINSIC ones, where inheriting yields a contradiction:
+;; a mutually-exclusive enum with two values, or an entity both active and
+;; superseded. An ontology declares its own intrinsic aspects; core derives the
+;; set and never hardcodes it.
+;;
+;; The axis is the ASPECT, not the edge. An earlier cut gated on the type-ref's
+;; :datalog-verb (:entity/depends = inherit, else don't) and was wrong in both
+;; directions: it stopped dataflow verbs (:entity/consumes) that legitimately
+;; propagate, while still leaking node-type through :behavior-tree/children,
+;; which IS an :entity/depends edge.
+
+(deftest aspect-expansion-respects-intrinsic-aspects
+  ;; the ontology owning the vocabulary declares which of its aspects are
+  ;; intrinsic — :kind/* is a mutually exclusive enum, :status/* a lifecycle
+  (id/register! :ontology/thing :atlas/ontology #{:test/thing}
+                {:ontology/for :test/thing
+                 :ontology/intrinsic-aspects #{:kind/leaf :kind/branch
+                                               :status/active :status/superseded}})
+  (id/register! :type-ref/parts :atlas/type-ref #{:meta/parts}
+                {:type-ref/source :test/thing :type-ref/property :test/parts
+                 :type-ref/datalog-verb :entity/depends
+                 :type-ref/cardinality :db.cardinality/many})
+  (id/register! :type-ref/cites :atlas/type-ref #{:meta/cites}
+                {:type-ref/source :test/thing :type-ref/property :test/cites
+                 :type-ref/datalog-verb :test/cites
+                 :type-ref/cardinality :db.cardinality/many})
+  (id/register! :thing/part  :test/thing #{:kind/leaf :trait/from-part :status/active} {})
+  (id/register! :thing/cited :test/thing #{:kind/leaf :trait/from-cited :status/active} {})
+  (id/register! :thing/subject :test/thing #{:kind/branch :trait/own :status/superseded}
+                {:test/parts [:thing/part] :test/cites [:thing/cited]})
+  (id/compile!)
+
+  (let [id (entity/identity-for :thing/subject)]
+    (testing "characteristic aspects inherit — over any edge, whatever its verb"
+      (is (contains? id :trait/from-part) "via :entity/depends")
+      (is (contains? id :trait/from-cited)
+          "via a non-depends verb — the edge kind is not what decides"))
+    (testing "an intrinsic aspect never inherits, so a mutually-exclusive enum survives"
+      (is (contains? id :kind/branch) "own intrinsic aspect is kept")
+      (is (not (contains? id :kind/leaf))
+          "acquiring a child's kind would make every branch answer to :kind/leaf"))
+    (testing "lifecycle is intrinsic — a superseded entity never reads as active"
+      (is (contains? id :status/superseded) "own status survives")
+      (is (not (contains? id :status/active))
+          "inheriting :status/active from a dep would make a correctly-retired
+           entity read as active — the false positive this closes"))
+    (testing "own aspects and entity type always present"
+      (is (contains? id :trait/own))
+      (is (contains? id :test/thing)))))
+
+;; ---------------------------------------------------------------------------
+;; 💥 Compound-ID Collisions
+;; ---------------------------------------------------------------------------
+;; Identity is the compound-id, so two dev-ids that compile to one compound-id
+;; are one entity — the last silently wins. This must stay distinguishable from
+;; the dev loop, where re-evaluating a file re-registers the SAME dev-id and
+;; last-write-wins is exactly the point. compile! separates the two.
+
+(deftest compile-collisions
+  (testing "re-registering the same dev-id is the dev loop, NOT a collision"
+    (id/register! :fn/reloaded :test/ef #{:test/one} {:v 1})
+    (id/register! :fn/reloaded :test/ef #{:test/one} {:v 2})
+    (let [{:keys [compile/entities compile/shadowed compile/collisions]} (id/compile!)]
+      (is (= 1 entities) "one dev-id => one entity")
+      (is (= 1 shadowed) "the superseded registration is counted, not warned about")
+      (is (empty? collisions) "re-eval of one dev-id must never be flagged")
+      (is (= 2 (:v (id/fetch #{:test/one :test/ef}))) "latest registration wins")))
+
+  (testing "distinct dev-ids sharing a compound-id collide, and the loser is gone"
+    ;; the :each fixture resets per-deftest, not per-testing — these blocks
+    ;; assert on registry-wide counts, so each states its own premises
+    (id/reset-all!)
+    (id/register! :fn/alpha :test/ef #{:test/same} {:v :alpha})
+    (id/register! :fn/omega :test/ef #{:test/same} {:v :omega})
+    (let [{:keys [compile/entities compile/collisions]} (id/compile!)
+          {:keys [compound-id claimed-by winner shadowed]} (first collisions)]
+      (is (= 1 (count collisions)) "the shared compound-id is reported once")
+      (is (= #{:test/same :test/ef} compound-id))
+      (is (= [:fn/alpha :fn/omega] claimed-by) "both claimants are named")
+      (is (= :fn/omega winner))
+      (is (= [:fn/alpha] shadowed))
+      (is (= 2 entities) "compile! processed two dev-ids...")
+      (is (= 1 (count @id/registry)) "...but only one landed: that gap is the loss")
+      (is (nil? (q/find-by-dev-id @id/registry :fn/alpha))
+          "the shadowed entity is unaddressable by its own dev-id")))
+
+  (testing ":strict? throws instead of warning, for CI"
+    (id/reset-all!)
+    (id/register! :fn/alpha :test/ef #{:test/same} {})
+    (id/register! :fn/omega :test/ef #{:test/same} {})
+    (is (thrown? clojure.lang.ExceptionInfo (id/compile! {:strict? true})))
+    (is (seq (:collisions (try (id/compile! {:strict? true})
+                               (catch clojure.lang.ExceptionInfo e (ex-data e)))))
+        "ex-data carries the collision report for a CI gate to print")))
 
 (deftest auto-generated-dev-id
   "Tests that register! auto-generates deterministic dev-ids when not provided."
