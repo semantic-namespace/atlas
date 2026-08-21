@@ -57,3 +57,23 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not reproducible"
                           (store/assert-reproducible!
                            r (assoc-in r [#{:fn/f0 :atlas/execution-function} :x/stamp] 1))))))
+
+
+(deftest dry-run-never-writes
+  (let [dir (tmp-dir)
+        s   (file/file-store dir)]
+    (store/write-if-changed! s (reg-of 20) {:message "base"})
+    (let [before (p/read-at s nil)
+          r      (store/write-if-changed! s (reg-of 22) {:message "no" :dry-run? true})]
+      (is (:changed? r))
+      (is (:dry-run? r))
+      (is (= before (p/read-at s nil)) "the store must be untouched"))))
+
+
+(deftest dry-run-still-refuses-a-collapse
+  ;; Reporting "would write" for a collapsed build would be worse than useless:
+  ;; it is the answer a human uses to decide the build is fine.
+  (let [s (file/file-store (tmp-dir))]
+    (store/write-if-changed! s (reg-of 500) {:message "full"})
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Refusing to write"
+                          (store/write-if-changed! s (reg-of 100) {:dry-run? true})))))

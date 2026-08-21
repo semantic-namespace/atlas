@@ -53,8 +53,9 @@
     :message       commit message (required for stores that commit)
     :volatile      prop keys to exclude (default `canon/default-volatile-props`)
     :max-shrink    fraction of entities that may disappear (default 0.10)
-    :force?        skip the shrink guard -- for a genuine mass deletion"
-  [store registry {:keys [message volatile max-shrink force?]
+    :force?        skip the shrink guard -- for a genuine mass deletion
+    :dry-run?      compute :changed? and stop; never writes"
+  [store registry {:keys [message volatile max-shrink force? dry-run?]
                    :or   {volatile   canon/default-volatile-props
                           max-shrink default-max-shrink}}]
   (let [clean    (canon/strip-volatile registry volatile)
@@ -63,10 +64,15 @@
     (if (= files (select-keys existing (keys files)))
       {:changed? false :entities (count clean) :ref (p/head store)}
       (do
+        ;; The shrink guard runs before a dry run reports too, so a collapsed
+        ;; build fails the check locally rather than only on the real write.
         (when-not force?
           (shrink-check! (canon/files->registry existing) clean max-shrink))
-        (let [{:keys [ref]} (p/write! store {:message message} files)]
-          {:changed? true :ref ref :entities (count clean) :files (count files)})))))
+        (if dry-run?
+          {:changed? true :ref (p/head store) :entities (count clean)
+           :files (count files) :dry-run? true}
+          (let [{:keys [ref]} (p/write! store {:message message} files)]
+            {:changed? true :ref ref :entities (count clean) :files (count files)}))))))
 
 
 (defn assert-reproducible!
