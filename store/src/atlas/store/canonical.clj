@@ -48,6 +48,57 @@
 ;; Non-deterministic props
 ;; ---------------------------------------------------------------------------
 
+(defn- simple?
+  [v]
+  (or (nil? v) (boolean? v) (number? v) (string? v) (keyword? v) (symbol? v)))
+
+(defn storable?
+  "True when a value survives an EDN round trip.
+
+  This is the only definition of \"storable\" that cannot be fooled. A registry
+  holds live values -- `:atlas/impl` is a function -- and `pr-str` prints those
+  as `#object[...]` without complaint. The write succeeds, the file looks
+  plausible, and the failure lands on the *next* run, reading its own output:
+
+      No reader function for tag object
+
+  Collections recurse structurally so the common case stays cheap; anything
+  else is settled by actually round-tripping it, which gets `#inst` and `#uuid`
+  right without maintaining a list of blessed types. Records are excluded
+  outright -- they are maps, but print with a tag `edn` will not read."
+  [v]
+  (cond
+    (simple? v) true
+    (record? v) false
+    (map? v)    (and (every? storable? (keys v)) (every? storable? (vals v)))
+    (coll? v)   (every? storable? v)
+    :else       (try (= v (edn/read-string (pr-str v)))
+                     (catch Throwable _ false))))
+
+
+(defn unstorable-props
+  "`{prop-key entity-count}` for props that would not read back. Expected to be
+  non-empty -- `:atlas/impl` is a function in every registry that has one -- so
+  it is reported rather than treated as an error."
+  [registry]
+  (frequencies (for [[_ props] registry
+                     [k v] props
+                     :when (not (storable? v))]
+                 k)))
+
+
+(defn sanitize
+  "Drop prop values that cannot be read back.
+
+  Drops the whole prop rather than pruning inside it: a map with one key
+  silently removed is worse than an absent prop, because it still looks like
+  data."
+  [registry]
+  (into {} (map (fn [[cid props]]
+                  [cid (into {} (filter (comp storable? val)) props)]))
+        registry))
+
+
 (def default-volatile-props
   "Props regenerated on every build rather than derived from source.
 

@@ -68,3 +68,81 @@
   (let [content (get (canon/registry->files reg) "entities/atlas_execution-function.edn")]
     (is (< 1 (count (clojure.string/split-lines content)))
         "a single long line makes every change look like a rewrite")))
+
+
+;; ---------------------------------------------------------------------------
+;; Live values
+;; ---------------------------------------------------------------------------
+;;
+;; The bug these exist for: a registry holds live values (`:atlas/impl` is a
+;; function), `pr-str` prints them as `#object[...]` without complaint, and the
+;; write succeeds. The failure surfaces on the NEXT run, reading its own output
+;; with "No reader function for tag object" -- 205 of them, in production.
+;;
+;; It survived every earlier test because the fixtures were registries pulled
+;; back from atlas-cloud, i.e. already sanitised by the exact step this library
+;; was missing. Fixtures must therefore be built here, not fetched.
+
+(defrecord SomeRecord [a])
+
+(def live-reg
+  {#{:fn/impl :atlas/execution-function}
+   {:atlas/dev-id :fn/impl
+    :atlas/type   :atlas/execution-function
+    :atlas/impl   (fn [_] :result)                    ; the real offender
+    :execution-function/deps #{:component/db}}
+   #{:fn/nested :atlas/execution-function}
+   {:atlas/dev-id :fn/nested
+    :atlas/type   :atlas/execution-function
+    :nested/map   {:ok 1 :bad (fn [] nil)}            ; buried one level down
+    :nested/coll  [1 2 (atom 3)]}
+   #{:fn/exotic :atlas/execution-function}
+   {:atlas/dev-id :fn/exotic
+    :atlas/type   :atlas/execution-function
+    :a/record     (->SomeRecord 1)                    ; a map that prints tagged
+    :a/date       #inst "2026-01-01T00:00:00.000-00:00"
+    :a/uuid       #uuid "00000000-0000-0000-0000-000000000001"}})
+
+
+(deftest live-values-are-detected
+  (testing "functions, atoms and records are not storable"
+    (is (not (canon/storable? (fn [] nil))))
+    (is (not (canon/storable? (atom 1))))
+    (is (not (canon/storable? (->SomeRecord 1))))
+    (is (not (canon/storable? {:ok 1 :bad (fn [] nil)})) "including nested")
+    (is (not (canon/storable? [1 2 (atom 3)]))))
+  (testing "ordinary EDN, and the tagged literals that do read back, are"
+    (is (canon/storable? #inst "2026-01-01T00:00:00.000-00:00"))
+    (is (canon/storable? #uuid "00000000-0000-0000-0000-000000000001"))
+    (is (canon/storable? {:a [1 "two" :three #{:x}] :b nil}))))
+
+
+(deftest sanitised-registry-round-trips
+  ;; The assertion that was missing. Without sanitize this throws
+  ;; "No reader function for tag object" -- exactly the production failure.
+  (let [clean (canon/sanitize live-reg)]
+    (is (= clean (canon/files->registry (canon/registry->files clean))))))
+
+
+(deftest unsanitised-registry-fails-to-round-trip
+  ;; Proves the test above is testing something.
+  (is (thrown? Exception
+               (canon/files->registry (canon/registry->files live-reg)))))
+
+
+(deftest sanitize-drops-the-prop-not-the-entity
+  (let [clean (canon/sanitize live-reg)]
+    (is (= 3 (count clean)) "every entity survives")
+    (is (nil? (get-in clean [#{:fn/impl :atlas/execution-function} :atlas/impl])))
+    (is (= #{:component/db}
+           (get-in clean [#{:fn/impl :atlas/execution-function} :execution-function/deps]))
+        "storable props on the same entity are untouched")
+    (is (= #inst "2026-01-01T00:00:00.000-00:00"
+           (get-in clean [#{:fn/exotic :atlas/execution-function} :a/date])))))
+
+
+(deftest unstorable-props-are-reportable
+  ;; Expected to be non-empty for any real registry, so it is reported rather
+  ;; than raised -- but a consumer should be able to see what it lost.
+  (is (= {:atlas/impl 1 :nested/map 1 :nested/coll 1 :a/record 1}
+         (canon/unstorable-props live-reg))))

@@ -27,6 +27,22 @@
   0.10)
 
 
+(defn- read-existing
+  "Parse what the store holds, turning an unreadable store into an actionable
+  message. A store written by a version that did not sanitise contains
+  `#object[...]`, and the raw failure -- \"No reader function for tag object\"
+  -- names neither the file nor the cause."
+  [files]
+  (try
+    (canon/files->registry files)
+    (catch Exception e
+      (throw (ex-info (str "The store contains values that cannot be read back: "
+                           (ex-message e)
+                           ". It was written by a version that did not sanitise "
+                           "non-EDN values; rewrite it with :force? true to repair.")
+                      {:reason ::unreadable-store} e)))))
+
+
 (defn- shrink-check!
   [previous current max-shrink]
   (when (seq previous)
@@ -58,7 +74,11 @@
   [store registry {:keys [message volatile max-shrink force? dry-run?]
                    :or   {volatile   canon/default-volatile-props
                           max-shrink default-max-shrink}}]
-  (let [clean    (canon/strip-volatile registry volatile)
+  (let [;; Sanitise BEFORE anything else. A registry holds live values -- an
+        ;; :atlas/impl is a function -- and pr-str prints those as #object[...]
+        ;; without complaint, so the write succeeds and the *next* run dies
+        ;; reading its own output with "No reader function for tag object".
+        clean    (-> registry (canon/strip-volatile volatile) canon/sanitize)
         files    (canon/registry->files clean)
         existing (p/read-at store nil)]
     (if (= files (select-keys existing (keys files)))
@@ -67,7 +87,7 @@
         ;; The shrink guard runs before a dry run reports too, so a collapsed
         ;; build fails the check locally rather than only on the real write.
         (when-not force?
-          (shrink-check! (canon/files->registry existing) clean max-shrink))
+          (shrink-check! (read-existing existing) clean max-shrink))
         (if dry-run?
           {:changed? true :ref (p/head store) :entities (count clean)
            :files (count files) :dry-run? true}
