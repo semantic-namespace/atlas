@@ -1,0 +1,45 @@
+{;; atlas-bt — the behaviour-tree ONTOLOGY, as an Atlas vocabulary.
+ ;;
+ ;; Deliberately lean: atlas core and nothing else. This module holds only
+ ;; declarations — type-refs, the :behavior-tree/* node-type vocabulary, and
+ ;; the ordering-aware dataflow invariant. It contains no engine, no executor,
+ ;; and no grain/ORC code.
+ ;;
+ ;; That leanness is the point, and it is why this is a module rather than part
+ ;; of examples/grain, where it lived until 2026-07-16: that module pulls in
+ ;; grain-core-v2 and grain-code-agent-tools via :local/root, an LMDB-backed
+ ;; store, --add-opens JVM flags and a Clojure 1.12 floor — none of which this
+ ;; ontology ever touched. A consumer that only wants to MODEL behaviour trees
+ ;; (an application modelling its LLM skills, say) could not take the vocabulary
+ ;; without taking the whole event-sourcing stack and two local checkouts that
+ ;; cannot be published at all.
+ ;;
+ ;; It is not in core either: core has no behaviour-tree concept, and
+ ;; "Atlas core stays grain-free" generalises — core stays engine-free. This is
+ ;; a downstream specialization of the core seams (:atlas/execution-function,
+ ;; :atlas/risk-failure-mode), which is exactly what a module is for.
+ :paths ["src"]
+
+ ;; :mvn/version, NOT :local/root — tools.build's write-pom silently SKIPS
+ ;; local-root coordinates ("Skipping coordinate: {:local/root ...}"), so a
+ ;; local-root here produces a jar whose pom declares no dependency on atlas at
+ ;; all. Consumers would then resolve only by accident, because they happen to
+ ;; declare atlas themselves.
+ ;;
+ ;; Cost of this choice: `clojure -T:build install` in ../core is required
+ ;; before local changes to core are visible here. The root VERSION file keeps
+ ;; the two in lockstep.
+ :deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.12-SNAPSHOT"}}
+
+ :aliases
+ {:build
+  {:deps {io.github.clojure/tools.build {:git/tag "v0.9.6" :git/sha "8e78bcc"}}
+   :ns-default build}
+
+  :deploy
+  {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.0"}}
+   :exec-fn deps-deploy.deps-deploy/deploy
+   :exec-args {:installer :remote
+               :sign-releases? false
+               :pom-file "pom.xml"
+               :repository "clojars"}}}}
