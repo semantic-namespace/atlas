@@ -27,9 +27,12 @@
  ;; declare atlas themselves.
  ;;
  ;; Cost of this choice: `clojure -T:build install` in ../core is required
- ;; before local changes to core are visible here. The root VERSION file keeps
- ;; the two in lockstep.
- :deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.12-SNAPSHOT"}}
+ ;; before local changes to core are visible here, and this pin must be bumped
+ ;; BY HAND on every version bump — deps.edn cannot read the root VERSION file,
+ ;; so nothing keeps the two in lockstep for you. build.clj does read VERSION,
+ ;; so a stale pin is silent: the module builds at the new version against the
+ ;; old core. It sat at 0.1.12-SNAPSHOT while VERSION said 0.1.13-SNAPSHOT.
+ :deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.13-SNAPSHOT"}}
 
  :aliases
  {:build
