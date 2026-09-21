@@ -539,6 +539,31 @@
          [?e :entity/depends ?target]]
        db dev-id))
 
+(defn query-effective-dependencies
+  "Dependencies of `dev-id`: declared `:entity/depends` edges unioned with the
+   dataflow-derived ones — the producers of every key `dev-id` consumes.
+
+   `:entity/depends` carries only explicitly declared deps and type-ref
+   references. Entities that chain purely by data key — one's response key is
+   another's context key — have no such edge between them, so a traversal over
+   `:entity/depends` alone reports them as having no dependencies at all. The
+   registry-side graph (`atlas.ide.trace/effective-dependencies-for`) has always
+   unioned both sources; this is its datalog equivalent, so the two graphs
+   answer the same question the same way."
+  [db dev-id]
+  (-> (set (query-dependencies db dev-id))
+      (into (mapcat #(query-producers-of db %) (query-consumes db dev-id)))
+      (disj dev-id)))
+
+(defn query-effective-dependents
+  "Entities that depend on `dev-id`: reverse `:entity/depends` edges unioned
+   with the dataflow-derived ones — every consumer of a key `dev-id` produces.
+   The reverse direction of `query-effective-dependencies`."
+  [db dev-id]
+  (-> (set (query-reverse-dependencies db dev-id))
+      (into (mapcat #(query-consumers-of db %) (query-produces db dev-id)))
+      (disj dev-id)))
+
 ;; =============================================================================
 ;; CLOSURE QUERIES (with hop tracking)
 ;; =============================================================================
@@ -558,6 +583,9 @@
      start-ids - Single dev-id or set of dev-ids to start from
      max-hops  - Maximum number of hops to traverse (nil = unlimited)
 
+   Edges are the effective ones (declared plus dataflow-derived), per
+   `query-effective-dependencies`.
+
    Returns vector of {:entity dev-id :hops n} sorted by hops ascending.
    Does not include start-ids in the result."
   [db start-ids max-hops]
@@ -570,7 +598,7 @@
               (and max-hops (>= hop max-hops)))
         result
         (let [next-frontier (->> frontier
-                                 (mapcat #(query-dependencies db %))
+                                 (mapcat #(query-effective-dependencies db %))
                                  set
                                  (#(clojure.set/difference % visited)))
               hop-results (map (fn [e] {:entity e :hops (inc hop)}) next-frontier)]
@@ -587,6 +615,9 @@
      start-ids - Single dev-id or set of dev-ids to start from
      max-hops  - Maximum number of hops to traverse (nil = unlimited)
 
+   Edges are the effective ones (declared plus dataflow-derived), per
+   `query-effective-dependents`.
+
    Returns vector of {:entity dev-id :hops n} sorted by hops ascending.
    Does not include start-ids in the result."
   [db start-ids max-hops]
@@ -599,7 +630,7 @@
               (and max-hops (>= hop max-hops)))
         result
         (let [next-frontier (->> frontier
-                                 (mapcat #(query-reverse-dependencies db %))
+                                 (mapcat #(query-effective-dependents db %))
                                  set
                                  (#(clojure.set/difference % visited)))
               hop-results (map (fn [e] {:entity e :hops (inc hop)}) next-frontier)]

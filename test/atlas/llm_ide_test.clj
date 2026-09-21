@@ -135,6 +135,62 @@
         ;; endpoint depends on fn/get-user which depends on db
         (is (some #(= :fn/get-user (:entity %)) (:upstream data)))))))
 
+(deftest test-blast-radius-follows-dataflow-edges
+  (setup-test-registry!)
+  (testing "Dependents linked only by a data key are in the blast radius"
+    ;; :fn/validate-token produces :user/id; :fn/get-user and :fn/update-user
+    ;; consume it without declaring validate-token in their deps. Traversing
+    ;; :entity/depends alone reported an empty radius for it.
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/blast-radius
+                   :tool/args {:entity/dev-id-or-set :fn/validate-token
+                               :query/max-hops 3}})
+          affected (set (map :entity (get-in result [:data :affected])))]
+      (is (true? (:success? result)))
+      (is (contains? affected :fn/get-user))
+      (is (contains? affected :fn/update-user))))
+
+  (testing "Agrees with the registry-side graph it is supposed to mirror"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/blast-radius
+                   :tool/args {:entity/dev-id-or-set :fn/validate-token
+                               :query/max-hops 1}})
+          affected (set (map :entity (get-in result [:data :affected])))]
+      (is (= (set (ide/dependents-of :fn/validate-token)) affected))))
+
+  (testing "Accepts a vector of dev-ids, as the MCP boundary delivers them"
+    ;; A JSON array arrived as a vector and was wrapped into #{[...]}, which
+    ;; matched nothing and returned an empty radius with no error.
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/blast-radius
+                   :tool/args {:entity/dev-id-or-set ["fn/validate-token"
+                                                      "component/cache"]
+                               :query/max-hops 3}})
+          affected (set (map :entity (get-in result [:data :affected])))]
+      (is (true? (:success? result)))
+      (is (contains? affected :fn/get-user))
+      (is (contains? affected :fn/update-user)))))
+
+(deftest test-trace-causes-follows-dataflow-edges
+  (setup-test-registry!)
+  (testing "Upstream includes the producer of a consumed key"
+    ;; :fn/get-user consumes :user/id, produced by :fn/validate-token, which it
+    ;; does not declare as a dep.
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/trace-causes
+                   :tool/args {:symptom/dev-id :fn/get-user :query/max-hops 3}})
+          upstream (set (map :entity (get-in result [:data :upstream])))]
+      (is (true? (:success? result)))
+      (is (contains? upstream :fn/validate-token))
+      (is (contains? upstream :component/db))))
+
+  (testing "Accepts a string dev-id, as the MCP boundary delivers it"
+    (let [result (llm-ide/handle-tool
+                  {:tool/name :atlas.llm-ide/trace-causes
+                   :tool/args {:symptom/dev-id "fn/get-user" :query/max-hops 3}})
+          upstream (set (map :entity (get-in result [:data :upstream])))]
+      (is (contains? upstream :fn/validate-token)))))
+
 (deftest test-change-risk
   (setup-test-registry!)
   (testing "Assesses change risk with defaults"

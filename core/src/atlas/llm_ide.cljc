@@ -260,7 +260,7 @@
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:symptom/dev-id :query/max-hops]}]
                 (let [max-hops (or max-hops 5)
-                      upstream (upstream-closure #{dev-id} max-hops)
+                      upstream (upstream-closure (ensure-keyword-set dev-id) max-hops)
                       entities (map :entity upstream)
                       components (filter #(lookup/has-aspect? % :atlas/structure-component) entities)
                       failure-modes (filter #(lookup/has-aspect? % :atlas/risk-failure-mode) entities)]
@@ -277,7 +277,7 @@
   :execution-function/deps #{}
   :atlas/impl (fn [{:keys [:entity/dev-id-or-set :query/max-hops]}]
                 (let [max-hops (or max-hops 3)
-                      changing-set (if (set? dev-id-or-set) dev-id-or-set #{dev-id-or-set})
+                      changing-set (ensure-keyword-set dev-id-or-set)
                       affected (downstream-closure changing-set max-hops)
                       entities (map :entity affected)
                       tiers (->> entities
