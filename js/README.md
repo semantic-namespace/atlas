@@ -8,11 +8,16 @@ The same `.cljc` source that runs on the JVM is compiled to JS. Every function b
 
 | Build | File | Gzipped | Includes |
 |-------|------|---------|----------|
-| **Full** | `dist/atlas.js` | 125 KB | Registry + Query + Datalog + Invariants |
+| **Full** | `dist/atlas.js` | 412 KB | Registry + Query + Datalog + Invariants |
 | **Slim** | `dist-slim/atlas.js` | 72 KB | Registry + Query + Ontology (no Datascript) |
 
 Use **slim** for registration, querying, and analytics.
 Use **full** when you also need datalog graph traversal (upstream/downstream closure, blast radius).
+
+> The full build compiles with `:optimizations :simple` (not `:advanced`):
+> Datascript's `Datom` type and query engine break under advanced Closure
+> munging (queries silently return empty). The slim build has no Datascript, so
+> it keeps `:advanced` and stays small.
 
 ## Install
 

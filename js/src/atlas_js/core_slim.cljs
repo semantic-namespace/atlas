@@ -4,10 +4,11 @@
    Same API as atlas-js.core minus the datalog query functions.
    Significantly smaller bundle (~125KB less)."
   (:require [atlas.registry :as registry]
+            [atlas.registry.analysis :as analysis]
             [atlas.query :as query]
+            [atlas.query.architecture :as arch]
             [atlas.ontology :as ont]
-            [clojure.edn :as edn]
-            [clojure.set :as set]))
+            [clojure.edn :as edn]))
 
 ;; =============================================================================
 ;; JS <-> CLJ Conversion Helpers
@@ -151,19 +152,21 @@
 ;; Architecture Analysis
 ;; =============================================================================
 
+;; atlas.query wrappers are JVM-only (requiring-resolve cycle-dodge); cljs
+;; forbids the cycle, so call the source ns directly (one-way, cycle-free).
 (defn dependency-graph [id-key deps-key]
-  (to-js (query/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (arch/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn by-tier [id-key]
-  (to-js (query/by-tier @registry/registry (->clj-kw id-key))))
+  (to-js (arch/by-tier @registry/registry (->clj-kw id-key))))
 
 (defn domain-coupling [id-key deps-key]
-  (to-js (query/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (arch/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn impact-of-change [entity-id id-key deps-key response-key]
-  (to-js (query/impact-of-change @registry/registry
-                                  (->clj-kw entity-id) (->clj-kw id-key)
-                                  (->clj-kw deps-key) (->clj-kw response-key))))
+  (to-js (arch/impact-of-change @registry/registry
+                                (->clj-kw entity-id) (->clj-kw id-key)
+                                (->clj-kw deps-key) (->clj-kw response-key))))
 
 ;; =============================================================================
 ;; Data Flow
@@ -201,7 +204,7 @@
 (defn registered-types [] (to-js (registry/registered-types)))
 (defn entity-type [identity] (to-js (registry/entity-type (js-set->clj-set identity))))
 (defn aspects [identity] (to-js (registry/aspects (js-set->clj-set identity))))
-(defn summary [] (to-js (registry/summary)))
+(defn summary [] (to-js (analysis/summary)))   ; JVM-only wrapper in atlas.registry; call source ns directly
 (defn validate-types [] (to-js (registry/validate-registry-types)))
 
 ;; =============================================================================

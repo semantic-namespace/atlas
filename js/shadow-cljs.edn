@@ -73,7 +73,9 @@
                                ;; Conversion helpers
                                toJS                atlas-js.core/to-js
                                toClj               atlas-js.core/to-clj}}}
-   :compiler-options {:optimizations :advanced}}
+   ;; :simple, not :advanced — datascript's Datom deftype and query engine
+   ;; break under advanced Closure munging (fields rename, d/q returns []).
+   :compiler-options {:optimizations :simple}}
 
   ;; ─── Slim build (registry + query + ontology, NO datascript) ───
   :atlas-js-slim
