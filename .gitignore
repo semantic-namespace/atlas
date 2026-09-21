@@ -54,6 +54,8 @@ ui/resources/public-v2/atlas-ui/js/
 
 /core/.cpcache/
 /ui/.cpcache/
+/store/.cpcache/
+/store/target/
 /core/target/
 /dev-tools/target/
 /ui/target/
