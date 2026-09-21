@@ -13,8 +13,17 @@
   (:require [clojure.string :as str]
             [clojure.set :as set]
             [clojure.spec.alpha :as s]
-            [taoensso.telemere :as tel]
+            #?@(:bb [] :default [[taoensso.telemere :as tel]])
             #?(:cljs [goog.string :as gstring])))
+
+(defn- warn!
+  "Warn via telemere on Clojure/ClojureScript. Babashka gets stderr instead:
+   telemere's encore dependency uses deftype forms sci cannot evaluate, so
+   requiring it would make the whole registry — and every query namespace
+   downstream of it — unloadable under bb."
+  [msg]
+  #?(:bb (binding [*out* *err*] (prn msg))
+     :default (tel/log! {:level :warn} msg)))
 
 ;; =============================================================================
 ;; Registry — dual storage: log (source of truth) + map (query index)
@@ -613,11 +622,10 @@
                     (if required-keys
                       (if (s/valid? (dyn-spec required-keys) props)
                         true
-                        (do (tel/log! {:level :warn}
-                                      ["NOT VALID"
-                                       {:dev-id (:atlas/dev-id props)
-                                        :compound-id compound-id
-                                        :message (s/explain-str (dyn-spec required-keys) props)}])
+                        (do (warn! ["NOT VALID"
+                                    {:dev-id (:atlas/dev-id props)
+                                     :compound-id compound-id
+                                     :message (s/explain-str (dyn-spec required-keys) props)}])
                             false))
                       true))))
             @registry)))
