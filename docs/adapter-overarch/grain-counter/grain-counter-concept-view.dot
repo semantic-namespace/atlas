@@ -1,0 +1,24 @@
+digraph "Grain Example Counter (Atlas -> Overarch): events as data-flow edges" {
+labelloc= "t"
+label="Grain Example Counter (Atlas -> Overarch): events as data-flow edges"
+
+
+command_example_calculateAverageCounterValue[label="command.example/calculate-average-counter-value", style="filled", fillcolor="#dddddd"];
+command_example_createCounter[label="command.example/create-counter", style="filled", fillcolor="#dddddd"];
+command_example_decrementCounter[label="command.example/decrement-counter", style="filled", fillcolor="#dddddd"];
+command_example_incrementCounter[label="command.example/increment-counter", style="filled", fillcolor="#dddddd"];
+command_example_resetCounter[label="command.example/reset-counter", style="filled", fillcolor="#dddddd"];
+periodic_example_examplePeriodicTask[label="periodic.example/example-periodic-task", style="filled", fillcolor="#dddddd"];
+processor_example_calculateAverageCounterValue[label="processor.example/calculate-average-counter-value", style="filled", fillcolor="#dddddd"];
+query_example_counter[label="query.example/counter", style="filled", fillcolor="#dddddd"];
+query_example_counters[label="query.example/counters", style="filled", fillcolor="#dddddd"];
+readModel_example_counters[label="read-model.example/counters", style="filled", fillcolor="#dddddd"];
+command_example_createCounter -> readModel_example_counters [label="counter-created"];
+command_example_decrementCounter -> processor_example_calculateAverageCounterValue [label="counter-decremented"];
+command_example_decrementCounter -> readModel_example_counters [label="counter-decremented"];
+command_example_incrementCounter -> processor_example_calculateAverageCounterValue [label="counter-incremented"];
+command_example_incrementCounter -> readModel_example_counters [label="counter-incremented"];
+processor_example_calculateAverageCounterValue -> command_example_calculateAverageCounterValue [label="depends on"];
+query_example_counter -> readModel_example_counters [label="depends on"];
+query_example_counters -> readModel_example_counters [label="depends on"];
+}

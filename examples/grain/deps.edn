@@ -1,0 +1,42 @@
+{;; Grain demo module — the only place the grain library appears in the atlas
+ ;; monorepo. Atlas core stays grain-free; this module holds the executable
+ ;; demo: atlas-authored entities materialized into grain's registries and
+ ;; run on grain's in-memory event store.
+ ;;
+ ;; Grain is consumed from the local checkout for the spike. For a portable
+ ;; setup swap :local/root for git deps:
+ ;;   {:git/url "https://github.com/ObneyAI/grain.git"
+ ;;    :git/sha "<sha>" :deps/root "projects/grain-core-v2"}
+ :paths ["src"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"} ;; grain requires 1.12
+
+        io.github.semantic-namespace/atlas {:local/root "../../core"}
+
+        ;; The behaviour-tree vocabulary. Lived here as `orc-demo.behavior-tree`
+        ;; until 2026-07-16; extracted because it only ever needed atlas core,
+        ;; while THIS module drags in grain-core-v2, LMDB and --add-opens — so
+        ;; nobody could reuse the ontology without the whole stack.
+        io.github.semantic-namespace/atlas-bt {:local/root "../../bt"}
+
+        obneyai/grain-core-v2
+        {:local/root "/home/tangrammer/git/grain/projects/grain-core-v2"}
+
+        obneyai/grain-code-agent-tools
+        {:local/root "/home/tangrammer/git/grain/projects/grain-code-agent-tools"}}
+
+ :aliases
+ {;; LMDB (read-model L2 cache) needs java.nio opened on JDK 17+ — same
+  ;; opts grain's own workspace uses.
+  :demo
+  {:jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+              "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
+   :main-opts ["-m" "grain-demo.demo"]}
+
+  ;; Interactive: drive the atlas-defined grain system from a REPL
+  ;; (clj-nrepl-eval / CIDER).
+  :nrepl
+  {:extra-deps {nrepl/nrepl {:mvn/version "1.3.0"}}
+   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+              "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
+   :main-opts ["-m" "nrepl.cmdline" "--port" "7899"]}}}

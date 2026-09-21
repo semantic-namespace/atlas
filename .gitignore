@@ -65,6 +65,8 @@ ui/resources/public-v2/atlas-ui/js/
 /ui/resources/public-v4/
 /ui/resources/public-v5/
 /dev-tools/.cpcache/
+/examples/*/.cpcache/
+/examples/*/target/
 
 
 /cloud/.cpcache/
