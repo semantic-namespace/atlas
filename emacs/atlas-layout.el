@@ -14,6 +14,11 @@
 ;; conversation) via emacsclient --eval, but all functions are interactive
 ;; and can also be called directly via M-x.
 ;;
+;; LLM-driven sessions run in a dedicated daemon (see atlas-llm-emacs.sh):
+;; the LLM starts it and connects CIDER; the human attaches a frame with
+;; `emacsclient -t -s <socket>'.  Layouts are drawn into that attached
+;; client frame, each in its own tab, so earlier views stay reachable.
+;;
 ;; Entry points:
 ;;   atlas-layout/entity-focus   ENTITY   — narrative + type-appropriate side
 ;;   atlas-layout/dataflow-focus DATA-KEY — producers top / consumers bottom
@@ -26,6 +31,96 @@
 (require 'atlas-core)
 (require 'atlas-browse)
 (require 'atlas-lsp)
+
+(defgroup atlas-layout nil
+  "Intent-driven window layouts for Atlas."
+  :group 'atlas)
+
+(defcustom atlas-layout-use-tabs t
+  "When non-nil, each layout opens in its own tab named after the layout."
+  :type 'boolean
+  :group 'atlas-layout)
+
+(defcustom atlas-layout-narrow-width 140
+  "Frames narrower than this stack entity-focus panes vertically."
+  :type 'integer
+  :group 'atlas-layout)
+
+;;; Client frame + tabs
+
+(defvar atlas-layout--last-client-frame nil
+  "Most recently attached client frame (set by `server-after-make-frame-hook').")
+
+(defun atlas-layout--remember-client-frame ()
+  "Record the selected frame as the latest attach target when it is a client frame."
+  (when (frame-parameter (selected-frame) 'client)
+    (setq atlas-layout--last-client-frame (selected-frame))))
+
+(add-hook 'server-after-make-frame-hook #'atlas-layout--remember-client-frame)
+
+(defcustom atlas-layout-tty-background-mode 'dark
+  "Background mode to assume for terminal client frames.
+nil keeps Emacs's own guess.
+Emacs usually cannot query a terminal's background and guesses `light', so on
+a dark terminal every face that has light/dark variants picks the wrong one."
+  :type '(choice (const dark) (const light) (const :tag "Emacs's guess" nil))
+  :group 'atlas-layout)
+
+(defun atlas-layout--set-tty-background-mode (&optional frame)
+  "Apply `atlas-layout-tty-background-mode' to FRAME.
+Only terminal client frames are affected."
+  (let ((frame (or frame (selected-frame))))
+    (when (and atlas-layout-tty-background-mode
+               (frame-parameter frame 'client)
+               (not (display-graphic-p frame)))
+      ;; frame-set-background-mode derives the mode from the terminal parameter
+      ;; (a frame parameter alone gets overwritten); scoped to this terminal only.
+      (set-terminal-parameter (frame-terminal frame) 'background-mode
+                              atlas-layout-tty-background-mode)
+      (frame-set-background-mode frame))))
+
+(add-hook 'server-after-make-frame-hook #'atlas-layout--set-tty-background-mode)
+
+(defun atlas-layout--client-frames ()
+  "Live client frames, most recently attached first."
+  (let ((all (seq-filter (lambda (f) (frame-parameter f 'client)) (frame-list))))
+    (if (memq atlas-layout--last-client-frame all)
+        (cons atlas-layout--last-client-frame
+              (delq atlas-layout--last-client-frame all))
+      all)))
+
+(defun atlas-layout--client-frame ()
+  "Return the frame a human attached via emacsclient, or signal.
+Prefers the selected frame when it is a client frame (M-x usage);
+otherwise the most recently attached one (emacsclient --eval usage, where
+the selected frame is the daemon's invisible initial frame, and an older
+suspended client may still hold a frame on the same terminal)."
+  (or (and (frame-parameter (selected-frame) 'client) (selected-frame))
+      (car (atlas-layout--client-frames))
+      (and (not (daemonp)) (selected-frame))
+      (user-error "No frame attached. Run: emacsclient -t -s %s" server-name)))
+
+(defun atlas-layout--enter-tab (name)
+  "Switch to (or create) the tab NAME when `atlas-layout-use-tabs' is set."
+  ;; tab-bar is preloaded in Emacs 27+; no `require' (it breaks some inits).
+  (when (and atlas-layout-use-tabs (fboundp 'tab-bar-switch-to-tab))
+    (tab-bar-mode 1)
+    (tab-bar-switch-to-tab name)))
+
+(defmacro atlas-layout--with-layout (name &rest body)
+  "Run BODY in the attached client frame, inside the tab NAME."
+  (declare (indent 1))
+  `(with-selected-frame (atlas-layout--client-frame)
+     ;; Don't rearrange windows under a human who is mid-command.
+     (when (active-minibuffer-window)
+       (user-error "The attached frame's minibuffer is active; try again when it's closed"))
+     (atlas-layout--enter-tab ,name)
+     ,@body))
+
+(defun atlas-layout--require-entity (entity)
+  "Return ENTITY's type string, or signal if it is not in the registry."
+  (or (atlas-layout--entity-type entity)
+      (user-error "Entity %s not found in the connected registry" entity)))
 
 ;;; Helpers
 
@@ -110,20 +205,17 @@ ETYPE is a string like \":atlas/execution-function\"."
 
 (defun atlas-layout--definition-location (entity)
   "Return (abs-file line) for ENTITY's register! call, or nil.
-Searches via nREPL so paths resolve relative to the nREPL project root."
+Delegates to lsp-helpers/find-definition, which disambiguates re-registrations
+(e.g. test fixtures reusing the dev-id) by the loaded entity's aspects.
+Paths resolve relative to the nREPL project root."
   (let* ((kw (if (string-prefix-p ":" entity) entity (concat ":" entity)))
-         (code (format "(do (require '[%s :as lsp]) (vec (lsp/find-dev-id-usages %s)))"
+         (code (format "(do (require '[%s :as lsp]) (lsp/find-definition %s))"
                        atlas-lsp-helpers-ns kw))
-         (usages-list (atlas--to-list (atlas--eval code)))
-         (root (atlas-layout--nrepl-root))
-         ;; Registration line contains the entity-type keyword e.g. ":atlas/execution-function"
-         (reg (or (seq-find (lambda (u)
-                              (string-match-p ":atlas/" (or (atlas--get u 'content) "")))
-                            usages-list)
-                  (car usages-list))))
-    (when (and reg root)
-      (list (expand-file-name (atlas--get reg 'file) root)
-            (atlas--get reg 'line)))))
+         (loc (atlas--eval code))
+         (root (atlas-layout--nrepl-root)))
+    (when (and loc root)
+      (list (expand-file-name (atlas--get loc 'file) root)
+            (atlas--get loc 'line)))))
 
 (defun atlas-layout--open-definition (entity)
   "Open source file at ENTITY's register! line in the selected window.
@@ -154,19 +246,24 @@ Top-right: ontology-driven semantic pane — queries the live registry to check
   New entity types are handled automatically as their ontology modules register.
 Bottom (full width): source file opened at the register! line."
   (interactive (list (atlas--completing-read-entity "Entity: ")))
+  (atlas-layout--with-layout (format "entity %s" entity)
   (delete-other-windows)
-  (let* ((top    (selected-window))
-         (bottom (split-window-below (/ (* (window-height) 2) 3)))
-         ;; Pre-compute both while the initial buffer has CIDER context —
+  (let* (;; Pre-compute both while the initial buffer has CIDER context —
          ;; after the first atlas-layout--in-window call the current buffer
          ;; may be an *atlas:* buffer which has no CIDER project association.
-         (etype  (atlas-layout--entity-type entity))
-         (has-df (atlas-layout--has-dataflow-p etype)))
+         (etype  (atlas-layout--require-entity entity))
+         (has-df (atlas-layout--has-dataflow-p etype))
+         (narrow (< (frame-width) atlas-layout-narrow-width))
+         (top    (selected-window))
+         (bottom (split-window-below (/ (* (window-height) 2) 3))))
     ;; Top-left: entity details
     (atlas-layout--in-window top
       (lambda () (atlas-browse-entity-info entity)))
     ;; Top-right: ontology-driven semantic pane.
-    (let ((top-right (split-window-right nil top)))
+    ;; Narrow (e.g. terminal) frames stack the semantic pane under the details.
+    (let ((top-right (if narrow
+                         (split-window-below nil top)
+                       (split-window-right nil top))))
       (atlas-layout--in-window top-right
         (lambda ()
           (if has-df
@@ -191,18 +288,19 @@ Bottom (full width): source file opened at the register! line."
           (setq-local atlas-layout--entity-nav-fn nav-fn))
         (with-current-buffer (window-buffer top-right)
           (setq-local atlas-layout--entity-nav-fn nav-fn))))
-    (select-window top)))
+    (select-window top))))
 
 ;;;###autoload
 (defun atlas-layout/dataflow-focus (data-key)
   "Open data flow layout for DATA-KEY.
 Top window: producers.  Bottom window: consumers."
   (interactive (list (read-string "Data key (e.g. :user/id): " ":")))
-  (delete-other-windows)
-  (let ((top (selected-window)))
-    (atlas-layout--in-window top
-      (lambda () (atlas-browse-producers data-key)))
-    (let ((bottom (split-window-below)))
+  (atlas-layout--with-layout (format "flow %s" data-key)
+    (delete-other-windows)
+    (let* ((top (selected-window))
+           (bottom (split-window-below)))
+      (atlas-layout--in-window top
+        (lambda () (atlas-browse-producers data-key)))
       (atlas-layout--in-window bottom
         (lambda () (atlas-browse-consumers data-key)))
       (select-window top))))
@@ -213,11 +311,13 @@ Top window: producers.  Bottom window: consumers."
 Left window: full recursive dependents tree.
 Right window: dependents summary (count by type)."
   (interactive (list (atlas--completing-read-entity "Entity: ")))
-  (delete-other-windows)
-  (let ((left (selected-window)))
-    (atlas-layout--in-window left
-      (lambda () (atlas-browse-recursive-dependents entity)))
-    (let ((right (split-window-right (/ (window-width) 3))))
+  (atlas-layout--with-layout (format "blast %s" entity)
+    (atlas-layout--require-entity entity)
+    (delete-other-windows)
+    (let* ((left (selected-window))
+           (right (split-window-right (/ (* (window-width) 2) 3))))
+      (atlas-layout--in-window left
+        (lambda () (atlas-browse-recursive-dependents entity)))
       (atlas-layout--in-window right
         (lambda () (atlas-browse-dependents-summary entity)))
       (select-window left))))
@@ -227,32 +327,110 @@ Right window: dependents summary (count by type)."
   "Open registry home: total count and type breakdown.
 Each type is clickable — opens domain-survey for that type."
   (interactive)
-  (delete-other-windows)
-  (atlas-layout--in-window (selected-window)
-    (lambda () (atlas-browse-home))))
+  (atlas-layout--with-layout "home"
+    (delete-other-windows)
+    (atlas-layout--in-window (selected-window)
+      (lambda () (atlas-browse-home)))))
 
 ;;;###autoload
 (defun atlas-layout/domain-survey (aspect)
   "Show all entities carrying ASPECT, grouped by type with collapsible lists.
 Each type group shows up to 10 entities; click '… N more' to reveal the rest."
   (interactive (list (read-string "Aspect (e.g. :domain/auth): " ":")))
-  (delete-other-windows)
-  (atlas-layout--in-window (selected-window)
-    (lambda () (atlas-browse-aspect-entities aspect))))
+  (atlas-layout--with-layout (format "aspect %s" aspect)
+    (delete-other-windows)
+    (atlas-layout--in-window (selected-window)
+      (lambda () (atlas-browse-aspect-entities aspect)))))
 
 ;;;###autoload
 (defun atlas-layout/arch-overview ()
   "Open architecture overview layout.
 Top window: system summary.  Bottom window: topological execution order."
   (interactive)
-  (delete-other-windows)
-  (let ((top (selected-window)))
-    (atlas-layout--in-window top
-      (lambda () (atlas-browse-system-summary)))
-    (let ((bottom (split-window-below (/ (window-height) 2))))
+  (atlas-layout--with-layout "architecture"
+    (delete-other-windows)
+    (let* ((top (selected-window))
+           (bottom (split-window-below)))
+      (atlas-layout--in-window top
+        (lambda () (atlas-browse-system-summary)))
       (atlas-layout--in-window bottom
         (lambda () (atlas-browse-execution-order)))
       (select-window top))))
+
+;;; LLM session: connect + status
+
+(defun atlas-layout--connected-endpoint ()
+  "Return (HOST PORT) of the live CIDER REPL, or nil."
+  (when-let* ((repl (atlas-layout--find-cider-repl)))
+    (with-current-buffer repl
+      (list (plist-get nrepl-endpoint :host)
+            (plist-get nrepl-endpoint :port)))))
+
+;;;###autoload
+(defun atlas-layout/llm-connect (host port project-dir)
+  "Connect CIDER to HOST:PORT for PROJECT-DIR, unless already connected there.
+Idempotent, so the LLM can call it at the start of every session.
+Clears per-connection caches when a new connection is made."
+  (let ((current (atlas-layout--connected-endpoint)))
+    (if (and current (equal (cadr current) port))
+        "already-connected"
+      (setq atlas-layout--nrepl-root-cache nil)
+      (clrhash atlas-layout--dataflow-cache)
+      (let ((default-directory (file-name-as-directory project-dir))
+            (cider-repl-pop-to-buffer-on-connect nil))
+        (cider-connect-clj (list :host host :port port
+                                 :project-dir project-dir)))
+      "connecting")))
+
+;;;###autoload
+(defun atlas-layout/llm-status ()
+  "One-line status for the LLM: socket, CIDER endpoint, attached frames, tabs."
+  (let* ((endpoint (atlas-layout--connected-endpoint))
+         (frames (atlas-layout--client-frames)))
+    (format "socket=%s cider=%s frames=%d size=%s tabs=%s"
+            server-name
+            (if endpoint (format "%s:%s" (car endpoint) (cadr endpoint)) "none")
+            (length frames)
+            (if frames
+                (format "%dx%d" (frame-width (car frames)) (frame-height (car frames)))
+              "-")
+            (if frames
+                (mapconcat (lambda (tab) (alist-get 'name tab))
+                           (funcall tab-bar-tabs-function (car frames)) ",")
+              "-"))))
+
+;;;###autoload
+(defun atlas-layout/llm-report ()
+  "Describe what the attached frame currently shows: one line per window."
+  (with-selected-frame (atlas-layout--client-frame)
+    (mapconcat
+     (lambda (w)
+       (with-current-buffer (window-buffer w)
+         (format "%s | %s" (buffer-name)
+                 (replace-regexp-in-string
+                  "\n+" " / "
+                  (buffer-substring-no-properties
+                   (point-min) (min (point-max) (+ (point-min) 300)))))))
+     (window-list) "\n")))
+
+;;;###autoload
+(defun atlas-layout/llm-screen ()
+  "Return what the human actually sees in the attached frame.
+One block per window: header (buffer, size, point line) followed by the
+visible text from window-start to window-end — so an LLM can check a layout
+against the registry without asking the human to describe their screen."
+  (with-selected-frame (atlas-layout--client-frame)
+    (redisplay t)
+    (mapconcat
+     (lambda (w)
+       (with-current-buffer (window-buffer w)
+         (format "=== %s [%dx%d] point-line=%d%s\n%s"
+                 (buffer-name) (window-width w) (window-height w)
+                 (line-number-at-pos (window-point w))
+                 (if (eq w (frame-selected-window)) " SELECTED" "")
+                 (buffer-substring-no-properties
+                  (window-start w) (window-end w t)))))
+     (window-list) "\n")))
 
 (provide 'atlas-layout)
 ;;; atlas-layout.el ends here
