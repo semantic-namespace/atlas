@@ -52,7 +52,7 @@ Both versions let you explore entities, filter by aspects, trace dependencies, a
 
 Default: v1 on `http://localhost:8082`
 
-**Note:** The UI automatically detects the browser's hostname (localhost, 10.147.17.100, etc.) and uses it for API requests. No additional configuration needed for remote access.
+**Note:** The UI automatically detects the browser's hostname (localhost, a LAN or VPN address, etc.) and uses it for API requests. No additional configuration needed for remote access.
 
 ## Features
 
@@ -299,17 +299,17 @@ The shadow-cljs configuration serves both versions:
 ```
 
 **Access:**
-- v1: `http://localhost:8081` (or `http://10.147.17.100:8081`)
-- v2: `http://localhost:8083` (or `http://10.147.17.100:8083`)
+- v1: `http://localhost:8081` (or `http://<server-ip>:8081`)
+- v2: `http://localhost:8083` (or `http://<server-ip>:8083`)
 
 ### Backend API Server
 
 The Atlas UI backend server (REPL) defaults to **port 8082**. When using shadow-cljs watch on a different machine:
 
 ```
-Browser URL: http://10.147.17.100:8081/?port=8082
+Browser URL: http://<server-ip>:8081/?port=8082
                   ↓
-  Requests API from: http://10.147.17.100:8082/api/atlas/registry
+  Requests API from: http://<server-ip>:8082/api/atlas/registry
 ```
 
 The UI automatically uses the current browser's hostname, so requests work from any IP/hostname.

@@ -368,7 +368,7 @@ Both Emacs integration and Visual Explorer support remote development:
 
 **Visual Explorer:**
 - Automatically detects the browser's hostname/IP
-- When accessing `http://10.147.17.100:8081/?port=8082`, API calls go to `http://10.147.17.100:8082/api/atlas/registry`
+- When accessing `http://<server-ip>:8081/?port=8082`, API calls go to `http://<server-ip>:8082/api/atlas/registry`
 - Works over any network (localhost, LAN, VPN, etc.)
 
 ## Pair with an LLM (Claude Code)
