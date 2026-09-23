@@ -65,6 +65,46 @@
             (into [])))
      :cljs []))
 
+#?(:clj
+   (defn- registration-line?
+     "True when a usage line looks like the dev-id argument of a register! call:
+     the bare keyword on its own line, or an `:atlas/dev-id <kw>` entry."
+     [content keyword-str]
+     (or (= content keyword-str)
+         (boolean (re-find (re-pattern (str ":atlas/dev-id\\s+"
+                                            (java.util.regex.Pattern/quote keyword-str)
+                                            "(?![\\w./*+!?-])"))
+                           content)))))
+
+(defn find-definition
+  "Best-guess source location of dev-id's registration: {:file :line} or nil.
+
+  Text search alone is ambiguous — test fixtures often re-register the same
+  dev-id with other aspects — so each candidate registration is ranked by how
+  many of the loaded entity's aspects appear near it (earliest wins ties)."
+  [dev-id]
+  #?(:clj
+     (let [keyword-str (str dev-id)
+           aspects     (->> (get @cid/dev-id-index dev-id)
+                            (remove #(= "atlas" (namespace %)))
+                            (map str))
+           candidates  (->> (find-dev-id-usages dev-id)
+                            (filter #(registration-line? (:content %) keyword-str)))
+           score       (fn [{:keys [file line]}]
+                         (let [lines  (str/split-lines (slurp file))
+                               window (->> lines
+                                           (drop (max 0 (- line 6)))
+                                           (take 18)
+                                           (str/join "\n"))]
+                           (count (filter #(str/includes? window %) aspects))))]
+       (some->> candidates
+                (map-indexed (fn [i c] [(- (score c)) i c]))
+                (sort)
+                first
+                last
+                (#(select-keys % [:file :line]))))
+     :cljs nil))
+
 ;; =============================================================================
 ;; ASPECT SEARCH - Find all identities with a specific aspect
 ;; =============================================================================
