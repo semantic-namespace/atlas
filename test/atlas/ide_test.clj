@@ -402,3 +402,30 @@
     (is (= #{:foo/bar :baz/qux} @called) "validate-identity sends keyword set"))
 
   (is (every? map? (ide/list-templates)) "list-templates remains usable"))
+
+(deftest system-summary-counts-by-entity-type
+  (require 'atlas.ontology.data-schema :reload)
+  (cid/register! :component/db :atlas/structure-component #{:domain/orders}
+                 {:structure-component/deps #{}})
+  (cid/register! :fn/place-order :atlas/execution-function #{:domain/orders}
+                 {:execution-function/context [:order/id]
+                  :execution-function/response [:order/status]
+                  :execution-function/deps #{:component/db}})
+  ;; Endpoint identities also carry :atlas/execution-function
+  (cid/register! :endpoint/place-order :atlas/interface-endpoint
+                 #{:domain/orders :atlas/execution-function}
+                 {:interface-endpoint/context [:order/id]
+                  :interface-endpoint/response [:order/status]
+                  :interface-endpoint/deps #{:fn/place-order}})
+  (cid/register! :schema/order :atlas/data-schema #{:domain/orders}
+                 {:data-schema/fields [:order/id :order/status]})
+  (let [{:keys [components functions endpoints schemas summary]} (ide/system-summary)]
+    (is (= [:component/db] components)
+        "type-defining ontology entities are not counted as instances")
+    (is (= [:fn/place-order] functions)
+        "endpoints are not counted as functions")
+    (is (= [:endpoint/place-order] endpoints))
+    (is (= [:schema/order] schemas)
+        "schemas are found under :atlas/data-schema")
+    (is (= "This system has 1 components, 1 functions, 1 endpoints, and 1 schemas across 1 domains."
+           summary))))

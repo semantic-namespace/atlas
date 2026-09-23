@@ -15,7 +15,7 @@
 (defn- aspects-of [dev-id]
   (when-let [id (rt/identity-for dev-id)]
     (disj id :atlas/execution-function :atlas/structure-component
-          :atlas/interface-endpoint :atlas/schema)))
+          :atlas/interface-endpoint :atlas/data-schema)))
 
 (defn- domain-of [dev-id]
   (when-let [id (rt/identity-for dev-id)]
@@ -31,18 +31,27 @@
       (contains? id :atlas/interface-endpoint) :endpoint
       (contains? id :atlas/execution-function) :function
       (contains? id :atlas/structure-component) :component
-      (contains? id :atlas/schema) :schema
+      (contains? id :atlas/data-schema) :schema
       :else :unknown)))
 
 ;; =============================================================================
 ;; SYSTEM OVERVIEW
 ;; =============================================================================
 
+(defn- dev-ids-of-type
+  "Dev-ids whose :atlas/type is entity-type.
+  Selecting by aspect over-counts: endpoints also carry :atlas/execution-function,
+  and each type's ontology entity carries its own type keyword."
+  [entity-type]
+  (keep (fn [[_ props]]
+          (when (= entity-type (:atlas/type props)) (:atlas/dev-id props)))
+        (cid/current-registry)))
+
 (defn system-overview []
-  (let [components (rt/all-with-aspect :atlas/structure-component)
-        functions (rt/all-with-aspect :atlas/execution-function)
-        endpoints (rt/all-with-aspect :atlas/interface-endpoint)
-        schemas (rt/all-with-aspect :atlas/schema)
+  (let [components (dev-ids-of-type :atlas/structure-component)
+        functions (dev-ids-of-type :atlas/execution-function)
+        endpoints (dev-ids-of-type :atlas/interface-endpoint)
+        schemas (dev-ids-of-type :atlas/data-schema)
         domains (->> (concat components functions endpoints)
                      (map domain-of)
                      (remove nil?)
@@ -284,7 +293,7 @@
   [dev-id]
   (let [id (rt/identity-for dev-id)
         aspects (disj id :atlas/execution-function :atlas/structure-component
-                      :atlas/interface-endpoint :atlas/schema)
+                      :atlas/interface-endpoint :atlas/data-schema)
         props (rt/props-for dev-id)]
     {:dev-id dev-id
      :type (type-of dev-id)

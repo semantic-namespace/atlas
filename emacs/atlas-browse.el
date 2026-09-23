@@ -17,6 +17,7 @@
 (require 'atlas-core)
 (require 'atlas-display)
 (require 'atlas-completion)
+(require 'atlas-theme)
 
 ;;;###autoload
 (defun atlas-browse-list-entities ()
@@ -176,9 +177,82 @@ Step 3: display entity info for the selected entity."
     ;; Step 3: display entity info
     (atlas-browse-entity-info selected-entity)))
 
+(defconst atlas-browse--aspect-ns-order '("domain" "tier" "operation" "effect")
+  "Aspect namespaces shown first in the Identity section, in this order.")
+
+(defconst atlas-browse--footer-hints
+  '(("RET" . "open") ("TAB" . "next") ("b" . "blast radius") ("r" . "used by")
+    ("M-." . "source") ("g" . "refresh") ("?" . "menu"))
+  "Key hints shown at the bottom of entity views (all bound in `atlas-mode-map').")
+
+(defun atlas-browse--prop (info key)
+  "Look up property KEY in INFO's definition values, then its extra props."
+  (or (atlas--get (atlas--get info 'entity/definition-values) key)
+      (atlas--get (atlas--get info 'entity/extra-props) key)))
+
+(defun atlas-browse--insert-aspect-name (aspect)
+  "Insert ASPECT's name, without namespace, as a button.
+The button opens the survey of the full aspect."
+  (let* ((full (atlas--to-string aspect))
+         (ns (and (string-match "\\`:?\\([^/]+\\)/\\(.*\\)\\'" full) (match-string 1 full)))
+         (name (if ns (match-string 2 full) full))
+         (effect (and (equal ns "effect") (not (equal name "read")))))
+    (insert-text-button name
+                        'face (if effect 'atlas-theme-effect-face 'atlas-aspect-face)
+                        'follow-link t
+                        'help-echo (format "All entities with %s" full)
+                        'action (lambda (_) (atlas-browse-aspect-entities full)))))
+
+(defun atlas-browse--insert-identity (aspects)
+  "Insert the Identity section: ASPECTS grouped into one row per namespace."
+  (let ((groups (make-hash-table :test 'equal)) namespaces)
+    (dolist (a (atlas--to-list aspects))
+      (let* ((s (atlas--to-string a))
+             (ns (if (string-match "\\`:?\\([^/]+\\)/" s) (match-string 1 s) "")))
+        (unless (gethash ns groups) (push ns namespaces))
+        (puthash ns (append (gethash ns groups) (list a)) groups)))
+    (setq namespaces
+          (append (seq-filter (lambda (n) (member n namespaces)) atlas-browse--aspect-ns-order)
+                  (sort (seq-remove (lambda (n) (member n atlas-browse--aspect-ns-order)) namespaces)
+                        #'string<)))
+    (atlas-theme-section "Identity")
+    (let ((width (max 11 (1+ (apply #'max 0 (mapcar #'length namespaces))))))
+      (dolist (ns namespaces)
+        (atlas-theme-row ns
+                         (lambda ()
+                           (let ((first t))
+                             (dolist (a (gethash ns groups))
+                               (unless first (insert "  "))
+                               (setq first nil)
+                               (atlas-browse--insert-aspect-name a))))
+                         width)))
+    (insert "\n")))
+
+(defun atlas-browse--insert-data-keys (keys)
+  "Insert KEYS inline as data-key buttons, wrapping at the rule width."
+  (insert "  ")
+  (let ((first t))
+    (dolist (k (atlas--to-list keys))
+      (let ((s (atlas--to-string k)))
+        (unless first
+          (if (> (+ (current-column) 3 (length s)) atlas-theme-rule-width)
+              (insert "\n  ")
+            (insert "   ")))
+        (setq first nil)
+        (atlas--insert-data-key s))))
+  (insert "\n\n"))
+
+(defun atlas-browse--property-role (key)
+  "Classify property KEY by its name: `needs', `produces', `deps' or nil."
+  (let ((name (replace-regexp-in-string "\\`.*/" "" (atlas--to-string key))))
+    (pcase name
+      ("context" 'needs)
+      ("response" 'produces)
+      ("deps" 'deps))))
+
 ;;;###autoload
 (defun atlas-browse-entity-info (entity)
-  "Show detailed info for ENTITY."
+  "Show detailed info for ENTITY: identity, what it needs/produces, dependencies."
   (interactive
    (list (atlas--completing-read-entity "Entity: ")))
   (let* ((entity-kw (atlas--to-keyword entity))
@@ -186,69 +260,78 @@ Step 3: display entity info for the selected entity."
          (buf (atlas--buffer (format "entity:%s" entity))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-entity-info entity)))
-      (atlas--insert-header (format "Entity: %s" entity))
       (if (not info)
-          (insert "  (no info available or error)\n")
-        ;; Aspects
-        (when-let ((aspects (or (atlas--get info 'entity/aspects)
-                                (atlas--get info 'aspects))))
-          (atlas--insert-subheader "Aspects")
-          (let ((aspects-list (if (vectorp aspects) (append aspects nil) aspects)))
-            (dolist (aspect aspects-list)
-              (insert "  ")
-              (atlas--insert-aspect aspect)
-              (insert "\n")))
-          (insert "\n"))
-
-        ;; Properties
-        (when-let ((definition-values (or (atlas--get info 'entity/definition-values)
-                                          (atlas--get info 'definition-values)
-                                          (atlas--get info 'entity/props)
-                                          (atlas--get info 'props))))
-          (let* ((entries (atlas--map-entries definition-values))
-                 (entries (seq-filter (lambda (pair) (not (null (cdr pair)))) entries)))
-            (when entries
-              (dolist (pair entries)
-                (atlas--insert-subheader (atlas--to-string (car pair)))
-                (atlas--insert-property-value (cdr pair))
-                (insert "\n"))))))
+          (progn
+            (atlas-theme-title nil entity-kw "not found")
+            (insert "  ")
+            (atlas-theme-dim "No entity with this dev-id in the connected registry.")
+            (insert "\n"))
+        (let* ((type (atlas-browse--prop info 'atlas/type))
+               (props (seq-remove
+                       (lambda (pair)
+                         (or (null (cdr pair))
+                             (member (atlas--to-string (car pair)) '(":atlas/dev-id" ":atlas/type"))))
+                       (atlas--map-entries (atlas--get info 'entity/definition-values))))
+               (dep-ids (apply #'append
+                               (mapcar (lambda (pair)
+                                         (when (eq (atlas-browse--property-role (car pair)) 'deps)
+                                           (atlas--to-list (cdr pair))))
+                                       props)))
+               (types (atlas-theme-entity-types dep-ids)))
+          (atlas-theme-title type entity-kw (atlas-theme--type-name type))
+          (atlas-browse--insert-identity (atlas--get info 'entity/aspects))
+          (dolist (pair props)
+            (let ((items (atlas--to-list (cdr pair))))
+              (pcase (atlas-browse--property-role (car pair))
+                ('needs    (atlas-theme-section "Needs" (length items))
+                           (atlas-browse--insert-data-keys items))
+                ('produces (atlas-theme-section "Produces" (length items))
+                           (atlas-browse--insert-data-keys items))
+                ('deps     (atlas-theme-section "Depends on" (length items))
+                           (atlas-theme-entity-list items types 10 "no dependencies")
+                           (insert "\n"))
+                (_         (atlas-theme-section (atlas--to-string (car pair)))
+                           (atlas--insert-property-value (cdr pair))
+                           (insert "\n")))))))
+      (atlas-theme-footer atlas-browse--footer-hints)
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-data-flow (entity)
-  "Show data flow for ENTITY."
+  "Show where each input of ENTITY comes from."
   (interactive
    (list (atlas--completing-read-entity "Function: ")))
   (let* ((entity-kw (atlas--to-keyword entity))
-         (flow (atlas--eval-safe (format "(data-flow %s)" entity-kw)))
+         (flow (atlas--to-list (atlas--eval-safe (format "(data-flow %s)" entity-kw))))
          (buf (atlas--buffer (format "flow:%s" entity))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-data-flow entity)))
-      (atlas--insert-header (format "Data Flow: %s" entity))
-      (let ((flow-list (atlas--to-list flow)))
-        (if (and flow-list (> (length flow-list) 0))
-            (dolist (item flow-list)
-              (let ((needs (or (atlas--get item 'dataflow/needs)
-                               (atlas--get item 'needs)))
-                    (produced-by (or (atlas--get item 'dataflow/produced-by)
-                                     (atlas--get item 'produced-by)))
-                    (satisfied (or (atlas--get item 'dataflow/satisfied?)
-                                   (atlas--get item 'satisfied?))))
-                (insert "  ")
-                (atlas--insert-data-key needs)
-                (insert " <- ")
-                (let ((produced-list (atlas--to-list produced-by)))
-                  (if (and produced-list (> (length produced-list) 0))
-                      (progn
-                        (atlas--insert-entity (car produced-list))
-                        (insert (if satisfied
-                                    (propertize " [ok]" 'face 'atlas-success-face)
-                                  (propertize " [?]" 'face 'atlas-warning-face))))
-                    (insert (propertize "(endpoint input)" 'face 'font-lock-comment-face))))
-                (insert "\n")))
-          (insert "  (no data flow info)\n")))
+      (atlas-theme-section "Inputs come from" (length flow))
+      (if (null flow)
+          (progn (insert "  ") (atlas-theme-dim "no inputs declared") (insert "\n"))
+        (let* ((key-width (apply #'max 0 (mapcar (lambda (i) (length (atlas--to-string
+                                                                       (atlas--get i 'dataflow/needs))))
+                                                  flow))))
+          (dolist (item flow)
+            (let* ((needs (atlas--to-string (atlas--get item 'dataflow/needs)))
+                   (producers (atlas--to-list (atlas--get item 'dataflow/produced-by)))
+                   (satisfied (atlas--get item 'dataflow/satisfied?)))
+              (insert "  ")
+              (atlas--insert-data-key needs)
+              (insert (make-string (- (+ key-width 2) (length needs)) ?\s))
+              (atlas-theme-mark (cond ((and producers satisfied) 'ok)
+                                      (producers 'warn)
+                                      (t 'none)))
+              (insert " ")
+              (if (null producers)
+                  (atlas-theme-dim "external input (no producer in registry)")
+                (atlas--insert-entity (car producers))
+                (when (cdr producers)
+                  (insert " ")
+                  (atlas-theme-dim (format "+%d more" (length (cdr producers))))))
+              (insert "\n")))))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
@@ -300,17 +383,13 @@ Step 3: display entity info for the selected entity."
   (interactive
    (list (atlas--completing-read-entity "Entity: ")))
   (let* ((entity-kw (atlas--to-keyword entity))
-         (deps (atlas--eval-safe (format "(dependents-of %s)" entity-kw) []))
+         (deps (atlas--to-list (atlas--eval-safe (format "(dependents-of %s)" entity-kw) [])))
+         (types (atlas-theme-entity-types deps))
          (buf (atlas--buffer (format "dependents:%s" entity))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-dependents entity)))
-      (atlas--insert-header (format "Dependents of %s" entity))
-      (insert (propertize "What depends on this entity:\n\n"
-                          'face 'font-lock-comment-face))
-      (let ((deps-list (atlas--to-list deps)))
-        (if (and deps-list (> (length deps-list) 0))
-            (atlas--insert-entity-list deps-list 10)
-          (insert "  (nothing depends on this)\n")))
+      (atlas-theme-section "Used by" (length deps))
+      (atlas-theme-entity-list deps types 20 "nothing depends on this")
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
@@ -457,186 +536,181 @@ What do I need to test/run this entity? Two lists:
 
 ;;;###autoload
 (defun atlas-browse-recursive-dependents (entity)
-  "Show all transitive dependents for ENTITY (reverse BFS).
-If I change this entity, what is transitively affected?"
+  "Show all transitive dependents for ENTITY, grouped by distance.
+If I change this entity, what is transitively affected?  Entities reached
+again by another path are folded into a per-level count, not repeated."
   (interactive
    (list (atlas--completing-read-entity "Entity: ")))
   (let* ((entity-kw (atlas--to-keyword entity))
-         (deps (atlas--eval-safe (format "(recursive-dependents-of %s)" entity-kw) []))
+         (deps (atlas--to-list
+                (atlas--eval-safe (format "(recursive-dependents-of %s)" entity-kw) [])))
          (buf (atlas--buffer (format "rdependents:%s" entity))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-recursive-dependents entity)))
-      (atlas--insert-header (format "Recursive Dependents of %s" entity))
-      (insert (propertize "What is affected if this entity changes? (BFS order):\n\n"
-                          'face 'font-lock-comment-face))
-      (let ((deps-list (atlas--to-list deps)))
-        (if (and deps-list (> (length deps-list) 0))
-            (dolist (dep deps-list)
-              (let* ((dep-id    (atlas--get dep 'dep/dev-id))
-                     (dep-type  (atlas--get dep 'dep/type))
-                     (depth     (or (atlas--get dep 'dep/depth) 1))
-                     (via       (atlas--get dep 'dep/via))
-                     (indent    (make-string (* 2 (1- depth)) ?\s))
-                     (type-str  (when dep-type
-                                  (let ((s (if (symbolp dep-type)
-                                              (symbol-name dep-type)
-                                            (format "%s" dep-type))))
-                                    (replace-regexp-in-string "^:?atlas/" "" s)))))
-                (insert indent)
-                (insert (propertize "← " 'face 'atlas-annotation-face))
-                (atlas--insert-entity dep-id)
-                (when type-str
-                  (insert (propertize (format " [%s]" type-str)
-                                      'face 'atlas-annotation-face)))
-                (when (atlas--get dep 'dep/already-seen?)
-                  (insert (propertize " ↑" 'face 'font-lock-comment-face)))
-                (when (and via (> depth 1) (not (atlas--get dep 'dep/already-seen?)))
-                  (insert (propertize (format "  ← %s" via)
-                                      'face 'font-lock-comment-face)))
-                (insert "\n")))
-          (insert "  (no dependents — nothing depends on this entity)\n")))
+      (if (null deps)
+          (progn (atlas-theme-section "Ripple")
+                 (insert "  ") (atlas-theme-dim "nothing depends on this entity") (insert "\n"))
+        (let ((by-depth (seq-group-by (lambda (d) (or (atlas--get d 'dep/depth) 1)) deps))
+              (repeats 0))
+          (dolist (level (sort (mapcar #'car by-depth) #'<))
+            (let* ((rows (alist-get level by-depth))
+                   (fresh (seq-remove (lambda (d) (atlas--get d 'dep/already-seen?)) rows)))
+              (setq repeats (+ repeats (- (length rows) (length fresh))))
+              ;; a level reached only through entities already listed adds nothing new
+              (when fresh
+                (atlas-theme-section (if (= level 1) "Direct"
+                                       (format "%d steps away" level))
+                                     (length fresh))
+                (dolist (d fresh)
+                  (let ((via (atlas--get d 'dep/via)))
+                    (insert "  " (atlas-theme-badge (atlas--get d 'dep/type)) " ")
+                    (atlas--insert-entity (atlas--to-string (atlas--get d 'dep/dev-id)))
+                    (when (and via (> level 1))
+                      (insert "  ")
+                      (atlas-theme-dim (format "via %s" (atlas--to-string via))))
+                    (insert "\n")))
+                (insert "\n"))))
+          (when (> repeats 0)
+            (insert "  ")
+            (atlas-theme-dim (format "+%d more path%s reach entities already listed"
+                                     repeats (if (= repeats 1) "" "s")))
+            (insert "\n"))))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-dependents-summary (entity)
-  "Show flat summary of blast radius for ENTITY.
-Which entities are affected if I change this? Grouped by type."
+  "Show the blast radius of ENTITY: total, count per type, affected entities."
   (interactive
    (list (atlas--completing-read-entity "Entity: ")))
   (let* ((entity-kw (atlas--to-keyword entity))
          (summary (atlas--eval-safe
                    (format "(recursive-dependents-summary %s)" entity-kw)))
+         (affected (atlas--to-list (atlas--get summary 'summary/affected)))
+         (by-type (sort (atlas--map-entries (atlas--get summary 'summary/by-type))
+                        (lambda (a b) (> (cdr a) (cdr b)))))
+         (types (atlas-theme-entity-types affected))
          (buf (atlas--buffer (format "blast:%s" entity))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-dependents-summary entity)))
-      (atlas--insert-header (format "Blast Radius: %s" entity))
-
-      ;; Summary counts
-      (let ((count (or (atlas--get summary 'summary/affected-count) 0)))
-        (insert (propertize (format "Total affected: %d entities\n\n" count)
-                            'face 'font-lock-warning-face)))
-
-      ;; By type
-      (when-let ((by-type (atlas--get summary 'summary/by-type)))
-        (atlas--insert-subheader "By type")
-        (let ((pairs (if (hash-table-p by-type)
-                         (let (result)
-                           (maphash (lambda (k v) (push (cons k v) result)) by-type)
-                           result)
-                       (mapcar (lambda (pair) (cons (car pair) (cdr pair)))
-                               (atlas--to-list by-type)))))
-          (dolist (pair pairs)
-            (let* ((type-key (car pair))
-                   (count (cdr pair))
-                   (type-str (if (symbolp type-key)
-                                 (replace-regexp-in-string
-                                  "^:?atlas/" "" (symbol-name type-key))
-                               (replace-regexp-in-string
-                                "^:?atlas/" "" (format "%s" type-key)))))
-              (insert (format "  %s: %d\n" type-str count)))))
-        (insert "\n"))
-
-      ;; All affected entities
-      (let ((affected (atlas--to-list (atlas--get summary 'summary/affected))))
-        (atlas--insert-subheader (format "All affected entities (%d)" (length affected)))
-        (if affected
-            (dolist (d affected)
-              (insert "  ")
-              (atlas--insert-entity d)
-              (insert "\n"))
-          (insert "  (none)\n")))
-
+      (atlas-theme-banner "Blast radius"
+                          (format "%d affected" (or (atlas--get summary 'summary/affected-count) 0)))
+      (atlas-theme-section "By type" (length by-type))
+      (if (null by-type)
+          (progn (insert "  ") (atlas-theme-dim "nothing is affected") (insert "\n"))
+        (let ((top (cdar by-type))
+              (name-width (apply #'max 0 (mapcar (lambda (p) (length (atlas-theme--type-name (car p))))
+                                                  by-type))))
+          (dolist (pair by-type)
+            (let ((name (atlas-theme--type-name (car pair))))
+              (insert "  " (atlas-theme-badge (car pair)) " "
+                      (propertize (format (format "%%-%ds" name-width) name)
+                                  'face 'atlas-theme-label-face)
+                      " " (atlas-theme-count (cdr pair)) "  "
+                      (atlas-theme-bar (cdr pair) top 20) "\n")))))
+      (insert "\n")
+      (atlas-theme-section "Affected" (length affected))
+      (atlas-theme-entity-list affected types 40 "none")
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-producers (data-key)
-  "Find functions that produce DATA-KEY."
+  "Find entities that produce DATA-KEY."
   (interactive
    (list (atlas--completing-read-data-key "Data key: ")))
   (let* ((data-kw (atlas--to-keyword data-key))
-         (producers (atlas--eval-safe (format "(producers-of %s)" data-kw) []))
+         (producers (atlas--to-list (atlas--eval-safe (format "(producers-of %s)" data-kw) [])))
+         (types (atlas-theme-entity-types producers))
          (buf (atlas--buffer (format "producers:%s" data-key))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-producers data-key)))
-      (atlas--insert-header (format "Producers of %s" data-key))
-      (let ((producers-list (atlas--to-list producers)))
-        (if (and producers-list (> (length producers-list) 0))
-            (dolist (p producers-list)
-              (insert "  ")
-              (atlas--insert-entity p)
-              (insert "\n"))
-          (insert "  (no producers - endpoint input?)\n")))
+      (atlas-theme-title "data-key" data-kw "data key")
+      (atlas-theme-section "Produced by" (length producers))
+      (atlas-theme-entity-list producers types 20
+                               "nothing in the registry produces this — external input")
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-consumers (data-key)
-  "Find functions that consume DATA-KEY."
+  "Find entities that consume DATA-KEY."
   (interactive
    (list (atlas--completing-read-data-key "Data key: ")))
   (let* ((data-kw (atlas--to-keyword data-key))
-         (consumers (atlas--eval-safe (format "(consumers-of %s)" data-kw) []))
+         (consumers (atlas--to-list (atlas--eval-safe (format "(consumers-of %s)" data-kw) [])))
+         (types (atlas-theme-entity-types consumers))
          (buf (atlas--buffer (format "consumers:%s" data-key))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-consumers data-key)))
-      (atlas--insert-header (format "Consumers of %s" data-key))
-      (let ((consumers-list (atlas--to-list consumers)))
-        (if (and consumers-list (> (length consumers-list) 0))
-            (dolist (c consumers-list)
-              (insert "  ")
-              (atlas--insert-entity c)
-              (insert "\n"))
-          (insert "  (no consumers)\n")))
+      (atlas-theme-section "Consumed by" (length consumers))
+      (atlas-theme-entity-list consumers types 20 "nothing consumes this")
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-execution-order ()
-  "Show topologically sorted execution order."
+  "Show entities in topological order of their data flow."
   (interactive)
-  (let* ((order (atlas--eval-safe "(execution-order)" []))
+  (let* ((order (atlas--to-list (atlas--eval-safe "(execution-order)" [])))
+         (types (atlas-theme-entity-types order))
+         (width (length (number-to-string (length order))))
          (buf (atlas--buffer "execution-order")))
     (with-current-buffer buf
       (setq atlas--last-command #'atlas-browse-execution-order)
-      (atlas--insert-header "Execution Order (by data flow)")
-      (let ((order-list (atlas--to-list order)))
-        (if (and order-list (> (length order-list) 0))
-            (let ((n 1))
-              (dolist (entity order-list)
-                (insert (format "  %d. " n))
-                (atlas--insert-entity entity)
-                (insert "\n")
-                (setq n (1+ n))))
-          (insert "  (no execution order available)\n")))
+      (atlas-theme-section "Execution order (by data flow)" (length order))
+      (if (null order)
+          (progn (insert "  ") (atlas-theme-dim "no execution order available") (insert "\n"))
+        (let ((n 0))
+          (dolist (e order)
+            (setq n (1+ n))
+            (insert "  " (propertize (format (format "%%%dd" width) n) 'face 'atlas-theme-label-face) "  ")
+            (atlas-theme-entity-row e types ""))))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun atlas-browse-system-summary ()
-  "Show system overview."
+  "Show the system at a glance: counts by kind and the domains."
   (interactive)
   (let* ((summary (atlas--eval-safe "(system-summary)"))
          (buf (atlas--buffer "summary")))
     (with-current-buffer buf
       (setq atlas--last-command #'atlas-browse-system-summary)
-      (atlas--insert-header "System Summary")
       (if (not summary)
-          (insert "  (no summary available)\n")
-        (insert (format "%s\n\n" (atlas--get summary 'summary)))
-        (when-let ((domains (atlas--get summary 'domains)))
-          (atlas--insert-subheader "Domains")
-          (let ((domains-list (atlas--to-list domains)))
-            (dolist (d domains-list)
-              (insert "  ")
-              (atlas--insert-aspect d)
-              (insert "\n")))))
+          (progn (atlas-theme-banner "System")
+                 (insert "  ") (atlas-theme-dim "no summary available") (insert "\n"))
+        (let* ((domains (atlas--to-list (atlas--get summary 'domains)))
+               (rows `((":atlas/structure-component" "components" ,(atlas--get summary 'components))
+                       (":atlas/execution-function"  "functions"  ,(atlas--get summary 'functions))
+                       (":atlas/interface-endpoint"  "endpoints"  ,(atlas--get summary 'endpoints))
+                       (":atlas/data-schema"         "schemas"    ,(atlas--get summary 'schemas))))
+               (top (apply #'max 1 (mapcar (lambda (r) (length (atlas--to-list (nth 2 r)))) rows))))
+          (atlas-theme-banner "System" (format "%d domains" (length domains)))
+          (atlas-theme-section "At a glance")
+          (dolist (r rows)
+            (let ((n (length (atlas--to-list (nth 2 r)))))
+              (insert "  " (atlas-theme-badge (nth 0 r)) " "
+                      (propertize (format "%-11s" (nth 1 r)) 'face 'atlas-theme-label-face)
+                      (atlas-theme-count n) "  " (atlas-theme-bar n top 20) "\n")))
+          (insert "\n")
+          (atlas-theme-section "Domains" (length domains))
+          (insert "  ")
+          (let ((first t))
+            (dolist (d domains)
+              (let ((name (replace-regexp-in-string "\\`:?domain/" "" (atlas--to-string d))))
+                (unless first
+                  (if (> (+ (current-column) 3 (length name)) atlas-theme-rule-width)
+                      (insert "\n  ")
+                    (insert "   ")))
+                (setq first nil)
+                (atlas-browse--insert-aspect-name d))))
+          (insert "\n")))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
@@ -755,27 +829,27 @@ Each type is a clickable entry — click to open domain-survey for that type."
                                     (remove nil?)
                                     frequencies
                                     (map (fn [[t cnt]] {:type (str t) :count cnt}))
-                                    (sort-by :type)
+                                    (sort-by (comp - :count))
                                     vec)})"))
          (buf (atlas--buffer "home")))
     (with-current-buffer buf
       (setq atlas--last-command #'atlas-browse-home)
-      (atlas--insert-header "Atlas Registry")
       (if (not result)
-          (insert (propertize "  (registry unavailable)\n" 'face 'font-lock-comment-face))
-        (let ((total   (atlas--get result 'total))
-              (by-type (atlas--to-list (atlas--get result 'by-type))))
-          (insert (propertize (format "  %d entities registered\n\n" total)
-                              'face 'font-lock-warning-face))
-          (atlas--insert-subheader "By type")
+          (progn (atlas-theme-banner "Atlas registry")
+                 (insert "  ") (atlas-theme-dim "registry unavailable") (insert "\n"))
+        (let* ((by-type (atlas--to-list (atlas--get result 'by-type)))
+               (top (apply #'max 1 (mapcar (lambda (e) (atlas--get e 'count)) by-type)))
+               (name-width (apply #'max 0 (mapcar (lambda (e) (length (atlas--get e 'type))) by-type))))
+          (atlas-theme-banner "Atlas registry" (format "%d entities" (atlas--get result 'total)))
+          (atlas-theme-section "By type" (length by-type))
           (dolist (entry by-type)
             (let ((type-str (atlas--get entry 'type))
-                  (cnt      (atlas--get entry 'count)))
-              (insert "  ")
+                  (cnt (atlas--get entry 'count)))
+              (insert "  " (atlas-theme-badge type-str) " ")
               (atlas--insert-type type-str)
-              (insert (propertize (format "  (%d)" cnt)
-                                  'face 'font-lock-comment-face))
-              (insert "\n")))))
+              (insert (make-string (max 1 (- (+ name-width 1) (length type-str))) ?\s)
+                      (atlas-theme-count cnt) "  " (atlas-theme-bar cnt top 20) "\n")))))
+      (atlas-theme-footer '(("RET" . "survey type") ("TAB" . "next") ("g" . "refresh") ("?" . "menu")))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))
@@ -800,24 +874,24 @@ the rest — same collapsing model as the browser UI."
                                    :count   (count entities)
                                    :entities (vec (sort (map (fn [p] (str (:atlas/dev-id p)))
                                                              entities)))}))
-                           (sort-by :type)
+                           (sort-by (comp - :count))
                            vec))"
                    aspect-kw)))
+         (groups (atlas--to-list result))
+         (total (apply #'+ (mapcar (lambda (g) (atlas--get g 'count)) groups)))
          (buf (atlas--buffer (format "aspect:%s" aspect))))
     (with-current-buffer buf
       (setq atlas--last-command (lambda () (atlas-browse-aspect-entities aspect)))
-      (atlas--insert-header (format "Domain: %s" aspect))
-      (if (or (not result) (zerop (length result)))
-          (insert (propertize "  (no entities found for this aspect)\n"
-                              'face 'font-lock-comment-face))
-        (let ((groups (atlas--to-list result)))
-          (dolist (group groups)
-            (let* ((type-str (atlas--get group 'type))
-                   (count    (atlas--get group 'count))
-                   (entities (atlas--to-list (atlas--get group 'entities))))
-              (atlas--insert-subheader (format "%s (%d)" type-str count))
-              (atlas--insert-entity-list entities 10)
-              (insert "\n")))))
+      (atlas-theme-banner aspect-kw
+                          (format "%d entities · %d types" total (length groups)))
+      (if (null groups)
+          (progn (insert "  ") (atlas-theme-dim "no entities carry this aspect") (insert "\n"))
+        (dolist (group groups)
+          (let ((type-str (atlas--get group 'type)))
+            (atlas-theme-section (atlas-theme--type-name type-str)
+                                 (atlas--get group 'count) type-str)
+            (atlas-theme-entity-list (atlas--to-list (atlas--get group 'entities)) nil 10)
+            (insert "\n"))))
       (goto-char (point-min))
       (read-only-mode 1))
     (pop-to-buffer buf)))

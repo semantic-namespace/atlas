@@ -65,18 +65,18 @@
   "Face for data-key buttons. Purple — matches the browser's data-key chip color.")
 
 (defun atlas--apply-faces ()
-  "Apply atlas color palette. Re-apply after theme changes or file reload.
-defface does not override an already-defined face, so this function uses
-set-face-attribute to force the colors on every load."
-  (let ((dark (eq (frame-parameter nil 'background-mode) 'dark)))
-    (set-face-attribute 'atlas-entity-face nil
-      :foreground (if dark "#93c5fd" "#2563eb") :weight 'bold :inherit 'unspecified)
-    (set-face-attribute 'atlas-aspect-face nil
-      :foreground (if dark "#86efac" "#16a34a") :weight 'unspecified :inherit 'unspecified)
-    (set-face-attribute 'atlas-type-face nil
-      :foreground (if dark "#fcd34d" "#d97706") :weight 'unspecified :inherit 'unspecified)
-    (set-face-attribute 'atlas-data-key-face nil
-      :foreground (if dark "#d8b4fe" "#9333ea") :weight 'unspecified :inherit 'unspecified)))
+  "Apply atlas color palette with light and dark variants.
+Emacs picks the variant per frame from its `background-mode', so a dark
+terminal frame and a light GUI frame each get readable colors.  Uses
+`face-spec-set' because defface does not override an already-defined face."
+  (dolist (spec '((atlas-entity-face   "#2563eb" "#93c5fd" bold)
+                  (atlas-aspect-face   "#16a34a" "#86efac" unspecified)
+                  (atlas-type-face     "#d97706" "#fcd34d" unspecified)
+                  (atlas-data-key-face "#9333ea" "#d8b4fe" unspecified)))
+    (pcase-let ((`(,face ,light ,dark ,weight) spec))
+      (face-spec-set face
+                     `((((background dark)) :foreground ,dark :weight ,weight)
+                       (t :foreground ,light :weight ,weight))))))
 
 (atlas--apply-faces)
 

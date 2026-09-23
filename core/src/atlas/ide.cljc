@@ -176,7 +176,7 @@
                                   (contains? id :atlas/interface-endpoint) :endpoint
                                   (contains? id :atlas/execution-function) :function
                                   (contains? id :atlas/structure-component) :component
-                                  (contains? id :atlas/schema) :schema
+                                  (contains? id :atlas/data-schema) :schema
                                   (contains? id :atlas/interface-protocol) :protocol
                                   (contains? id :atlas/business-pattern) :business-pattern
                                   (contains? id :atlas/governance-constraint) :constraint
@@ -310,7 +310,7 @@
          :entity/aspects (vec (sort (disj id :atlas/execution-function
                                           :atlas/structure-component
                                           :atlas/interface-endpoint
-                                          :atlas/schema)))
+                                          :atlas/data-schema)))
          :entity/definition-keys definition-keys
          :entity/definition-values definition-values
          :entity/extra-props extra-props

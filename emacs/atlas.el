@@ -42,6 +42,7 @@
 ;; Load all modules
 (require 'atlas-core)
 (require 'atlas-display)
+(require 'atlas-theme)
 (require 'atlas-completion)
 (require 'atlas-browse)
 (require 'atlas-analysis)

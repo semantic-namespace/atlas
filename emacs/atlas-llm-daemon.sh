@@ -1,96 +1,133 @@
 #!/usr/bin/env bash
-# EXPERIMENTAL — example script; edit the paths before use.
+# EXPERIMENTAL — Emacs daemon an LLM drives while a human watches.
 #
-# Start (or reuse) the atlas-llm Emacs daemon and connect CIDER to the live nREPL.
-# Usage: ./atlas-llm-daemon.sh [nrepl-port]
-#   nrepl-port defaults to auto-discovery via clj-nrepl-eval.
+# The LLM runs `ensure`; the human attaches from another terminal with the
+# printed `emacsclient -t -s <socket>` command.  Layouts (atlas-layout.el)
+# are drawn into that attached frame.
 #
-# NOTE: this script hardcodes machine-specific paths (the EMACS/CLIENT binaries
-# below, the atlas emacs/ load-path, and the CIDER project directory). Treat it
-# as a template for your own setup rather than something to run as-is.
+# Usage:
+#   atlas-llm-daemon.sh ensure --project DIR [--port N] [--socket NAME] [--keep-themes]
+#   atlas-llm-daemon.sh status [--project DIR] [--socket NAME]
+#   atlas-llm-daemon.sh stop   [--project DIR] [--socket NAME]
+#
+# Port resolution (ensure, when --port is omitted):
+#   1. DIR/.nrepl-port, if that port answers
+#   2. the single REPL `clj-nrepl-eval --discover-ports` reports for DIR
+#   otherwise it fails and lists candidates — it never guesses.
+#
+# Themes: ensure disables the user's themes inside this daemon (they're chosen
+# for their GUI Emacs, usually light); atlas faces then sit on the terminal's
+# own background.  --keep-themes leaves them on.  Only this daemon is affected.
+#
+# Env: EMACS / EMACSCLIENT override the binaries (default: first Emacs >= 27
+#      on PATH or in /snap/bin; emacsclient from the same directory).
 
-set -e
+set -euo pipefail
 
-SOCKET=atlas-llm
-EMACS=/snap/bin/emacs
-CLIENT=/snap/bin/emacsclient
-
-# Discover nREPL port unless given explicitly
-if [[ -n "$1" ]]; then
-  PORT=$1
-else
-  PORT=$(clj-nrepl-eval --discover-ports 2>/dev/null \
-         | grep -oP 'localhost:\K[0-9]+' | head -1)
-fi
-
-if [[ -z "$PORT" ]]; then
-  echo "ERROR: no nREPL server found. Start a REPL first, or pass the port as an argument."
-  exit 1
-fi
-
-echo "nREPL port: $PORT"
-
-# Start daemon if not already running
-if ! $CLIENT --socket-name="$SOCKET" --eval "t" &>/dev/null; then
-  echo "Starting atlas-llm daemon..."
-  $EMACS --daemon="$SOCKET"
-  echo "Waiting for init..."
-  for i in $(seq 1 30); do
-    sleep 1
-    if $CLIENT --socket-name="$SOCKET" --eval "t" &>/dev/null; then
-      echo "Daemon ready (${i}s)"
-      break
-    fi
+ATLAS_EMACS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# First Emacs >= 27 (tab-bar) among: $EMACS, PATH, /snap/bin. A distro emacs
+# on PATH is often much older than the one the user actually runs.
+pick_emacs() {
+  local e v
+  for e in ${EMACS:-} "$(command -v emacs || true)" /snap/bin/emacs; do
+    [[ -x "$e" ]] || continue
+    v="$("$e" --version 2>/dev/null | grep -oP 'GNU Emacs \K[0-9]+' || echo 0)"
+    (( v >= 27 )) && { echo "$e"; return; }
   done
-fi
+  echo "ERROR: no Emacs >= 27 found; set EMACS=/path/to/emacs" >&2; exit 1
+}
+EMACS="$(pick_emacs)"
+CLIENT="${EMACSCLIENT:-$(dirname "$EMACS")/emacsclient}"
 
-# Load atlas-layout
-echo "Loading atlas-layout..."
-$CLIENT --socket-name="$SOCKET" --eval \
-  "(progn (add-to-list 'load-path \"/home/tangrammer/git/semantic-namespace/atlas/emacs\")
-          (require 'atlas-layout))"
-
-# Connect CIDER (skip if already connected to avoid the "new session?" prompt)
-ALREADY=$($CLIENT --socket-name="$SOCKET" --eval "(if (cider-connected-p) \"yes\" \"no\")" 2>/dev/null)
-if [[ "$ALREADY" == '"yes"' ]]; then
-  echo "CIDER already connected."
-else
-  echo "Connecting CIDER to localhost:$PORT..."
-  $CLIENT --socket-name="$SOCKET" --eval \
-    "(let ((default-directory \"/home/tangrammer/git/ruca/yorba/yorba-clj/\"))
-       (cider-connect (list :host \"localhost\" :port $PORT
-                            :project-dir \"/home/tangrammer/git/ruca/yorba/yorba-clj/\")))"
-
-  echo "Waiting for CIDER connection..."
-  for i in $(seq 1 15); do
-    sleep 1
-    CONNECTED=$($CLIENT --socket-name="$SOCKET" --eval \
-      "(if (cider-connected-p) \"yes\" \"no\")" 2>/dev/null)
-    if [[ "$CONNECTED" == '"yes"' ]]; then
-      echo "CIDER connected (${i}s)"
-      break
-    fi
-  done
-
-  if [[ "$CONNECTED" != '"yes"' ]]; then
-    echo "WARNING: CIDER did not connect in time."
-    exit 1
-  fi
-fi
-
-# Refresh changed namespaces and verify registry
-echo "Refreshing namespaces..."
-$CLIENT --socket-name="$SOCKET" --eval \
-  "(cider-interactive-eval \"(dev/refresh)\")"
-sleep 6
-
-echo "Verifying registry..."
-for i in 1 2 3 4; do
-  COUNT=$(clj-nrepl-eval -p "$PORT" "(count @atlas.registry/registry)" 2>/dev/null | grep -oP '=> \K[0-9]+')
-  [[ -n "$COUNT" ]] && break
-  sleep 2
+cmd="${1:-}"; shift || true
+PROJECT="$PWD"; PORT=""; SOCKET=""; KEEP_THEMES=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project) PROJECT="$2"; shift 2 ;;
+    --port)    PORT="$2";    shift 2 ;;
+    --socket)  SOCKET="$2";  shift 2 ;;
+    --keep-themes) KEEP_THEMES=1; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
 done
-echo "Registry ready: ${COUNT:-?} entities"
+PROJECT="$(cd "$PROJECT" && pwd)"
+SOCKET="${SOCKET:-atlas-$(basename "$PROJECT")}"
+# Always an absolute socket path: snap-confined emacs/emacsclient disagree on
+# the default socket dir, so name-only sockets are not found.
+if [[ "$SOCKET" != /* ]]; then
+  SOCKDIR="${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/emacs}"; SOCKDIR="${SOCKDIR:-/tmp/emacs$(id -u)}"
+  mkdir -p "$SOCKDIR" && chmod 700 "$SOCKDIR"
+  SOCKET="$SOCKDIR/$SOCKET"
+fi
 
-echo "Done. Call layouts with:"
-echo "  $CLIENT --socket-name=$SOCKET --eval '(atlas-layout/domain-survey \":domain/auth\")'"
+ec() { timeout 20 "$CLIENT" --socket-name="$SOCKET" --eval "$1" 2>/dev/null; }
+daemon_up() { ec "t" >/dev/null; }
+port_alive() { clj-nrepl-eval -p "$1" --timeout 3000 "1" 2>/dev/null | grep -q '=> 1'; }
+
+resolve_port() {
+  if [[ -n "$PORT" ]]; then
+    port_alive "$PORT" || { echo "ERROR: nREPL port $PORT does not answer" >&2; exit 1; }
+    return
+  fi
+  if [[ -f "$PROJECT/.nrepl-port" ]]; then
+    local p; p="$(cat "$PROJECT/.nrepl-port")"
+    if port_alive "$p"; then PORT="$p"; return; fi
+    echo "note: $PROJECT/.nrepl-port ($p) is stale" >&2
+  fi
+  local matches
+  matches="$(clj-nrepl-eval --discover-ports 2>/dev/null \
+             | grep -F -- "- $PROJECT" | grep -E -- "- $PROJECT\$" \
+             | grep -oP 'localhost:\K[0-9]+' || true)"
+  local n; n="$(echo -n "$matches" | grep -c . || true)"
+  if [[ "$n" == 1 ]]; then PORT="$matches"; return; fi
+  echo "ERROR: $n nREPL servers match $PROJECT — pass --port. Candidates:" >&2
+  clj-nrepl-eval --discover-ports >&2 || true
+  exit 1
+}
+
+case "$cmd" in
+  ensure)
+    resolve_port
+    if ! daemon_up; then
+      echo "Starting daemon '$SOCKET' in $PROJECT ..."
+      "$EMACS" --daemon="$SOCKET" --chdir "$PROJECT"
+      for _ in $(seq 1 60); do daemon_up && break; sleep 1; done
+      daemon_up || { echo "ERROR: daemon did not come up" >&2; exit 1; }
+    fi
+    ec "(progn (add-to-list 'load-path \"$ATLAS_EMACS_DIR\")
+               (require 'atlas)
+               (xterm-mouse-mode 1)
+               t)" >/dev/null
+    if [[ -z "$KEEP_THEMES" ]]; then
+      ec "(progn (mapc #'disable-theme custom-enabled-themes) t)" >/dev/null
+    fi
+    state="$(ec "(atlas-layout/llm-connect \"localhost\" $PORT \"$PROJECT/\")")"
+    for _ in $(seq 1 30); do
+      ec "(atlas-layout/llm-status)" | grep -q "cider=localhost:$PORT" && break
+      sleep 1
+    done
+    echo "connect: $state"
+    # Dependency views read dep keys from registered ontologies; example
+    # registries (e.g. app.pet-shop/init-registry!) don't load them, and then
+    # every dependents pane is silently empty.
+    onts="$(clj-nrepl-eval -p "$PORT" --timeout 10000 \
+            "(do (require 'atlas.ontology) (count (atlas.ontology/all-ontologies)))" 2>/dev/null \
+            | grep -oP '=> \K[0-9]+' || echo 0)"
+    echo "ontologies: $onts"
+    if (( onts < 5 )); then
+      echo "WARNING: core ontologies not loaded — dependency views will be empty. In the REPL:" >&2
+      echo "  (doseq [n '[atlas.ontology.execution-function atlas.ontology.interface-endpoint atlas.ontology.structure-component atlas.ontology.data-schema atlas.ontology.interface-protocol]] (require n :reload)) (atlas.datalog/reset-db-cache!)" >&2
+    fi
+    echo "status: $(ec "(atlas-layout/llm-status)")"
+    echo "attach: $CLIENT -t -s $SOCKET"
+    ;;
+  status)
+    if daemon_up; then ec "(atlas-layout/llm-status)"; else echo "socket=$SOCKET down"; fi
+    ;;
+  stop)
+    daemon_up && ec "(kill-emacs)" >/dev/null || true
+    echo "stopped $SOCKET"
+    ;;
+  *)
+    sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;
+esac
