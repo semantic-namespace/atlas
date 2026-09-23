@@ -368,8 +368,69 @@ Both Emacs integration and Visual Explorer support remote development:
 
 **Visual Explorer:**
 - Automatically detects the browser's hostname/IP
-- When accessing `http://10.147.17.100:8081/?port=8082`, API calls go to `http://10.147.17.100:8082/api/atlas/registry`
+- When accessing `http://<server-ip>:8081/?port=8082`, API calls go to `http://<server-ip>:8082/api/atlas/registry`
 - Works over any network (localhost, LAN, VPN, etc.)
+
+## Pair with an LLM (Claude Code)
+
+> **Experimental.**
+
+An LLM session can drive a dedicated Emacs daemon while you watch it from a
+terminal. You ask in plain words ("what breaks if I change the database?"), the
+LLM opens the matching layout in your frame (one tab per view), and then reads
+your screen back and compares it with the REPL before describing anything.
+
+The LLM does the setup: it picks the project's REPL, starts the daemon, and
+connects CIDER. You only attach.
+
+### One-time setup (per person)
+
+```bash
+# 1. Make the /atlas-emacs skill available to Claude Code
+#    (a symlink, so it stays in sync with the code)
+emacs/atlas-llm-daemon.sh install-skill           # sessions opened in this repo
+emacs/atlas-llm-daemon.sh install-skill --user    # or: every session
+
+# 2. A short name for attaching (add to your shell profile)
+alias em='/path/to/atlas/emacs/atlas-llm-daemon.sh attach'
+
+# 3. Optional preferences, read from *your* terminal each time you attach
+export ATLAS_EMACS_BACKGROUND=dark   # or light; default: the COLORFGBG hint,
+                                     # else Emacs's own guess
+export ATLAS_EMACS_THEMES=off        # disable your Emacs themes in this daemon
+                                     # (useful if they're made for a GUI frame)
+```
+
+Requirements: Emacs 27 or newer, CIDER, `clj-nrepl-eval`, and Python 3 (used
+only to print results).
+
+### Using it
+
+In Claude Code, run `/atlas-emacs <intent>`. When the LLM says the daemon is
+ready, run `em` in another terminal. `em` defaults to the current directory's
+project; use `em --project <dir>` for another one.
+
+For each request the LLM offers two or three views, labeled by the question
+each one answers, and you pick one. Switch between the opened views with
+`C-x t o`. `RET` on any entity follows it.
+
+### What the script does
+
+`emacs/atlas-llm-daemon.sh` is the only entry point. The LLM runs everything
+except `attach`:
+
+| Command | Purpose |
+|---|---|
+| `repl --project DIR` | start the project's nREPL with the cider-nrepl version your installed CIDER requires |
+| `ensure --project DIR` | start or reuse the daemon (one per project) and connect CIDER to that project's REPL |
+| `attach --project DIR` | open your terminal frame (what `em` calls) |
+| `eval FORM` | evaluate elisp in the daemon (what the LLM uses to open layouts and read your screen) |
+| `status` / `stop` | inspect or shut down the daemon |
+
+The daemon is separate from your own Emacs server, and your preferences only
+apply inside it. The script never refreshes or reloads code in your REPL.
+When you work on the atlas repo itself, the LLM may load the core ontologies
+and an example registry into the REPL so the views have data.
 
 ## Customization
 
