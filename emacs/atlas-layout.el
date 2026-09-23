@@ -58,28 +58,53 @@
 
 (add-hook 'server-after-make-frame-hook #'atlas-layout--remember-client-frame)
 
-(defcustom atlas-layout-tty-background-mode 'dark
-  "Background mode to assume for terminal client frames.
-nil keeps Emacs's own guess.
-Emacs usually cannot query a terminal's background and guesses `light', so on
-a dark terminal every face that has light/dark variants picks the wrong one."
-  :type '(choice (const dark) (const light) (const :tag "Emacs's guess" nil))
+(defcustom atlas-layout-tty-background-mode 'auto
+  "Background mode for terminal frames attached to an atlas daemon.
+`auto' reads the attaching terminal's environment: ATLAS_EMACS_BACKGROUND
+\(dark or light), then the COLORFGBG hint many terminals set; with neither,
+Emacs's own guess stands.  `dark' or `light' force it; nil never touches it.
+Emacs usually cannot query a terminal's background and guesses `light', so
+on a dark terminal every face with light/dark variants picks the wrong one."
+  :type '(choice (const auto) (const dark) (const light) (const :tag "Emacs's guess" nil))
   :group 'atlas-layout)
 
-(defun atlas-layout--set-tty-background-mode (&optional frame)
-  "Apply `atlas-layout-tty-background-mode' to FRAME.
-Only terminal client frames are affected."
+(defun atlas-layout--atlas-daemon-p ()
+  "Non-nil in a daemon started by atlas-llm-daemon.sh (socket atlas-<project>).
+Guards per-person preferences so they never touch the user's own Emacs server."
+  (and (daemonp) (boundp 'server-name) (stringp server-name)
+       (string-prefix-p "atlas-" (file-name-nondirectory server-name))))
+
+(defun atlas-layout--tty-background (frame)
+  "Background mode (`dark', `light' or nil) for FRAME's terminal."
+  (pcase atlas-layout-tty-background-mode
+    ((or 'dark 'light) atlas-layout-tty-background-mode)
+    ('auto
+     (let ((explicit (getenv "ATLAS_EMACS_BACKGROUND" frame))
+           (fgbg (getenv "COLORFGBG" frame)))
+       (cond ((member explicit '("dark" "light")) (intern explicit))
+             ;; "fg;bg" (or "fg;default;bg"): colour indexes 0-6 and 8 are dark
+             ((and fgbg (string-match "\\([0-9]+\\)\\'" fgbg))
+              (let ((bg (string-to-number (match-string 1 fgbg))))
+                (if (or (< bg 7) (= bg 8)) 'dark 'light))))))))
+
+(defun atlas-layout--apply-client-preferences (&optional frame)
+  "Apply the attaching person's preferences to FRAME (terminal client frames).
+Background comes from `atlas-layout--tty-background'; ATLAS_EMACS_THEMES=off
+disables that person's Emacs themes in this daemon.  Atlas daemons only."
   (let ((frame (or frame (selected-frame))))
-    (when (and atlas-layout-tty-background-mode
+    (when (and (atlas-layout--atlas-daemon-p)
                (frame-parameter frame 'client)
                (not (display-graphic-p frame)))
-      ;; frame-set-background-mode derives the mode from the terminal parameter
-      ;; (a frame parameter alone gets overwritten); scoped to this terminal only.
-      (set-terminal-parameter (frame-terminal frame) 'background-mode
-                              atlas-layout-tty-background-mode)
-      (frame-set-background-mode frame))))
+      (when (equal (getenv "ATLAS_EMACS_THEMES" frame) "off")
+        (mapc #'disable-theme custom-enabled-themes))
+      (when-let* ((mode (atlas-layout--tty-background frame)))
+        ;; frame-set-background-mode derives the mode from the terminal
+        ;; parameter (a frame parameter alone gets overwritten); this scopes
+        ;; it to the one terminal.
+        (set-terminal-parameter (frame-terminal frame) 'background-mode mode)
+        (frame-set-background-mode frame)))))
 
-(add-hook 'server-after-make-frame-hook #'atlas-layout--set-tty-background-mode)
+(add-hook 'server-after-make-frame-hook #'atlas-layout--apply-client-preferences)
 
 (defun atlas-layout--client-frames ()
   "Live client frames, most recently attached first."
@@ -98,7 +123,7 @@ suspended client may still hold a frame on the same terminal)."
   (or (and (frame-parameter (selected-frame) 'client) (selected-frame))
       (car (atlas-layout--client-frames))
       (and (not (daemonp)) (selected-frame))
-      (user-error "No frame attached. Run: emacsclient -t -s %s" server-name)))
+      (user-error "No frame attached. Run: atlas-llm-daemon.sh attach (or your `em' alias)")))
 
 (defun atlas-layout--enter-tab (name)
   "Switch to (or create) the tab NAME when `atlas-layout-use-tabs' is set."
