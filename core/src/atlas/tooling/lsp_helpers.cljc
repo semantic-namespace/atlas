@@ -65,23 +65,25 @@
             (into [])))
      :cljs []))
 
-#?(:clj
-   (defn- registration-line?
-     "True when a usage line looks like the dev-id argument of a register! call:
-     the bare keyword on its own line, or an `:atlas/dev-id <kw>` entry."
-     [content keyword-str]
-     (or (= content keyword-str)
-         (boolean (re-find (re-pattern (str ":atlas/dev-id\\s+"
-                                            (java.util.regex.Pattern/quote keyword-str)
-                                            "(?![\\w./*+!?-])"))
-                           content)))))
+(defn- registration-line?
+  "True when a usage line could be where dev-id is registered: the bare keyword
+  on its own line, an `:atlas/dev-id <kw>` entry, or a call whose first argument
+  is the keyword (`(register! <kw>`, `(bind <kw>`, `(data/def <kw>`, ...).
+  The last form also matches plain call sites; ranking sorts those out."
+  [content keyword-str]
+  (let [tokens (str/split (str/trim (str/replace content #"[{}()\[\]]" " ")) #"\s+")]
+    (or (= content keyword-str)
+        (and (some #{":atlas/dev-id"} tokens) (some #{keyword-str} tokens) true)
+        (and (str/starts-with? content "(") (= keyword-str (second tokens))))))
 
 (defn find-definition
   "Best-guess source location of dev-id's registration: {:file :line} or nil.
 
   Text search alone is ambiguous — test fixtures often re-register the same
-  dev-id with other aspects — so each candidate registration is ranked by how
-  many of the loaded entity's aspects appear near it (earliest wins ties)."
+  dev-id with other aspects, and call sites look like registrations — so each
+  candidate is ranked by how many of the loaded entity's aspects appear near
+  it (earliest wins ties). When the entity has aspects and no candidate has any
+  of them nearby, returns nil rather than a guess."
   [dev-id]
   #?(:clj
      (let [keyword-str (str dev-id)
@@ -96,13 +98,13 @@
                                            (drop (max 0 (- line 6)))
                                            (take 18)
                                            (str/join "\n"))]
-                           (count (filter #(str/includes? window %) aspects))))]
-       (some->> candidates
-                (map-indexed (fn [i c] [(- (score c)) i c]))
-                (sort)
-                first
-                last
-                (#(select-keys % [:file :line]))))
+                           (count (filter #(str/includes? window %) aspects))))
+           [neg-score _ best] (->> candidates
+                                   (map-indexed (fn [i c] [(- (score c)) i c]))
+                                   (sort)
+                                   first)]
+       (when (and best (or (empty? aspects) (neg? neg-score)))
+         (select-keys best [:file :line])))
      :cljs nil))
 
 ;; =============================================================================

@@ -238,25 +238,29 @@ ETYPE is a string like \":atlas/execution-function\"."
                           (remove #(= \"atlas\" (namespace %%)))
                           (map str))
              reg? (fn [c]
-                    (let [toks (set (clojure.string/split
-                                     (clojure.string/trim (clojure.string/replace c #\"[{}()]\" \" \"))
-                                     #\" +\"))]
-                      (and (toks s) (or (= c s) (toks \":atlas/dev-id\")))))
+                    (let [toks (clojure.string/split
+                                (clojure.string/trim (clojure.string/replace c #\"[{}()\\[\\]]\" \" \"))
+                                #\" +\")]
+                      (or (= c s)
+                          (and (some #{\":atlas/dev-id\"} toks) (some #{s} toks) true)
+                          (and (clojure.string/starts-with? c \"(\") (= s (second toks))))))
              score (fn [{:keys [file line]}]
                      (let [w (->> (clojure.string/split-lines (slurp file))
                                   (drop (max 0 (- line 6))) (take 18)
                                   (clojure.string/join \"\\n\"))]
-                       (count (filter #(clojure.string/includes? w %%) aspects))))]
-         (some->> (atlas.tooling.lsp-helpers/find-dev-id-usages kw)
-                  (filter #(reg? (:content %%)))
-                  (map-indexed (fn [i c] [(- (score c)) i c]))
-                  sort first last
-                  (#(select-keys %% [:file :line]))))))"
+                       (count (filter #(clojure.string/includes? w %%) aspects))))
+             [neg _ best] (->> (atlas.tooling.lsp-helpers/find-dev-id-usages kw)
+                               (filter #(reg? (:content %%)))
+                               (map-indexed (fn [i c] [(- (score c)) i c]))
+                               sort first)]
+         (when (and best (or (empty? aspects) (neg? neg)))
+           (select-keys best [:file :line])))))"
   "Clojure form locating a dev-id's registration (format arg: the keyword).
 Uses lsp-helpers/find-definition when the REPL's atlas has it; otherwise runs
 the same ranking over find-dev-id-usages, which older atlas jars also have:
-candidate registration lines (the bare keyword, or an :atlas/dev-id entry)
-ranked by how many of the loaded entity's aspects appear near them.")
+candidate registration lines (the bare keyword, an :atlas/dev-id entry, or a
+call whose first argument is the keyword) ranked by how many of the loaded
+entity's aspects appear near them; no match with any aspect nearby means nil.")
 
 (defun atlas-layout--definition-location (entity)
   "Return (abs-file line) for ENTITY's register! call, or nil.
