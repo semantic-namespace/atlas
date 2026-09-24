@@ -392,13 +392,31 @@ Top window: system summary.  Bottom window: topological execution order."
             (plist-get nrepl-endpoint :port)))))
 
 ;;;###autoload
+(defvar atlas-layout-llm-project nil
+  "Project directory this daemon serves (set by `atlas-layout/llm-connect').")
+
+(defun atlas-layout--cider-repls ()
+  "All live CIDER REPL buffers in this Emacs."
+  (seq-filter (lambda (buf)
+                (with-current-buffer buf (eq major-mode 'cider-repl-mode)))
+              (buffer-list)))
+
 (defun atlas-layout/llm-connect (host port project-dir)
   "Connect CIDER to HOST:PORT for PROJECT-DIR, unless already connected there.
-Idempotent, so the LLM can call it at the start of every session.
-Clears per-connection caches when a new connection is made."
-  (let ((current (atlas-layout--connected-endpoint)))
-    (if (and current (equal (cadr current) port))
-        "already-connected"
+Idempotent, so the LLM can call it at the start of every session.  A daemon
+talks to exactly one REPL: connections to any other port are closed first,
+otherwise views could keep querying a stale or dead REPL.  Closing only drops
+the client side; REPLs started outside this Emacs keep running."
+  (setq atlas-layout-llm-project (file-name-as-directory project-dir))
+  (let* ((repls (atlas-layout--cider-repls))
+         (same (seq-filter (lambda (r)
+                             (with-current-buffer r
+                               (equal (plist-get nrepl-endpoint :port) port)))
+                           repls))
+         (others (seq-difference repls same)))
+    (dolist (r others) (cider-quit r))
+    (if same
+        (if others "switched (closed other REPL connections)" "already-connected")
       (setq atlas-layout--nrepl-root-cache nil)
       (clrhash atlas-layout--dataflow-cache)
       (let ((default-directory (file-name-as-directory project-dir))
@@ -412,8 +430,9 @@ Clears per-connection caches when a new connection is made."
   "One-line status for the LLM: socket, CIDER endpoint, attached frames, tabs."
   (let* ((endpoint (atlas-layout--connected-endpoint))
          (frames (atlas-layout--client-frames)))
-    (format "socket=%s cider=%s frames=%d size=%s tabs=%s"
+    (format "socket=%s project=%s cider=%s frames=%d size=%s tabs=%s"
             server-name
+            (or atlas-layout-llm-project "-")
             (if endpoint (format "%s:%s" (car endpoint) (cadr endpoint)) "none")
             (length frames)
             (if frames

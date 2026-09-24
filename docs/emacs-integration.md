@@ -425,7 +425,13 @@ except `attach`:
 | `ensure --project DIR` | start or reuse the daemon (one per project) and connect CIDER to that project's REPL |
 | `attach --project DIR` | open your terminal frame (what `em` calls) |
 | `eval FORM` | evaluate elisp in the daemon (what the LLM uses to open layouts and read your screen) |
-| `status` / `stop` | inspect or shut down the daemon |
+| `status` | the daemon's project, git branch, REPL port and the REPL's working directory |
+| `list` | every atlas daemon on this machine, with the same details |
+| `stop` | shut down a daemon (`--socket PATH` for one shown by `list`) |
+
+Each project directory gets its own daemon (the socket name includes a hash
+of the full path, so worktrees with the same folder name stay separate), and
+each daemon is connected to exactly one REPL.
 
 The daemon is separate from your own Emacs server, and your preferences only
 apply inside it. The script never refreshes or reloads code in your REPL.

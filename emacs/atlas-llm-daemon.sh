@@ -9,12 +9,15 @@
 #   atlas-llm-daemon.sh ensure [--project DIR] [--port N]        start/reuse daemon, connect CIDER
 #   atlas-llm-daemon.sh attach [--project DIR]                   (human) open a terminal frame
 #   atlas-llm-daemon.sh eval   [--project DIR] FORM              eval elisp in the daemon, print result
-#   atlas-llm-daemon.sh status [--project DIR]
-#   atlas-llm-daemon.sh stop   [--project DIR]
+#   atlas-llm-daemon.sh status [--project DIR]                   daemon, project, git branch, REPL and its directory
+#   atlas-llm-daemon.sh list                                     every atlas daemon on this machine
+#   atlas-llm-daemon.sh stop   [--project DIR | --socket PATH]
 #   atlas-llm-daemon.sh install-skill [--user]                   link the /atlas-emacs Claude Code skill
 #
-# DIR defaults to the current directory; one daemon per project, on socket
-# atlas-<basename of DIR>.  Suggested alias:  alias em='<repo>/emacs/atlas-llm-daemon.sh attach'
+# DIR defaults to the current directory. One daemon per project directory, on
+# socket atlas-<basename>-<hash of the full path>, so two checkouts with the
+# same folder name (e.g. worktrees) never share a daemon. Each daemon talks to
+# exactly one REPL.  Suggested alias:  alias em='<repo>/emacs/atlas-llm-daemon.sh attach'
 #
 # Port resolution (ensure, when --port is omitted):
 #   1. DIR/.nrepl-port, if that port answers
@@ -55,23 +58,24 @@ EMACS="$(pick_emacs)"
 CLIENT="${EMACSCLIENT:-$(dirname "$EMACS")/emacsclient}"
 
 cmd="${1:-}"; shift || true
-PROJECT="$PWD"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""
+PROJECT="$PWD"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""; SOCKET_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
     --port)    PORT="$2";    shift 2 ;;
     --aliases) ALIASES="$2"; shift 2 ;;
     --user)    USER_SCOPE=1; shift ;;
+    --socket)  SOCKET_ARG="$2"; shift 2 ;;
     --*) echo "unknown argument: $1" >&2; exit 2 ;;
     *) FORM="$1"; shift ;;
   esac
 done
 PROJECT="$(cd "$PROJECT" && pwd)"
-NAME="atlas-$(basename "$PROJECT")"
+NAME="atlas-$(basename "$PROJECT")-$(printf '%s' "$PROJECT" | sha1sum | cut -c1-6)"
 # Always an absolute socket path: snap-confined emacs/emacsclient disagree on
 # the default socket dir, so name-only sockets are not found.
 SOCKDIR="${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/emacs}"; SOCKDIR="${SOCKDIR:-/tmp/emacs$(id -u)}"
-SOCKET="$SOCKDIR/$NAME"
+SOCKET="${SOCKET_ARG:-$SOCKDIR/$NAME}"
 STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/atlas-emacs"
 
 ec() { timeout 20 "$CLIENT" --socket-name="$SOCKET" --eval "$1" 2>/dev/null; }
@@ -91,6 +95,23 @@ eval_text() {
          "(let ((v $1)) (with-temp-file \"$tmp\" (insert (if (stringp v) v (prin1-to-string v)))) t)" 2>&1)" \
     || { rm -f "$tmp"; echo "$out" >&2; return 1; }
   cat "$tmp"; echo; rm -f "$tmp"
+}
+
+git_branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-"; }
+# Working directory of the REPL on port $1 ("" if it doesn't answer).
+repl_dir() {
+  local out; out="$(clj-nrepl-eval -p "$1" --timeout 5000 '(System/getProperty "user.dir")' 2>/dev/null || true)"
+  [[ "$out" =~ \=\>\ \"([^\"]*)\" ]] && echo "${BASH_REMATCH[1]}"
+}
+# llm-status plus what only the shell can see: the project's git branch and the
+# connected REPL's working directory (it can differ from the project).
+full_status() {
+  local st port dir project
+  st="$(eval_text "(atlas-layout/llm-status)")" || return 1
+  port="$( [[ "$st" =~ cider=localhost:([0-9]+) ]] && echo "${BASH_REMATCH[1]}" )"
+  project="$( [[ "$st" =~ project=([^ ]+) ]] && echo "${BASH_REMATCH[1]%/}" )"
+  dir="$( [[ -n "$port" ]] && repl_dir "$port" )"
+  echo "$st branch=$( [[ -n "$project" && "$project" != "-" ]] && git_branch "$project" || echo -) repl-dir=${dir:--}"
 }
 
 resolve_port() {
@@ -169,6 +190,10 @@ case "$cmd" in
     ;;
   ensure)
     resolve_port
+    rdir="$(repl_dir "$PORT")"
+    if [[ -n "$rdir" && "$rdir" != "$PROJECT" ]]; then
+      echo "WARNING: the REPL on port $PORT runs in $rdir, not $PROJECT — views will show that REPL's code and registry" >&2
+    fi
     if ! daemon_up; then
       echo "Starting daemon '$NAME' in $PROJECT ..."
       mkdir -p "$SOCKDIR" && chmod 700 "$SOCKDIR"
@@ -197,7 +222,7 @@ case "$cmd" in
       echo "WARNING: core ontologies not loaded — dependency views will be empty. In the REPL:" >&2
       echo "  (doseq [n '[atlas.ontology.execution-function atlas.ontology.interface-endpoint atlas.ontology.structure-component atlas.ontology.data-schema atlas.ontology.interface-protocol]] (require n :reload)) (atlas.datalog/reset-db-cache!)" >&2
     fi
-    echo "status: $(eval_text "(atlas-layout/llm-status)")"
+    echo "status: $(full_status)"
     echo "attach: $SELF attach --project $PROJECT"
     ;;
   attach)
@@ -213,9 +238,23 @@ case "$cmd" in
     eval_text "$FORM"
     ;;
   status)
-    if daemon_up; then eval_text "(atlas-layout/llm-status)"; else echo "socket=$SOCKET down"; fi
+    if daemon_up; then full_status; else echo "socket=$SOCKET down"; fi
+    ;;
+  list)
+    found=""
+    for sock in "$SOCKDIR"/atlas-*; do
+      [[ -S "$sock" ]] || continue
+      found=1
+      if timeout 5 "$CLIENT" --socket-name="$sock" --eval t >/dev/null 2>&1; then
+        SOCKET="$sock"; echo "$(full_status)"
+      else
+        echo "socket=$sock (no daemon answering — stale socket; remove it with: rm $sock)"
+      fi
+    done
+    [[ -n "$found" ]] || echo "no atlas daemons in $SOCKDIR"
     ;;
   stop)
+    # --socket PATH stops a daemon by its socket (e.g. one shown by `list`).
     daemon_up && ec "(kill-emacs)" >/dev/null || true
     echo "stopped $SOCKET"
     ;;
