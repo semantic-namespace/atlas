@@ -154,6 +154,19 @@ Handles same-line and multiline register! calls."
                      keyword-str))
                   rel-files))))
 
+(declare-function atlas-layout--definition-location "atlas-layout")
+
+(defun atlas--definition-locations (keyword-str)
+  "Registration sites for KEYWORD-STR, best first, as (file line) lists.
+Prefers the aspect-ranked lookup the layouts use: plain text search also
+matches test fixtures that re-register the same dev-id, so its first hit
+can be the wrong file.  Falls back to the text search when the ranked
+lookup finds nothing."
+  (or (when-let* (((fboundp 'atlas-layout--definition-location))
+                  (loc (ignore-errors (atlas-layout--definition-location keyword-str))))
+        (list loc))
+      (atlas--find-register-locations keyword-str)))
+
 (defun atlas-xref-backend ()
   "Atlas xref backend identifier."
   (message "[atlas-xref] backend function called, returning 'atlas")
@@ -178,7 +191,7 @@ Handles same-line and multiline register! calls."
   (message "[atlas-xref] definitions called for: %s" identifier)
   (let* ((root (atlas--project-root))
          (_ (message "[atlas-xref] project root: %s" root))
-         (locations (atlas--find-register-locations identifier)))
+         (locations (atlas--definition-locations identifier)))
     (message "[atlas-xref] found %d locations" (length locations))
     (dolist (loc locations)
       (message "[atlas-xref]   location: %s:%d" (nth 0 loc) (nth 1 loc)))
@@ -273,7 +286,7 @@ then to default `xref-find-definitions' for everything else."
      ((and kw
            (cider-connected-p)
            (atlas--eval-safe (format "(registered-entity? %s)" kw)))
-      (let ((locations (atlas--find-register-locations kw)))
+      (let ((locations (atlas--definition-locations kw)))
         (if locations
             (let* ((loc (car locations))
                    (file (nth 0 loc))
