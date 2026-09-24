@@ -394,11 +394,13 @@ emacs/atlas-llm-daemon.sh install-skill --user    # or: every session
 # 2. A short name for attaching (add to your shell profile)
 alias em='/path/to/atlas/emacs/atlas-llm-daemon.sh attach'
 
-# 3. Optional preferences, read from *your* terminal each time you attach
-export ATLAS_EMACS_BACKGROUND=dark   # or light; default: the COLORFGBG hint,
-                                     # else Emacs's own guess
-export ATLAS_EMACS_THEMES=off        # disable your Emacs themes in this daemon
-                                     # (useful if they're made for a GUI frame)
+# 3. Optional preferences, read by every `attach` (environment variables
+#    with the same names override them)
+mkdir -p ~/.config/atlas-emacs
+cat > ~/.config/atlas-emacs/env <<'CONF'
+ATLAS_EMACS_BACKGROUND=dark   # or light; default: the COLORFGBG hint, else Emacs's guess
+ATLAS_EMACS_THEMES=off        # disable your Emacs themes in this daemon
+CONF
 ```
 
 Requirements: Emacs 27 or newer, CIDER, `clj-nrepl-eval`, and Python 3 (used
@@ -421,11 +423,17 @@ except `attach`:
 
 | Command | Purpose |
 |---|---|
-| `repl --project DIR` | start the project's nREPL with the cider-nrepl version your installed CIDER requires |
+| `repl --project DIR` | start the project's nREPL with the cider-nrepl version your installed CIDER requires. If the project's dev alias starts the app, pass its source dirs with `--extra-paths` instead; `--boot FORM` runs a form once the REPL is up (e.g. loading the registry) |
 | `ensure --project DIR` | start or reuse the daemon (one per project) and connect CIDER to that project's REPL |
 | `attach --project DIR` | open your terminal frame (what `em` calls) |
 | `eval FORM` | evaluate elisp in the daemon (what the LLM uses to open layouts and read your screen) |
-| `status` / `stop` | inspect or shut down the daemon |
+| `status` | the daemon's project, git branch, REPL port and the REPL's working directory |
+| `list` | every atlas daemon on this machine, with the same details |
+| `stop` | shut down a daemon (`--socket PATH` for one shown by `list`) |
+
+Each project directory gets its own daemon (the socket name includes a hash
+of the full path, so worktrees with the same folder name stay separate), and
+each daemon is connected to exactly one REPL.
 
 The daemon is separate from your own Emacs server, and your preferences only
 apply inside it. The script never refreshes or reloads code in your REPL.

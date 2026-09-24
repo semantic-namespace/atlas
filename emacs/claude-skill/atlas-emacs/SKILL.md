@@ -22,11 +22,16 @@ Why it is built this way (daemon model, frame targeting, known gaps): see [desig
 ## Setup (once per session)
 
 The LLM owns the Emacs daemon; the human only attaches a terminal frame.
-Everything goes through one script in the atlas repo:
+Everything goes through one script in the atlas repo. This skill lives in that
+repo at `emacs/claude-skill/atlas-emacs/` (installed as a symlink), so resolve
+the script from this skill's base directory — that works from any project:
 
 ```bash
-ATLAS="$(git -C <atlas repo> rev-parse --show-toplevel)/emacs/atlas-llm-daemon.sh"
+ATLAS="$(readlink -f "<this skill's base directory>")/../../atlas-llm-daemon.sh"
 ```
+
+Use `--project <dir>` for the project whose registry you're showing (usually
+the current working directory), not the atlas repo.
 
 (`$ATLAS` below.) It finds Emacs (>= 27), computes the per-project socket and
 handles the attaching person's preferences — never hardcode binaries, sockets
@@ -66,10 +71,16 @@ or home paths.
    `em` (`alias em='<atlas repo>/emacs/atlas-llm-daemon.sh attach'`).
    Wait for them before opening a layout.
 
-   Their preferences come from *their* terminal's environment, not from you:
-   `ATLAS_EMACS_BACKGROUND=dark|light` (else the `COLORFGBG` hint, else
-   Emacs's guess) and `ATLAS_EMACS_THEMES=off`. If colors look wrong to them,
-   suggest setting these in their shell profile.
+   Their preferences are theirs, not yours: `attach` reads
+   `~/.config/atlas-emacs/env` (`ATLAS_EMACS_BACKGROUND=dark|light`,
+   `ATLAS_EMACS_THEMES=off`), and environment variables override it. If colors
+   look wrong to them, suggest that file — don't invent other attach commands.
+
+   Mind which REPL a daemon uses: `ensure` keeps a daemon's current REPL
+   while it's alive (pass `--port` to switch) and warns when a REPL lacks
+   CIDER's middleware. Don't point a human's daemon at an agent-only REPL
+   (e.g. one without CIDER middleware) unless they ask; start a full one with
+   `$ATLAS repl` instead.
 
 Below, `$EC` means `$ATLAS eval --project <project-dir>`: it evals elisp in
 that project's daemon and prints strings as plain text.
@@ -156,8 +167,16 @@ $EC '(atlas-layout/llm-status)'   # socket, CIDER endpoint, frames, tabs
 Cross-check the numbers that matter for the view (e.g. dependents count vs
 `(atlas.ide/dependents-of <kw>)`, blast total vs
 `(atlas.ide/recursive-dependents-summary <kw>)`, source pane file vs
-`(atlas.tooling.lsp-helpers/find-definition <kw>)`). If they disagree, say so and
-investigate — the view is wrong, not the human.
+`$EC '(atlas-layout--definition-location ":<kw>")'`, which works with any atlas
+version on the REPL's classpath). If they disagree, say so and investigate —
+the view is wrong, not the human.
+
+Reading the panes correctly:
+- A dependency shown as `· <id>  not in registry` is not an atlas entity (e.g.
+  an integrant component key). That's expected, not a loading problem.
+- The Identity section shows the entity's own aspects only.
+- A Source pane saying "No registration found" means no `register!` for that
+  dev-id under the project's `src/` or `test/`; say so rather than guessing.
 
 Report briefly: entity type, which view opened, what it shows. Then offer the
 view the human *didn't* pick — once.

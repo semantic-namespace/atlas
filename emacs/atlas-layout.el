@@ -228,35 +228,80 @@ ETYPE is a string like \":atlas/execution-function\"."
         (puthash etype result atlas-layout--dataflow-cache)
         result))))
 
+(defconst atlas-layout--find-definition-form
+  "(let [kw %s
+         s (str kw)
+         f (resolve 'atlas.tooling.lsp-helpers/find-definition)]
+     (if f
+       (f kw)
+       (let [aspects (->> (get @atlas.registry/dev-id-index kw)
+                          (remove #(= \"atlas\" (namespace %%)))
+                          (map str))
+             reg? (fn [c]
+                    (let [toks (clojure.string/split
+                                (clojure.string/trim (clojure.string/replace c #\"[{}()\\[\\]]\" \" \"))
+                                #\" +\")]
+                      (or (= c s)
+                          (and (some #{\":atlas/dev-id\"} toks) (some #{s} toks) true)
+                          (and (clojure.string/starts-with? c \"(\") (= s (second toks))))))
+             score (fn [{:keys [file line]}]
+                     (let [w (->> (clojure.string/split-lines (slurp file))
+                                  (drop (max 0 (- line 6))) (take 18)
+                                  (clojure.string/join \"\\n\"))]
+                       (count (filter #(clojure.string/includes? w %%) aspects))))
+             [neg _ best] (->> (atlas.tooling.lsp-helpers/find-dev-id-usages kw)
+                               (filter #(reg? (:content %%)))
+                               (map-indexed (fn [i c] [(- (score c)) i c]))
+                               sort first)]
+         (when (and best (or (empty? aspects) (neg? neg)))
+           (select-keys best [:file :line])))))"
+  "Clojure form locating a dev-id's registration (format arg: the keyword).
+Uses lsp-helpers/find-definition when the REPL's atlas has it; otherwise runs
+the same ranking over find-dev-id-usages, which older atlas jars also have:
+candidate registration lines (the bare keyword, an :atlas/dev-id entry, or a
+call whose first argument is the keyword) ranked by how many of the loaded
+entity's aspects appear near them; no match with any aspect nearby means nil.")
+
 (defun atlas-layout--definition-location (entity)
   "Return (abs-file line) for ENTITY's register! call, or nil.
-Delegates to lsp-helpers/find-definition, which disambiguates re-registrations
-(e.g. test fixtures reusing the dev-id) by the loaded entity's aspects.
+Test fixtures often re-register a dev-id with other aspects, so candidates are
+ranked by the loaded entity's aspects (see `atlas-layout--find-definition-form').
 Paths resolve relative to the nREPL project root."
   (let* ((kw (if (string-prefix-p ":" entity) entity (concat ":" entity)))
-         (code (format "(do (require '[%s :as lsp]) (lsp/find-definition %s))"
-                       atlas-lsp-helpers-ns kw))
+         (code (format "(do (require '[%s]) %s)" atlas-lsp-helpers-ns
+                       (format atlas-layout--find-definition-form kw)))
          (loc (atlas--eval code))
          (root (atlas-layout--nrepl-root)))
     (when (and loc root)
       (list (expand-file-name (atlas--get loc 'file) root)
             (atlas--get loc 'line)))))
 
+(defun atlas-layout--show-no-source (entity reason)
+  "Show a placeholder for ENTITY's source pane, so no stale buffer remains."
+  (let ((buf (atlas--buffer (format "source:%s" entity))))
+    (with-current-buffer buf
+      (atlas-theme-section "Source")
+      (insert "  ")
+      (atlas-theme-dim (format "%s %s" reason entity))
+      (insert "\n")
+      (read-only-mode 1))
+    (switch-to-buffer buf)))
+
 (defun atlas-layout--open-definition (entity)
   "Open source file at ENTITY's register! line in the selected window.
-Falls back to a plain message if the file cannot be resolved."
+When the location can't be resolved, the pane says so instead of keeping
+whatever buffer it showed before."
   (let ((loc (atlas-layout--definition-location entity)))
-    (if loc
-        (let ((file (car loc))
-              (line (cadr loc)))
-          (if (file-exists-p file)
-              (progn
-                (find-file file)
-                (goto-char (point-min))
-                (forward-line (1- line))
-                (recenter 10))
-            (message "Definition file not found: %s" file)))
-      (message "No definition found for %s" entity))))
+    (cond
+     ((null loc)
+      (atlas-layout--show-no-source entity "No registration found in the project's src/ or test/ for"))
+     ((not (file-exists-p (car loc)))
+      (atlas-layout--show-no-source entity (format "File %s not found for" (car loc))))
+     (t
+      (find-file (car loc))
+      (goto-char (point-min))
+      (forward-line (1- (cadr loc)))
+      (recenter 10)))))
 
 ;;; Layout functions
 
@@ -392,28 +437,50 @@ Top window: system summary.  Bottom window: topological execution order."
             (plist-get nrepl-endpoint :port)))))
 
 ;;;###autoload
+(defvar atlas-layout-llm-project nil
+  "Project directory this daemon serves (set by `atlas-layout/llm-connect').")
+
+(defun atlas-layout--cider-repls ()
+  "All live CIDER REPL buffers in this Emacs."
+  (seq-filter (lambda (buf)
+                (with-current-buffer buf (eq major-mode 'cider-repl-mode)))
+              (buffer-list)))
+
 (defun atlas-layout/llm-connect (host port project-dir)
   "Connect CIDER to HOST:PORT for PROJECT-DIR, unless already connected there.
-Idempotent, so the LLM can call it at the start of every session.
-Clears per-connection caches when a new connection is made."
-  (let ((current (atlas-layout--connected-endpoint)))
-    (if (and current (equal (cadr current) port))
-        "already-connected"
+Idempotent, so the LLM can call it at the start of every session.  A daemon
+talks to exactly one REPL: connections to any other port are closed first,
+otherwise views could keep querying a stale or dead REPL.  Closing only drops
+the client side; REPLs started outside this Emacs keep running."
+  (setq atlas-layout-llm-project (file-name-as-directory project-dir))
+  (let* ((repls (atlas-layout--cider-repls))
+         (same (seq-filter (lambda (r)
+                             (with-current-buffer r
+                               (equal (plist-get nrepl-endpoint :port) port)))
+                           repls))
+         (others (seq-difference repls same)))
+    (dolist (r others) (cider-quit r))
+    (if same
+        (if others "switched (closed other REPL connections)" "already-connected")
       (setq atlas-layout--nrepl-root-cache nil)
       (clrhash atlas-layout--dataflow-cache)
       (let ((default-directory (file-name-as-directory project-dir))
             (cider-repl-pop-to-buffer-on-connect nil))
         (cider-connect-clj (list :host host :port port
                                  :project-dir project-dir)))
-      "connecting")))
+      (if others
+          (format "connecting (closed %d other REPL connection%s)"
+                  (length others) (if (cdr others) "s" ""))
+        "connecting"))))
 
 ;;;###autoload
 (defun atlas-layout/llm-status ()
   "One-line status for the LLM: socket, CIDER endpoint, attached frames, tabs."
   (let* ((endpoint (atlas-layout--connected-endpoint))
          (frames (atlas-layout--client-frames)))
-    (format "socket=%s cider=%s frames=%d size=%s tabs=%s"
+    (format "socket=%s project=%s cider=%s frames=%d size=%s tabs=%s"
             server-name
+            (or atlas-layout-llm-project "-")
             (if endpoint (format "%s:%s" (car endpoint) (cadr endpoint)) "none")
             (length frames)
             (if frames

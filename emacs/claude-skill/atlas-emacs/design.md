@@ -15,8 +15,11 @@
 
 - **The LLM owns setup.** It picks the REPL by project directory, starts the
   daemon in that directory, connects CIDER. The human's only step is `em`.
-- **One daemon per project** (`atlas-<basename>`), so sessions for different
-  projects don't collide.
+- **One daemon per project directory**, on socket `atlas-<basename>-<hash of
+  the full path>`: two checkouts with the same folder name (worktrees) never
+  share a daemon. **Each daemon talks to exactly one REPL**; connecting to a
+  different port closes the old CIDER connection (the REPL itself keeps
+  running), so views can't query a stale REPL.
 - **Two readable sides.** The REPL is ground truth; `llm-screen` returns what
   the human actually sees. The LLM verifies one against the other instead of
   asking the human to describe their screen.
@@ -31,7 +34,7 @@
 | Layouts + frame/tab targeting + `llm-*` helpers | `emacs/atlas-layout.el` |
 | Pane contents | `emacs/atlas-browse.el` (calls `atlas.ide/*` over CIDER) |
 | Stylesheet: faces (light/dark) + building blocks | `emacs/atlas-theme.el` |
-| Registration lookup for the source pane | `atlas.tooling.lsp-helpers/find-definition` |
+| Registration lookup for the source pane | `atlas-layout--definition-location` (uses `lsp-helpers/find-definition`, or the same ranking inline on older atlas jars) |
 | Attach | `atlas-llm-daemon.sh attach`; each person aliases it (`em`) |
 
 ## Decisions and the gotchas behind them
@@ -47,8 +50,13 @@
 - **One tab per layout** instead of `delete-other-windows` on the human's only
   view: previous views stay reachable, and re-running reuses the tab.
 - **Narrow frames stack panes** (`atlas-layout-narrow-width`, 140 cols).
-- **`find-definition` ranks text-search hits by aspect overlap.** The registry
+- **The source lookup ranks text-search hits by aspect overlap.** The registry
   stores no source location, and test fixtures reuse dev-ids with other aspects.
+  Projects often run a released atlas jar that predates `find-definition`, so
+  the layout sends the same ranking inline over `find-dev-id-usages`. When
+  nothing is found, the pane says so instead of keeping a stale buffer.
+- **Dependencies outside the registry are labeled, not badged `??`.** Deps can
+  be plain keys (integrant components) that were never registered.
 - **Ontology preflight in `ensure`.** `deps-for` reads dep keys from registered
   ontologies; example registries don't load them, and then every dependency
   view is silently empty.
@@ -59,7 +67,9 @@
 - **Preferences travel with the attaching terminal.** `emacsclient -t` hands
   the terminal's environment to the daemon, so `ATLAS_EMACS_BACKGROUND`
   (else `COLORFGBG`, else Emacs's guess) and `ATLAS_EMACS_THEMES=off` are read
-  per attach — no per-person config on the LLM side. Background is set via the
+  per attach — no per-person config on the LLM side. `attach` fills unset ones
+  from `~/.config/atlas-emacs/env`, so any attach command a session suggests
+  works; before that, only a personal alias carried them. Background is set via the
   terminal parameter (Emacs can't query a tty and guesses light). Both apply
   only in atlas daemons (socket `atlas-*`), never the person's own server.
 - **Title bands right-align at display time** (`:align-to right`). Layouts
@@ -76,6 +86,14 @@
   `status`, `stop` share the Emacs lookup and socket logic, so the skill
   carries no binaries or paths. `repl` reads the cider-nrepl version from the
   person's installed CIDER.
+- **Mismatches are visible, not fixed silently.** `status`/`list` show the
+  project's git branch and the REPL's working directory; `ensure` warns when
+  the REPL runs in another directory. After switching branches in one
+  checkout, views show what the REPL has loaded until the REPL is reloaded.
+- **`ensure` keeps a daemon's REPL while it's alive.** `.nrepl-port` is
+  rewritten by any tool that starts a REPL in the same directory (seen: an
+  agent-owned REPL without CIDER middleware hijacked a human's daemon).
+  `--project` defaults to the git root of the current directory.
 - **No `(dev/refresh)`.** The daemon never mutates the human's REPL.
 
 ## Known gaps
