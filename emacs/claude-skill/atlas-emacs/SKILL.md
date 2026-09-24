@@ -71,10 +71,16 @@ or home paths.
    `em` (`alias em='<atlas repo>/emacs/atlas-llm-daemon.sh attach'`).
    Wait for them before opening a layout.
 
-   Their preferences come from *their* terminal's environment, not from you:
-   `ATLAS_EMACS_BACKGROUND=dark|light` (else the `COLORFGBG` hint, else
-   Emacs's guess) and `ATLAS_EMACS_THEMES=off`. If colors look wrong to them,
-   suggest setting these in their shell profile.
+   Their preferences are theirs, not yours: `attach` reads
+   `~/.config/atlas-emacs/env` (`ATLAS_EMACS_BACKGROUND=dark|light`,
+   `ATLAS_EMACS_THEMES=off`), and environment variables override it. If colors
+   look wrong to them, suggest that file — don't invent other attach commands.
+
+   Mind which REPL a daemon uses: `ensure` keeps a daemon's current REPL
+   while it's alive (pass `--port` to switch) and warns when a REPL lacks
+   CIDER's middleware. Don't point a human's daemon at an agent-only REPL
+   (e.g. one without CIDER middleware) unless they ask; start a full one with
+   `$ATLAS repl` instead.
 
 Below, `$EC` means `$ATLAS eval --project <project-dir>`: it evals elisp in
 that project's daemon and prints strings as plain text.

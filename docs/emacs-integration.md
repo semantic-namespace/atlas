@@ -394,11 +394,13 @@ emacs/atlas-llm-daemon.sh install-skill --user    # or: every session
 # 2. A short name for attaching (add to your shell profile)
 alias em='/path/to/atlas/emacs/atlas-llm-daemon.sh attach'
 
-# 3. Optional preferences, read from *your* terminal each time you attach
-export ATLAS_EMACS_BACKGROUND=dark   # or light; default: the COLORFGBG hint,
-                                     # else Emacs's own guess
-export ATLAS_EMACS_THEMES=off        # disable your Emacs themes in this daemon
-                                     # (useful if they're made for a GUI frame)
+# 3. Optional preferences, read by every `attach` (environment variables
+#    with the same names override them)
+mkdir -p ~/.config/atlas-emacs
+cat > ~/.config/atlas-emacs/env <<'CONF'
+ATLAS_EMACS_BACKGROUND=dark   # or light; default: the COLORFGBG hint, else Emacs's guess
+ATLAS_EMACS_THEMES=off        # disable your Emacs themes in this daemon
+CONF
 ```
 
 Requirements: Emacs 27 or newer, CIDER, `clj-nrepl-eval`, and Python 3 (used

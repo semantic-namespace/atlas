@@ -67,7 +67,9 @@
 - **Preferences travel with the attaching terminal.** `emacsclient -t` hands
   the terminal's environment to the daemon, so `ATLAS_EMACS_BACKGROUND`
   (else `COLORFGBG`, else Emacs's guess) and `ATLAS_EMACS_THEMES=off` are read
-  per attach — no per-person config on the LLM side. Background is set via the
+  per attach — no per-person config on the LLM side. `attach` fills unset ones
+  from `~/.config/atlas-emacs/env`, so any attach command a session suggests
+  works; before that, only a personal alias carried them. Background is set via the
   terminal parameter (Emacs can't query a tty and guesses light). Both apply
   only in atlas daemons (socket `atlas-*`), never the person's own server.
 - **Title bands right-align at display time** (`:align-to right`). Layouts
@@ -88,6 +90,10 @@
   project's git branch and the REPL's working directory; `ensure` warns when
   the REPL runs in another directory. After switching branches in one
   checkout, views show what the REPL has loaded until the REPL is reloaded.
+- **`ensure` keeps a daemon's REPL while it's alive.** `.nrepl-port` is
+  rewritten by any tool that starts a REPL in the same directory (seen: an
+  agent-owned REPL without CIDER middleware hijacked a human's daemon).
+  `--project` defaults to the git root of the current directory.
 - **No `(dev/refresh)`.** The daemon never mutates the human's REPL.
 
 ## Known gaps

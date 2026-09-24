@@ -32,12 +32,17 @@
 # doesn't count as running: a new one is started.
 #
 # Personal preferences travel with `attach` (emacsclient -t passes the
-# terminal's environment to the daemon), so each person sets them once in
-# their own shell profile:
+# terminal's environment to the daemon). Set them once in
+# ${XDG_CONFIG_HOME:-~/.config}/atlas-emacs/env (KEY=VALUE lines), which every
+# `attach` reads, so any attach command works; environment variables override:
 #   ATLAS_EMACS_BACKGROUND=dark|light   terminal background (default: COLORFGBG
 #                                        hint, else Emacs's own guess)
 #   ATLAS_EMACS_THEMES=off              disable your Emacs themes in this daemon
 #                                        (they're usually picked for a GUI frame)
+#
+# --project defaults to the git root of the current directory (else the
+# directory itself). `ensure` keeps a daemon's current REPL while it's alive;
+# pass --port to switch.
 #
 # Env for the tools themselves:
 #   EMACS / EMACSCLIENT         binaries (default: first Emacs >= 27 on PATH or
@@ -65,7 +70,7 @@ EMACS="$(pick_emacs)"
 CLIENT="${EMACSCLIENT:-$(dirname "$EMACS")/emacsclient}"
 
 cmd="${1:-}"; shift || true
-PROJECT="$PWD"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""; SOCKET_ARG=""; EXTRA_PATHS=""; BOOT=""
+PROJECT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""; SOCKET_ARG=""; EXTRA_PATHS=""; BOOT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
@@ -220,7 +225,18 @@ case "$cmd" in
     fi
     ;;
   ensure)
-    resolve_port
+    # Keep the daemon's current REPL while it's alive: .nrepl-port can be
+    # rewritten by any other tool that starts a REPL in the same directory.
+    if [[ -z "$PORT" ]] && daemon_up; then
+      cur="$( [[ "$(eval_text "(atlas-layout/llm-status)" 2>/dev/null)" =~ cider=localhost:([0-9]+) ]] && echo "${BASH_REMATCH[1]}" )"
+      if [[ -n "$cur" ]] && port_alive "$cur"; then
+        PORT="$cur"; echo "keeping the daemon's current REPL on port $PORT (pass --port to switch)"
+      fi
+    fi
+    [[ -n "$PORT" ]] || resolve_port
+    if ! has_cider_middleware "$PORT"; then
+      echo "WARNING: the REPL on port $PORT has no CIDER middleware — views work, but CIDER features (completion, M-. into code, docs) won't. Start a full REPL with: $(basename "$SELF") repl --project $PROJECT" >&2
+    fi
     rdir="$(repl_dir "$PORT")"
     if [[ -n "$rdir" && "$rdir" != "$PROJECT" ]]; then
       echo "WARNING: the REPL on port $PORT runs in $rdir, not $PROJECT — views will show that REPL's code and registry" >&2
@@ -257,6 +273,17 @@ case "$cmd" in
     echo "attach: $SELF attach --project $PROJECT"
     ;;
   attach)
+    conf="${XDG_CONFIG_HOME:-$HOME/.config}/atlas-emacs/env"
+    if [[ -f "$conf" ]]; then
+      while IFS='=' read -r key value; do
+        key="${key//[[:space:]]/}"
+        [[ "$key" =~ ^ATLAS_EMACS_[A-Z_]+$ ]] || continue
+        value="${value%%#*}"                       # trailing comment
+        value="${value#"${value%%[![:space:]]*}"}" # leading spaces
+        value="${value%"${value##*[![:space:]]}"}" # trailing spaces
+        [[ -n "${!key:-}" ]] || export "$key=$value"
+      done < "$conf"
+    fi
     if ! daemon_up; then
       echo "No atlas daemon for $PROJECT ($SOCKET). Ask your LLM to run: $(basename "$SELF") ensure --project $PROJECT" >&2
       exit 1
