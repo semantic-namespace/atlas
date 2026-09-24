@@ -229,11 +229,19 @@ LABEL-WIDTH defaults to 11 columns."
 
 (defun atlas-theme-entity-row (entity types &optional indent)
   "Insert one row: type badge (from TYPES hash) + clickable ENTITY.
-With TYPES nil, the row has no badge (e.g. inside a section that has one)."
-  (let ((e (atlas--to-string entity)))
+With TYPES nil, the row has no badge (e.g. inside a section that has one).
+An id TYPES knows nothing about is not a registry entity (e.g. an integrant
+component key): it gets a dim marker and plain text, not a dead button."
+  (let* ((e (atlas--to-string entity))
+         (type (and types (gethash e types))))
     (insert (or indent "  "))
-    (when types (insert (atlas-theme-badge (gethash e types)) " "))
-    (atlas--insert-entity e)
+    (cond
+     ((null types) (atlas--insert-entity e))
+     (type (insert (atlas-theme-badge type) " ")
+           (atlas--insert-entity e))
+     (t (insert (propertize "  · " 'face 'atlas-theme-dim-face) " "
+                (propertize e 'face 'atlas-theme-label-face) "  ")
+        (atlas-theme-dim "not in registry")))
     (insert "\n")))
 
 (defun atlas-theme-entity-list (entities types &optional threshold empty-text)

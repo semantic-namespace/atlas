@@ -34,7 +34,7 @@
 | Layouts + frame/tab targeting + `llm-*` helpers | `emacs/atlas-layout.el` |
 | Pane contents | `emacs/atlas-browse.el` (calls `atlas.ide/*` over CIDER) |
 | Stylesheet: faces (light/dark) + building blocks | `emacs/atlas-theme.el` |
-| Registration lookup for the source pane | `atlas.tooling.lsp-helpers/find-definition` |
+| Registration lookup for the source pane | `atlas-layout--definition-location` (uses `lsp-helpers/find-definition`, or the same ranking inline on older atlas jars) |
 | Attach | `atlas-llm-daemon.sh attach`; each person aliases it (`em`) |
 
 ## Decisions and the gotchas behind them
@@ -50,8 +50,13 @@
 - **One tab per layout** instead of `delete-other-windows` on the human's only
   view: previous views stay reachable, and re-running reuses the tab.
 - **Narrow frames stack panes** (`atlas-layout-narrow-width`, 140 cols).
-- **`find-definition` ranks text-search hits by aspect overlap.** The registry
+- **The source lookup ranks text-search hits by aspect overlap.** The registry
   stores no source location, and test fixtures reuse dev-ids with other aspects.
+  Projects often run a released atlas jar that predates `find-definition`, so
+  the layout sends the same ranking inline over `find-dev-id-usages`. When
+  nothing is found, the pane says so instead of keeping a stale buffer.
+- **Dependencies outside the registry are labeled, not badged `??`.** Deps can
+  be plain keys (integrant components) that were never registered.
 - **Ontology preflight in `ensure`.** `deps-for` reads dep keys from registered
   ontologies; example registries don't load them, and then every dependency
   view is silently empty.

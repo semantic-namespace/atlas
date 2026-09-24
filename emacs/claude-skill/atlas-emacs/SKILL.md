@@ -161,8 +161,16 @@ $EC '(atlas-layout/llm-status)'   # socket, CIDER endpoint, frames, tabs
 Cross-check the numbers that matter for the view (e.g. dependents count vs
 `(atlas.ide/dependents-of <kw>)`, blast total vs
 `(atlas.ide/recursive-dependents-summary <kw>)`, source pane file vs
-`(atlas.tooling.lsp-helpers/find-definition <kw>)`). If they disagree, say so and
-investigate — the view is wrong, not the human.
+`$EC '(atlas-layout--definition-location ":<kw>")'`, which works with any atlas
+version on the REPL's classpath). If they disagree, say so and investigate —
+the view is wrong, not the human.
+
+Reading the panes correctly:
+- A dependency shown as `· <id>  not in registry` is not an atlas entity (e.g.
+  an integrant component key). That's expected, not a loading problem.
+- The Identity section shows the entity's own aspects only.
+- A Source pane saying "No registration found" means no `register!` for that
+  dev-id under the project's `src/` or `test/`; say so rather than guessing.
 
 Report briefly: entity type, which view opened, what it shows. Then offer the
 view the human *didn't* pick — once.
