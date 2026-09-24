@@ -421,7 +421,7 @@ except `attach`:
 
 | Command | Purpose |
 |---|---|
-| `repl --project DIR` | start the project's nREPL with the cider-nrepl version your installed CIDER requires |
+| `repl --project DIR` | start the project's nREPL with the cider-nrepl version your installed CIDER requires. If the project's dev alias starts the app, pass its source dirs with `--extra-paths` instead; `--boot FORM` runs a form once the REPL is up (e.g. loading the registry) |
 | `ensure --project DIR` | start or reuse the daemon (one per project) and connect CIDER to that project's REPL |
 | `attach --project DIR` | open your terminal frame (what `em` calls) |
 | `eval FORM` | evaluate elisp in the daemon (what the LLM uses to open layouts and read your screen) |

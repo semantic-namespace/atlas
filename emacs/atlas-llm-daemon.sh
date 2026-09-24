@@ -5,7 +5,8 @@
 # from another terminal.  Layouts (atlas-layout.el) are drawn into that frame.
 #
 # Usage:
-#   atlas-llm-daemon.sh repl   [--project DIR] [--aliases :a:b]  start a project nREPL with CIDER middleware
+#   atlas-llm-daemon.sh repl   [--project DIR] [--aliases :a:b] [--extra-paths p1,p2] [--boot FORM]
+#                                                                start a project nREPL with CIDER middleware
 #   atlas-llm-daemon.sh ensure [--project DIR] [--port N]        start/reuse daemon, connect CIDER
 #   atlas-llm-daemon.sh attach [--project DIR]                   (human) open a terminal frame
 #   atlas-llm-daemon.sh eval   [--project DIR] FORM              eval elisp in the daemon, print result
@@ -23,6 +24,12 @@
 #   1. DIR/.nrepl-port, if that port answers
 #   2. the single REPL `clj-nrepl-eval --discover-ports` reports for DIR
 #   otherwise it fails and lists candidates — it never guesses.
+#
+# repl: uses the project's :repl alias if it has one (or --aliases). For projects
+# whose dev alias runs a -main (starting the app), pass the dev source dirs with
+# --extra-paths instead of the alias. --boot FORM is evaluated once the REPL is
+# up (e.g. to load the registry). An existing REPL without CIDER's middleware
+# doesn't count as running: a new one is started.
 #
 # Personal preferences travel with `attach` (emacsclient -t passes the
 # terminal's environment to the daemon), so each person sets them once in
@@ -58,12 +65,14 @@ EMACS="$(pick_emacs)"
 CLIENT="${EMACSCLIENT:-$(dirname "$EMACS")/emacsclient}"
 
 cmd="${1:-}"; shift || true
-PROJECT="$PWD"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""; SOCKET_ARG=""
+PROJECT="$PWD"; PORT=""; ALIASES=""; FORM=""; USER_SCOPE=""; SOCKET_ARG=""; EXTRA_PATHS=""; BOOT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
     --port)    PORT="$2";    shift 2 ;;
     --aliases) ALIASES="$2"; shift 2 ;;
+    --extra-paths) EXTRA_PATHS="$2"; shift 2 ;;
+    --boot)    BOOT="$2"; shift 2 ;;
     --user)    USER_SCOPE=1; shift ;;
     --socket)  SOCKET_ARG="$2"; shift 2 ;;
     --*) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -114,6 +123,12 @@ full_status() {
   echo "$st branch=$( [[ -n "$project" && "$project" != "-" ]] && git_branch "$project" || echo -) repl-dir=${dir:--}"
 }
 
+# Does the REPL on port $1 have CIDER's middleware loaded?
+has_cider_middleware() {
+  local out; out="$(clj-nrepl-eval -p "$1" --timeout 5000 "(boolean (try (requiring-resolve 'cider.nrepl.version/version) (catch Throwable _ nil)))" 2>/dev/null || true)"
+  [[ "$out" == *"=> true"* ]]
+}
+
 resolve_port() {
   if [[ -n "$PORT" ]]; then
     port_alive "$PORT" || { echo "ERROR: nREPL port $PORT does not answer" >&2; exit 1; }
@@ -155,23 +170,34 @@ cider_nrepl_version() {
 case "$cmd" in
   repl)
     if [[ -f "$PROJECT/.nrepl-port" ]] && port_alive "$(cat "$PROJECT/.nrepl-port")"; then
-      echo "repl: already running on port $(cat "$PROJECT/.nrepl-port")"; exit 0
+      existing="$(cat "$PROJECT/.nrepl-port")"
+      if has_cider_middleware "$existing"; then
+        echo "repl: already running on port $existing"; exit 0
+      fi
+      echo "note: the REPL on port $existing has no CIDER middleware; starting another (it keeps running)"
     fi
     [[ -f "$PROJECT/deps.edn" ]] || { echo "ERROR: no deps.edn in $PROJECT" >&2; exit 1; }
     ver="$(cider_nrepl_version)"
-    if [[ -z "$ALIASES" ]] && grep -q ':repl' "$PROJECT/deps.edn"; then ALIASES=":repl"; fi
+    # Only an exact :repl alias (not e.g. :repl/clerk).
+    if [[ -z "$ALIASES" ]] && grep -qE '(^|[[:space:]{]):repl[[:space:]]' "$PROJECT/deps.edn"; then ALIASES=":repl"; fi
+    sdeps_aliases=""
+    if [[ -n "$EXTRA_PATHS" ]]; then
+      paths="$(printf '%s' "$EXTRA_PATHS" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ' ')"
+      sdeps_aliases=" :aliases {:atlas-emacs-repl {:extra-paths [$paths]}}"
+      ALIASES=":atlas-emacs-repl$ALIASES"
+    fi
     mkdir -p "$STATEDIR"
     log="$STATEDIR/$NAME-nrepl.log"
     rm -f "$PROJECT/.nrepl-port"
     echo "Starting nREPL in $PROJECT (cider-nrepl $ver${ALIASES:+, aliases $ALIASES}); log: $log"
     (cd "$PROJECT" && nohup clojure \
-       -Sdeps "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"} cider/cider-nrepl {:mvn/version \"$ver\"}}}" \
+       -Sdeps "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"} cider/cider-nrepl {:mvn/version \"$ver\"}}$sdeps_aliases}" \
        "-M${ALIASES}" -m nrepl.cmdline \
        --middleware '[cider.nrepl/cider-middleware]' --port 0 >"$log" 2>&1 &)
     # JVM start + first-time dependency download can take a while; report
     # progress (with the log's last line) so a slow start doesn't look frozen.
     start=$SECONDS; next=$((SECONDS + 10)); ready=""
-    while (( SECONDS - start < 120 )); do
+    while (( SECONDS - start < 240 )); do
       if [[ -f "$PROJECT/.nrepl-port" ]] && port_alive "$(cat "$PROJECT/.nrepl-port")"; then
         ready=1; break
       fi
@@ -182,11 +208,16 @@ case "$cmd" in
       sleep 1
     done
     if [[ -z "$ready" ]]; then
-      echo "ERROR: nREPL not answering after 120s. Last log lines ($log):" >&2
+      echo "ERROR: nREPL not answering after 240s. Last log lines ($log):" >&2
       tail -n5 "$log" >&2
       exit 1
     fi
-    echo "repl: port $(cat "$PROJECT/.nrepl-port") (ready in $((SECONDS - start))s)"
+    newport="$(cat "$PROJECT/.nrepl-port")"
+    echo "repl: port $newport (ready in $((SECONDS - start))s)"
+    if [[ -n "$BOOT" ]]; then
+      echo "boot: evaluating --boot form …"
+      clj-nrepl-eval -p "$newport" --timeout 600000 "$BOOT" 2>&1 | grep -v '^\*=' | tail -3
+    fi
     ;;
   ensure)
     resolve_port

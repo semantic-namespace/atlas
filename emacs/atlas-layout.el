@@ -423,7 +423,10 @@ the client side; REPLs started outside this Emacs keep running."
             (cider-repl-pop-to-buffer-on-connect nil))
         (cider-connect-clj (list :host host :port port
                                  :project-dir project-dir)))
-      "connecting")))
+      (if others
+          (format "connecting (closed %d other REPL connection%s)"
+                  (length others) (if (cdr others) "s" ""))
+        "connecting"))))
 
 ;;;###autoload
 (defun atlas-layout/llm-status ()
