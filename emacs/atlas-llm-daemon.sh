@@ -79,13 +79,18 @@ daemon_up() { ec "t" >/dev/null; }
 # Capture, then match: `cmd | grep -q` fails under pipefail when grep exits
 # early and cmd gets SIGPIPE writing its remaining output.
 port_alive() { local out; out="$(clj-nrepl-eval -p "$1" --timeout 3000 "1" 2>/dev/null || true)"; [[ "$out" == *"=> 1"* ]]; }
-# emacsclient prints values with prin1; show strings as plain text.
-unquote() {
-  if command -v python3 >/dev/null; then
-    python3 -c 'import sys,ast; s=sys.stdin.read().strip(); print(ast.literal_eval(s) if s.startswith("\"") else s)'
-  else
-    cat
-  fi
+# Evaluate FORM in the daemon and print its value as plain text (strings
+# verbatim, anything else printed). emacsclient's own output is prin1 with
+# escapes, which can't be reliably turned back into text, so the daemon writes
+# the value to a file next to its socket (a directory both sides can reach,
+# even for snap-confined Emacs) and we print that.
+eval_text() {
+  local out tmp
+  tmp="$SOCKDIR/.$NAME-eval.$$"
+  out="$(timeout 30 "$CLIENT" --socket-name="$SOCKET" --eval \
+         "(let ((v $1)) (with-temp-file \"$tmp\" (insert (if (stringp v) v (prin1-to-string v)))) t)" 2>&1)" \
+    || { rm -f "$tmp"; echo "$out" >&2; return 1; }
+  cat "$tmp"; echo; rm -f "$tmp"
 }
 
 resolve_port() {
@@ -192,7 +197,7 @@ case "$cmd" in
       echo "WARNING: core ontologies not loaded — dependency views will be empty. In the REPL:" >&2
       echo "  (doseq [n '[atlas.ontology.execution-function atlas.ontology.interface-endpoint atlas.ontology.structure-component atlas.ontology.data-schema atlas.ontology.interface-protocol]] (require n :reload)) (atlas.datalog/reset-db-cache!)" >&2
     fi
-    echo "status: $(ec "(atlas-layout/llm-status)" | unquote)"
+    echo "status: $(eval_text "(atlas-layout/llm-status)")"
     echo "attach: $SELF attach --project $PROJECT"
     ;;
   attach)
@@ -205,11 +210,10 @@ case "$cmd" in
   eval)
     [[ -n "$FORM" ]] || { echo "usage: $(basename "$SELF") eval [--project DIR] FORM" >&2; exit 2; }
     daemon_up || { echo "ERROR: no daemon at $SOCKET — run ensure first" >&2; exit 1; }
-    out="$(timeout 30 "$CLIENT" --socket-name="$SOCKET" --eval "$FORM")" || { echo "$out" >&2; exit 1; }
-    printf '%s\n' "$out" | unquote
+    eval_text "$FORM"
     ;;
   status)
-    if daemon_up; then ec "(atlas-layout/llm-status)" | unquote; else echo "socket=$SOCKET down"; fi
+    if daemon_up; then eval_text "(atlas-layout/llm-status)"; else echo "socket=$SOCKET down"; fi
     ;;
   stop)
     daemon_up && ec "(kill-emacs)" >/dev/null || true

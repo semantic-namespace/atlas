@@ -22,11 +22,16 @@ Why it is built this way (daemon model, frame targeting, known gaps): see [desig
 ## Setup (once per session)
 
 The LLM owns the Emacs daemon; the human only attaches a terminal frame.
-Everything goes through one script in the atlas repo:
+Everything goes through one script in the atlas repo. This skill lives in that
+repo at `emacs/claude-skill/atlas-emacs/` (installed as a symlink), so resolve
+the script from this skill's base directory — that works from any project:
 
 ```bash
-ATLAS="$(git -C <atlas repo> rev-parse --show-toplevel)/emacs/atlas-llm-daemon.sh"
+ATLAS="$(readlink -f "<this skill's base directory>")/../../atlas-llm-daemon.sh"
 ```
+
+Use `--project <dir>` for the project whose registry you're showing (usually
+the current working directory), not the atlas repo.
 
 (`$ATLAS` below.) It finds Emacs (>= 27), computes the per-project socket and
 handles the attaching person's preferences — never hardcode binaries, sockets
