@@ -303,8 +303,16 @@ symbol syntax).  Only returns namespaced keywords (must contain '/')."
                              (when (string-match-p "^:?[a-zA-Z][a-zA-Z0-9_.-]*/[a-zA-Z]" label)
                                label)))))
      (atlas--to-keyword entity))
-   ;; Clojure source files / plain text: thing-at-point includes : in symbol syntax
-   (when-let* ((sym (thing-at-point 'symbol t))
+   ;; Views mark non-button text that stands for an entity (e.g. title bands)
+   (when-let* ((entity (get-text-property (point) 'atlas-entity)))
+     (atlas--to-keyword entity))
+   ;; Clojure source files / plain text.  Read with Clojure's syntax table so
+   ;; `:' and `.' are part of the symbol: atlas-mode's own syntax treats them
+   ;; as punctuation and would read :fn.a/b as "a/b".
+   (when-let* ((sym (with-syntax-table (if (boundp 'clojure-mode-syntax-table)
+                                           clojure-mode-syntax-table
+                                         (syntax-table))
+                      (thing-at-point 'symbol t)))
                (kw  (if (string-prefix-p ":" sym) sym (concat ":" sym))))
      (when (string-match-p "^:[a-zA-Z][a-zA-Z0-9_.-]*/[a-zA-Z]" kw)
        kw))))

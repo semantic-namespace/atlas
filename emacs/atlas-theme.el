@@ -173,8 +173,11 @@ so the band stays correct in a narrower pane or after a resize."
     (insert (propertize "\n" 'face 'atlas-theme-title-face) "\n")))
 
 (defun atlas-theme-title (type id &optional meta)
-  "Insert an entity title band: badge for TYPE, dev-id ID, META on the right."
-  (atlas-theme--band (lambda () (insert " " (atlas-theme-badge type) "  " id)) meta))
+  "Insert an entity title band: badge for TYPE, dev-id ID, META on the right.
+The whole band carries ID as `atlas-entity', so M-. anywhere on it means ID."
+  (let ((start (point)))
+    (atlas-theme--band (lambda () (insert " " (atlas-theme-badge type) "  " id)) meta)
+    (put-text-property start (point) 'atlas-entity id)))
 
 (defun atlas-theme-banner (text &optional meta)
   "Insert a title band without a badge: TEXT on the left, META right-aligned."
