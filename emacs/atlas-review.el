@@ -488,5 +488,34 @@ the upper one.  Returns the evidence text, for the LLM's own reading."
 
 (define-key atlas-review-mode-map (kbd "C-c r .") #'atlas-review/point)
 
+(defun atlas-review/open-points ()
+  "The notebook's points that are not DONE, with anything the human wrote under
+them: lines starting with \">\".  Returns ((id state notes) …), for the LLM to
+answer only what is still open."
+  (interactive)
+  (let (out)
+    (with-current-buffer (atlas-review--notebook-buffer)
+      (org-with-wide-buffer
+       (org-map-entries
+        (lambda ()
+          (let* ((title (substring-no-properties (org-get-heading t t t t)))
+                 (id (and (string-match "^\\([0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?[ \t]" title) (match-string 1 title)))
+                 (state (org-get-todo-state)))
+            (when (and id (not (equal state "DONE")))
+              (let ((end (save-excursion (org-end-of-subtree t t)))
+                    notes)
+                (forward-line 1)
+                (while (< (point) end)
+                  (when (looking-at "^[ \t]*>[ \t]?\\(.*\\)$")
+                    (push (match-string-no-properties 1) notes))
+                  (forward-line 1))
+                (push (list id (or state "TODO") (nreverse notes)) out)))))
+        nil nil)))
+    (setq out (nreverse out))
+    (when (called-interactively-p 'any)
+      (message "%d open point(s): %s" (length out) (mapconcat #'car out " ")))
+    out))
+
+
 (provide 'atlas-review)
 ;;; atlas-review.el ends here

@@ -243,3 +243,61 @@
                            (str "** " k "\n   produced by: " (if (seq p) (str/join ", " (map str p)) "nobody") "\n   consumed by: " (if (seq c) (str/join ", " (map str c)) "nobody") "\n")))
                "* Residue: no entity, no data key\n" (str/join "\n" (map row (remove (fn [h] (or (seq (:entities h)) (seq (:data-keys h)))) hunks))) "\n"))
     path))
+
+;;; Stale evidence: does the code a point links to still say what it said?
+
+(def ^:private link-re #"\[\[(file|diff):([^\]]+?)(?:::(\d+))?\]")
+
+(defn- index-points
+  "The index sidecar as [{:id \"2.2\" :start :end :links [[kind target line] …]}], in order."
+  [index-text]
+  (let [lines (vec (str/split-lines index-text))
+        heads (keep-indexed (fn [i l] (when-let [[_ id] (re-matches #"\* ([0-9][0-9.]*|key/.*|contract-diff)\s*" l)] [i id])) lines)]
+    (for [[[i id] [j _]] (partition 2 1 [[(count lines) nil]] heads)]
+      {:id id :start i :end j
+       :links (vec (for [l (subvec lines (inc i) j) [_ kind target line] (re-seq link-re l)]
+                     [kind target (some-> line Long/parseLong)]))})))
+
+(defn- location-text
+  "The line a link points at, in the worktree; nil when the file or line is gone."
+  [wt [kind target line]]
+  (let [f (java.io.File. (if (= kind "file") target (str wt "/" target)))]
+    (when (and line (.exists f))
+      (nth (str/split-lines (slurp f)) (dec line) nil))))
+
+(defn- fingerprint [wt links]
+  (when (seq links)
+    (str (hash (mapv #(some-> (location-text wt %) str/trim) links)))))
+
+(defn stamp-index!
+  "Record, under every point of the index at PATH, a fingerprint of the lines its
+  links point at (an org property :STAMP:). Idempotent: an existing stamp is replaced."
+  [wt path]
+  (let [text (slurp path)
+        lines (vec (str/split-lines text))
+        pts (index-points text)
+        out (loop [ls lines pts (reverse pts)]
+              (if-let [{:keys [start links]} (first pts)]
+                (let [fp (fingerprint wt links)
+                      body-start (inc start)
+                      has-drawer? (= ":PROPERTIES:" (str/trim (get ls body-start "")))
+                      ls (if has-drawer?
+                           (let [end (loop [k body-start] (if (or (>= k (count ls)) (= ":END:" (str/trim (ls k)))) k (recur (inc k))))]
+                             (vec (concat (subvec ls 0 body-start) (subvec ls (min (count ls) (inc end))))))
+                           ls)]
+                  (recur (if fp (vec (concat (subvec ls 0 body-start) [":PROPERTIES:" (str ":STAMP: " fp) ":END:"] (subvec ls body-start))) ls)
+                         (rest pts)))
+                ls))]
+    (spit path (str (str/join "\n" out) "\n"))
+    (count (filter #(fingerprint wt (:links %)) pts))))
+
+(defn stale-points
+  "Points of the index at PATH whose linked lines no longer match their :STAMP:,
+  with the links whose text is gone. Empty when nothing moved."
+  [wt path]
+  (let [text (slurp path) lines (vec (str/split-lines text))]
+    (for [{:keys [id start end links]} (index-points text)
+          :let [stamp (some #(second (re-matches #"\s*:STAMP:\s*(\S+)" %)) (subvec lines (inc start) end))
+                now (fingerprint wt links)]
+          :when (and stamp (not= stamp now))]
+      {:id id :gone (vec (remove #(location-text wt %) links))})))

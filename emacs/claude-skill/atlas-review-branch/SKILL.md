@@ -34,7 +34,11 @@ hunk, grouped), `<slug>.commits.txt` (squash mode).
   commits (`BASE` = the lower PR's tip).
 - If a notebook for this slug already exists, read it first: it may hold the
   human's notes. Reuse the worktree and the notebook unless the PR head moved.
-- Say what you found (commits, files, +/−, open PR?) before building anything big.
+- Say what you found (commits, files, +/−, open PR?) before building anything big,
+  and ask **one** question: where are they nervous, what should be verified first?
+  One line; don't block on it — start the worktrees while they answer. Their
+  answer aims the verification better than any heuristic; without one, verify
+  the residue (see 4.2) and the behaviour changes at call sites first.
 
 ## 2. Worktrees
 
@@ -55,13 +59,21 @@ own folder in the daemon that will show the review, or lsp picks a parent folder
 $ATLAS eval --project <daemon project> '(lsp-workspace-folders-add "<worktree>")'
 ```
 
-## 3. Two REPLs, one per registry
+## 3. REPLs: one, or two
 
-Start one REPL per worktree, following the project's conventions (its memory
-notes say which aliases, paths and boot form its dev tooling needs — a project may
-have its own per-worktree registry REPL script; prefer it). Neither may start the
-app. The branch REPL answers "what does the branch's registry say"; the base REPL
-exists only to be diffed against. Without a registry, one REPL for CIDER is enough.
+Follow the project's conventions (its memory notes say which aliases, paths and
+boot form its dev tooling needs — a project may have its own per-worktree registry
+REPL script; prefer it). No REPL may start the app.
+
+- **Full mode** — a REPL per worktree. The branch REPL answers "what does the
+  branch's registry say"; the base REPL exists only to be diffed against. Use it
+  when the diff touches a registration (`git diff <base> | grep -c "register!\|bind\|def-.*tool"`
+  is non-zero), or when the human asked for the registry view.
+- **Cheap mode** — the branch REPL only, no contract diff, no base worktree.
+  For a change that registers nothing new: the hunk map and the invariants still
+  run; the "Registry diff" facts are replaced by one line saying no contract
+  changed (you checked the registrations, not the registry).
+- Without a registry at all, one REPL for CIDER is enough.
 
 ## 4. Read the change, then write the notebook
 
@@ -91,11 +103,18 @@ exists only to be diffed against. Without a registry, one REPL for CIDER is enou
    invariant in the branch REPL).
    `impact.clj` (per-file registered / unregistered / kept, with dependent counts)
    is still there when the file view is what the human asked for.
-3. Read every source file's diff; skim tests for what they cover. **Verify before
-   you write a finding**: evaluate the doubtful form in the branch REPL, read the
-   code behind a suspicion. A wrong alarm costs the human more than a missing nit;
-   say "checked, not a bug" when you ruled something out.
-4. Scaffold, then write two files:
+3. **Facts pass.** Read every source file's diff; skim tests for what they cover.
+   Build the index first, point by point, before writing any prose: a suspicion
+   goes in only once it is verified — evaluate the doubtful form in the branch
+   REPL, read the code behind it. A wrong alarm costs the human more than a
+   missing nit; say "checked, not a bug" when you ruled something out. Then
+   ```clojure
+   (atlas-review.semantic/stamp-index! "<worktree>" "<index>")
+   ```
+   so a later run can tell which points' evidence moved.
+4. **Prose pass.** Scaffold, then write the page from the index — nothing on the
+   page without a line in the index behind it, or the point is tagged `judge`.
+   Write **The PR in one breath** last: by then you know what the PR is for.
    ```bash
    "$SKILL/scripts/scaffold-review.sh" <worktree> <base> "<slug>" ~/.local/state/atlas-emacs/reviews/<slug>.org
    ```
@@ -123,6 +142,13 @@ exists only to be diffed against. Without a registry, one REPL for CIDER is enou
    `[[file:<abs>::LINE][name:LINE]]` and hunks as `[[diff:<path rel. to worktree>::LINE][…]]`.
    Start from what `append-index!` generated (the `key/…` headings) and the
    findings you verified. The human never opens it; they ask for a number.
+   - **The first line of a point is the thing to look at**: `point` opens its
+     first link. For a `block`, that is the hunk where the fix goes, so the human
+     goes `C-c r .` → `RET` (edit) → save → `s` (stage) without leaving the point.
+   - When the contract diff moved no data key (a cache, a race, a query — the
+     spine is empty), group the sections by the entities the hunks touch, then by
+     the residue's owners (the vars), and say on the page that the registry saw
+     none of it. Don't invent a data-flow story.
    - Never touch anything the human wrote in either file. Before rewriting,
      check the buffer has no unsaved edits.
 
@@ -163,6 +189,19 @@ index and the branch REPL.
 A file-by-file index (`scaffold-notebook.sh`, headings with `:REVIEW_FILE:`,
 `RET` opens the file's diff, `C-c r n`/`C-c r p` step through files) remains
 available when the human asks for that view.
+
+**The loop.** The page is the conversation, not a report. The human marks points
+DONE (`C-c r d`) and writes replies under a point as lines starting with `>`.
+On every later turn — a reply, a re-attach, a pushed fix — start from
+```elisp
+(atlas-review/open-points)        ; ((id state notes) …): what is still open, and what they wrote
+```
+and, when the branch moved,
+```clojure
+(atlas-review.semantic/stale-points "<worktree>" "<index>")   ; points whose linked lines changed
+```
+Answer only the open points; re-verify the stale ones and rewrite their prose;
+re-stamp. Never mark a point DONE yourself.
 
 Tabs belong to a frame: after the human re-attaches, re-open with
 `(atlas-review/notebook)`.

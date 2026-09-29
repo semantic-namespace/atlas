@@ -37,7 +37,7 @@ $TITLE ($tip) · $commits commits · base $(git rev-parse --short "$BASE") · $t
 * The PR in one breath
 Proposed title: /…/
 
-(What was wrong or missing, what the branch does about it, what came along at the edge. Then one sentence: what it needs before merging, by point number.)
+(Write this last. What was wrong or missing, what the branch does about it, what came along at the edge. Then one sentence: what it needs before merging, by point number.)
 
 * 1. …                                                                  :decide:
 (What changed for the reader, in a paragraph.)
