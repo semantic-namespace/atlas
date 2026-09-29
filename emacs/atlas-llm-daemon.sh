@@ -13,7 +13,7 @@
 #   atlas-llm-daemon.sh status [--project DIR]                   daemon, project, git branch, REPL and its directory
 #   atlas-llm-daemon.sh list                                     every atlas daemon on this machine
 #   atlas-llm-daemon.sh stop   [--project DIR | --socket PATH]
-#   atlas-llm-daemon.sh install-skill [--user]                   link the /atlas-emacs Claude Code skill
+#   atlas-llm-daemon.sh install-skill [--user]                   link the Claude Code skills (/atlas-emacs, /atlas-review-branch)
 #
 # DIR defaults to the current directory. One daemon per project directory, on
 # socket atlas-<basename>-<hash of the full path>, so two checkouts with the
@@ -319,20 +319,25 @@ case "$cmd" in
     echo "stopped $SOCKET"
     ;;
   install-skill)
-    # Symlink, not copy: the skill stays in sync with the code it drives.
-    # Default: this repo's .claude/skills (Claude Code sessions opened here);
-    # --user: ~/.claude/skills (every session).
-    src="$ATLAS_EMACS_DIR/claude-skill/atlas-emacs"
+    # Symlinks, not copies: the skills stay in sync with the code they drive.
+    # Every skill in emacs/claude-skill/ is linked. Default: this repo's
+    # .claude/skills (Claude Code sessions opened here); --user:
+    # ~/.claude/skills (every session).
     if [[ -n "$USER_SCOPE" ]]; then dest_dir="$HOME/.claude/skills"
     else dest_dir="$(cd "$ATLAS_EMACS_DIR/.." && pwd)/.claude/skills"; fi
-    dest="$dest_dir/atlas-emacs"
     mkdir -p "$dest_dir"
-    if [[ -L "$dest" && "$(readlink -f "$dest")" == "$(readlink -f "$src")" ]]; then
-      echo "skill: already linked at $dest"; exit 0
-    fi
-    [[ -e "$dest" ]] && { echo "ERROR: $dest exists and is not a link to $src — move it away first" >&2; exit 1; }
-    ln -s "$src" "$dest"
-    echo "skill: linked $dest -> $src (use /atlas-emacs in Claude Code)"
+    status=0
+    for src in "$ATLAS_EMACS_DIR"/claude-skill/*/; do
+      src="${src%/}"; name="$(basename "$src")"; dest="$dest_dir/$name"
+      if [[ -L "$dest" && "$(readlink -f "$dest")" == "$(readlink -f "$src")" ]]; then
+        echo "skill: /$name already linked at $dest"
+      elif [[ -e "$dest" ]]; then
+        echo "ERROR: $dest exists and is not a link to $src — move it away first" >&2; status=1
+      else
+        ln -s "$src" "$dest"; echo "skill: linked /$name ($dest -> $src)"
+      fi
+    done
+    exit $status
     ;;
   *)
     sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;

@@ -388,7 +388,7 @@ connects CIDER. You only attach.
 ```bash
 # 1. Make the /atlas-emacs skill available to Claude Code
 #    (a symlink, so it stays in sync with the code)
-emacs/atlas-llm-daemon.sh install-skill           # sessions opened in this repo
+emacs/atlas-llm-daemon.sh install-skill           # sessions opened in this repo (all skills)
 emacs/atlas-llm-daemon.sh install-skill --user    # or: every session
 
 # 2. A short name for attaching (add to your shell profile)
@@ -416,6 +416,29 @@ For each request the LLM offers two or three views, labeled by the question
 each one answers, and you pick one. Switch between the opened views with
 `C-x t o`. `RET` on any entity follows it.
 
+### Reviewing a branch
+
+`/atlas-review-branch <branch or PR>` sets up a file-by-file review in the same
+frame. The LLM checks the branch out in its own git worktree, starts a REPL
+for it, and writes an org notebook with one entry per changed file: what
+changed, what to look at, and (when the project has an atlas registry) what the
+file registers and how many entities depend on it.
+
+- **Index** (`review notes` tab): one line per file, with TODO/DONE. `RET`
+  opens a file.
+- **File view** (`review` tab): the file's diff, fully expanded, above its
+  notes. `RET` on a diff line edits the real file at that line; `C-c r b`
+  comes back to the diff.
+- **Moving around:** `C-c r n` / `C-c r p` next / previous file, `C-c r d`
+  toggle DONE, `C-c r o` back to the index, `C-c r r` reset the layout.
+
+On request it can also put the branch in "everything unstaged" form, on a new
+branch so the original and its PR stay untouched. The diff then shows what's
+left to accept: `s` / `u` stage and unstage hunks, and you make one commit at
+the end. The notebook and the saved commit messages live in
+`~/.local/state/atlas-emacs/reviews/`, outside every repository. Nothing is
+pushed without your go-ahead.
+
 ### What the script does
 
 `emacs/atlas-llm-daemon.sh` is the only entry point. The LLM runs everything
@@ -430,6 +453,7 @@ except `attach`:
 | `status` | the daemon's project, git branch, REPL port and the REPL's working directory |
 | `list` | every atlas daemon on this machine, with the same details |
 | `stop` | shut down a daemon (`--socket PATH` for one shown by `list`) |
+| `install-skill [--user]` | link the Claude Code skills (`/atlas-emacs`, `/atlas-review-branch`) |
 
 Each project directory gets its own daemon (the socket name includes a hash
 of the full path, so worktrees with the same folder name stay separate), and
