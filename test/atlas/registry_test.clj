@@ -10,7 +10,8 @@
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [atlas.registry :as id]
             [atlas.registry.lookup :as entity]
-            [atlas.query :as q]))
+            [atlas.query :as q]
+            [atlas.invariant :as inv]))
 
 ;; ---------------------------------------------------------------------------
 ;; ⚙️ Test Fixture — reset registry for each test
@@ -153,6 +154,54 @@
     (is (seq (:collisions (try (id/compile! {:strict? true})
                                (catch clojure.lang.ExceptionInfo e (ex-data e)))))
         "ex-data carries the collision report for a CI gate to print")))
+
+(deftest dev-id-conflicts
+  (testing "the same compound-id twice is the REPL loop, not a conflict"
+    (id/reset-all!)
+    (id/register! :fn/reloaded :test/ef #{:test/one} {:v 1})
+    (id/register! :fn/reloaded :test/ef #{:test/one} {:v 2})
+    (is (empty? (id/dev-id-conflicts)))
+    (is (empty? (:compile/dev-id-conflicts (id/compile!)))))
+
+  (testing "a superset is the same entity described more fully, not a second one"
+    (id/reset-all!)
+    (id/register! :fn/expanded :test/ef #{:test/one} {})
+    (id/register! :fn/expanded :test/ef #{:test/one :test/inherited} {})
+    (is (empty? (id/dev-id-conflicts)) "post-compile replay or an added aspect")
+    (id/register! :fn/expanded :test/ef #{:test/one} {})
+    (is (empty? (id/dev-id-conflicts)) "a removed aspect is a subset, equally fine"))
+
+  (testing "two meanings under one address are reported, with the survivor"
+    (id/reset-all!)
+    (id/register! :fn/shared :test/ef #{:test/first} {:v :first})
+    (id/register! :fn/shared :test/ef #{:test/second} {:v :second})
+    (let [[c :as conflicts] (id/dev-id-conflicts)]
+      (is (= 1 (count conflicts)))
+      (is (= :fn/shared (:dev-id c)))
+      (is (= [#{:test/first :test/ef} #{:test/second :test/ef}] (:claimed-compound-ids c)))
+      (is (= #{:test/second :test/ef} (:winner c)))
+      (is (= conflicts (:compile/dev-id-conflicts (id/compile!)))
+          "compile!'s advisory report and the function agree")
+      (is (= 1 (count @id/registry)) "and the first meaning is gone")))
+
+  (testing "a different entity type always conflicts, even with a superset of aspects"
+    (id/reset-all!)
+    (id/register! :data/key :test/data #{:test/one} {})
+    (id/register! :data/key :test/producer #{:test/one :test/more} {})
+    (is (= [:data/key] (mapv :dev-id (id/dev-id-conflicts)))))
+
+  (testing "the invariant turns a conflict into an error"
+    (id/reset-all!)
+    (id/register! :fn/clean :test/ef #{:test/clean} {})
+    (id/compile!)
+    (is (nil? (inv/invariant-dev-id-is-unique)))
+    (id/register! :fn/clean :test/data #{:test/other} {})
+    (id/compile!)
+    (let [{:keys [errors]} (inv/check-all)
+          v (first (filter #(= :dev-id-is-unique (:invariant %)) errors))]
+      (is (some? v) "reported by check-all as a core invariant")
+      (is (= :error (:severity v)))
+      (is (= [:fn/clean] (mapv :dev-id (:details v)))))))
 
 (deftest auto-generated-dev-id
   "Tests that register! auto-generates deterministic dev-ids when not provided."
