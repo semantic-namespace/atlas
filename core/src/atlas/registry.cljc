@@ -214,6 +214,59 @@
 ;; Compile — rebuild map from log with aggregated compound-ids
 ;; =============================================================================
 
+(defn- comparable-identities?
+  "True when one compound-id contains the other.
+
+   `compile!` expands each compound-id with the aspects inherited from its
+   deps. Re-registering an entity after a compile — which any code that
+   registers lazily, or re-registers during boot, will do — replays it with
+   that expanded identity: a superset of what was first declared. That is the
+   same entity described more fully, not a second one."
+  [a b]
+  (or (set/subset? a b) (set/subset? b a)))
+
+(defn dev-id-conflicts
+  "dev-ids claimed by two registrations that cannot be the same entity.
+
+   Atlas identity is a double system: the compound-id says what an entity
+   means and the dev-id says how to address it. Two dev-ids on one compound-id
+   is a collision, reported by `compile!`. One dev-id on two compound-ids is a
+   conflict, reported here. `compile!` keeps one entity per dev-id
+   (last-write-wins), so a conflict deletes the earlier entity: its address
+   now resolves to something with a different meaning, and nothing points at
+   what was lost.
+
+   Two registrations conflict only when neither compound-id contains the
+   other. A dev-id re-registered with the same compound-id is the REPL loop,
+   and one re-registered with a superset or subset is either a post-compile
+   replay or an aspect added or removed in an edit; none of those is a second
+   entity. What remains — each side carrying an aspect the other lacks, or a
+   different entity type — cannot be one entity described twice. A real case:
+   an ontology's type marker registered under the ontology's own dev-id,
+   silently replacing the ontology entity and every mechanism declared on it.
+
+   One edit does produce this shape: replacing an aspect and re-evaluating in
+   a live REPL. A fresh process has no such history, so a gate that runs at
+   boot or in CI sees only real conflicts.
+
+   Each result: {:dev-id :claimed-compound-ids [cid ...] :winner cid}, where
+   the winner is the compound-id of the last registration, the one
+   `compile!` keeps. Reads the registration log; defaults to the live one."
+  ([] (dev-id-conflicts @registrations))
+  ([entries]
+   (->> entries
+        (group-by :dev-id)
+        (keep (fn [[dev-id es]]
+                (let [cids (distinct (map #(conj (:aspects %) (:type %)) es))]
+                  (when (and dev-id
+                             (some (fn [a] (some #(not (comparable-identities? a %)) cids))
+                                   cids))
+                    {:dev-id               dev-id
+                     :claimed-compound-ids (vec cids)
+                     :winner               (conj (:aspects (last es)) (:type (last es)))}))))
+        (sort-by str)
+        vec)))
+
 (defn compile!
   "Rebuild the registry map from the registration log.
 
@@ -256,34 +309,7 @@
                                {}
                                entries)
 
-         ;; DEV-ID CONFLICTS — the mirror of the compound-id collision check
-         ;; below. Atlas identity is a DOUBLE system: compound-id (what an
-         ;; entity means) and dev-id (how you address it). Two entities sharing
-         ;; a compound-id is a collision; two sharing a dev-id is a conflict.
-         ;; Both destroy addressing, so both are reported.
-         ;;
-         ;; A dev-id re-registered with the SAME compound-id is the REPL
-         ;; re-evaluation loop and stays silent — that is what last-write-wins
-         ;; above exists for. Only a dev-id claiming DIFFERENT compound-ids is
-         ;; reported: one address, two meanings, earlier meaning gone.
-         ;;
-         ;; Advisory, not an error: re-evaluating a file after EDITING an
-         ;; entity's aspects produces exactly this shape, and last-write-wins is
-         ;; then correct. Edit and duplicate are structurally indistinguishable
-         ;; from the log alone, so this warns and lets the author judge.
-         ;; (A real one: `register-entity-types!` registered its type marker
-         ;; under the ontology's own dev-id, silently destroying the ontology
-         ;; entity — and with it every mechanism declared on it.)
-         dev-id-conflicts
-         (->> entries
-              (group-by :dev-id)
-              (keep (fn [[dev-id es]]
-                      (let [cids (distinct (map #(conj (:aspects %) (:type %)) es))]
-                        (when (next cids)
-                          {:dev-id dev-id
-                           :claimed-compound-ids (vec cids)
-                           :winner (last cids)}))))
-              vec)
+         dev-id-conflicts (dev-id-conflicts entries)
 
          ;; Pass 1: base map (declared compound-ids only)
          base-map (into {}
@@ -370,9 +396,10 @@
      ;; registry value carries its own account of what was lost building it —
      ;; `(meta @registry)` — so a caller can query it, a test can assert on it,
      ;; and the UI can surface it, without compile! spraying stdout on every
-     ;; REPL reload. (:compile/dev-id-conflicts is advisory and lives ONLY here;
-     ;; an aspect edit followed by a re-eval produces the same shape as a real
-     ;; duplicate, so it is never printed and never thrown.)
+     ;; REPL reload. (:compile/dev-id-conflicts is advisory here: an aspect
+     ;; replaced and re-evaluated in a live REPL has the same shape as a real
+     ;; duplicate, so compile! never prints or throws it. The
+     ;; :dev-id-is-unique invariant is the gate, for fresh processes.)
      (reset! registry (with-meta expanded-map
                         {:compile/collisions       collisions
                          :compile/dev-id-conflicts dev-id-conflicts}))

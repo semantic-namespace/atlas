@@ -161,6 +161,34 @@
 ;; in the registry. They are discovered at check time by querying the registry.
 
 ;; =============================================================================
+;; IDENTITY INVARIANTS
+;; =============================================================================
+
+(defn invariant-dev-id-is-unique
+  "A dev-id must name exactly one entity.
+
+   `compile!` keeps one entity per dev-id, so a second, different entity
+   registered under a dev-id deletes the first without a collision being
+   reported: `:compile/collisions` covers two dev-ids on one compound-id, not
+   one dev-id on two. Afterwards the lost entity is absent and its dev-id
+   resolves to a different kind of thing.
+
+   Reads the registration log rather than the compiled registry, because the
+   compiled registry no longer contains the loser. A registry snapshot that
+   carries no log — a stored or sanitised version — cannot be checked by this
+   invariant; run it where the registrations happened. See
+   `atlas.registry/dev-id-conflicts` for what counts as a conflict."
+  []
+  (when-let [conflicts (seq (cid/dev-id-conflicts))]
+    {:invariant :dev-id-is-unique
+     :violation :dev-id-claimed-by-several-entities
+     :details   (vec conflicts)
+     :severity  :error
+     :message   (str (count conflicts) " dev-id(s) registered as more than one entity; "
+                     "compile! kept the last and dropped the rest: "
+                     (pr-str (mapv :dev-id conflicts)))}))
+
+;; =============================================================================
 ;; CHECK ALL
 ;; =============================================================================
 
@@ -169,6 +197,8 @@
   [;; Structural
    invariant-deps-exist
    invariant-no-circular-deps
+   ;; Identity
+   invariant-dev-id-is-unique
    ;; Dataflow
    invariant-context-satisfiable
    invariant-no-orphan-responses])
