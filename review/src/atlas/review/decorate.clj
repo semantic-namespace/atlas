@@ -5,6 +5,7 @@
             [atlas.review.candidate :as candidate]
             [atlas.review.diff :as diff]
             [atlas.review.registry :as reg]
+            [atlas.review.risk :as risk]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [rewrite-clj.node :as n]
@@ -114,13 +115,28 @@
                         [:li [:code (str k)] " · produced by " (if (seq p) (interpose ", " (map ent p)) [:span.mute "nobody"])
                          " · consumed by " (if (seq c) (interpose ", " (map ent c)) [:span.mute "nobody"])])])))
 
+(defn- risk-of [{:keys [base cand] :as ctx} id]
+  (let [d (delta ctx id)
+        change (cond (:deleted? d) :deleted (or (:new? d) (changed? d)) :contract :else :code)]
+    (reg/with-version (if (= :deleted change) base (or cand base))
+      (when (lookup/identity-for id) (risk/assess id change)))))
+
+(defn- level-tag [level]
+  [:span.tag {:class (case level :high "tag-del" :medium "tag-ext" "tag-note")} (str (name level) " risk")])
+
+(defn risk-line [ctx id]
+  (when-let [{:keys [level reasons]} (risk-of ctx id)]
+    (derived "registry graph"
+             [:p (level-tag level) " " (interpose " · " reasons)])))
+
 (defn registry-decoration [ctx file form]
   (when (:base ctx)
     (let [full-form (some #(when (= (:id form) (:id %)) %) (:forms (some (fn [f] (when (= (:path file) (:path f)) f)) (:clj (:report ctx)))))
           id (declared-id form)
           was-id (when (:was full-form) (declared-id {:id (:was full-form)}))
           file* (some #(when (= (:path file) (:path %)) %) (:clj (:report ctx)))]
-      (when-let [parts (seq (remove nil? [(when id (declares ctx id))
+      (when-let [parts (seq (remove nil? [(when id (risk-line ctx id))
+                                          (when id (declares ctx id))
                                           (when (and was-id (not= was-id id)) (derived (source-name ctx) [:p "formerly declared " (ent was-id)]))
                                           (when id (affects ctx id))
                                           (when file* (mentions ctx file* full-form))]))]
@@ -133,6 +149,23 @@
   (when-let [as (seq (filter #(and (map? (:on %)) (:entity (:on %))) (:annotations ctx)))]
     [:div.ent-annotations
      (for [a as] [:div [:p.mute "on " (ent (:entity (:on a)))] (d/render-annotation a)])]))
+
+(defn risk-summary [{:keys [base cand] :as ctx} report]
+  (when base
+    (let [a (anchors report)
+          {:keys [new changed deleted]} (if cand (diff/summary base cand) {})
+          ids (distinct (concat (keys a) new changed deleted))
+          test-case? (fn [id] (reg/with-version (or cand base) (= :atlas/test-case (:atlas/type (lookup/props-for id)))))
+          rows (->> ids (remove test-case?) (keep #(risk-of ctx %)) (sort-by (juxt (comp - :score) (comp str :id))))
+          link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (ent id)))
+          row (fn [{:keys [id level reasons]}] [:li (level-tag level) " " (link id) " — " (interpose " · " reasons)])
+          [top more] (split-at 5 rows)]
+      (when (seq rows)
+        (derived "registry graph"
+                 [:h5 "Risk, from the system graph"]
+                 [:ul.ids.risk (map row top)]
+                 (when (seq more)
+                   [:details [:summary (str (count more) " more, lower in the ranking")] [:ul.ids.risk (map row more)]]))))))
 
 (defn registry-header [ctx report]
   (when (:base ctx)
@@ -151,6 +184,7 @@
                     (when (seq new) (list [:h5 "New"] [:ul.ids (for [id new] [:li (link id)])]))
                     (when (seq changed) (list [:h5 "Changed"] [:ul.ids (for [id changed] [:li (link id)])]))
                     (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
+       (risk-summary ctx report)
        (entity-annotations ctx)))))
 
 (defn validate-entity [ctx on]
@@ -160,7 +194,7 @@
 
 (defn entity-view [ctx id]
   (when (:base ctx)
-    (list (declares ctx id) (affects ctx id))))
+    (list (risk-line ctx id) (declares ctx id) (affects ctx id))))
 
 (d/use-context! context)
 (d/add-entity-renderer! ::registry entity-view)
