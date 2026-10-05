@@ -3,7 +3,7 @@
         io.github.semantic-namespace/atlas {:local/root "../core"}
         io.github.semantic-namespace/atlas-store {:local/root "../store"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
-                                          :git/sha "299db7e8c106e656ebd377dd8c6d51194b3cf586"}}
+                                          :git/sha "27c5159ed45b44ad8d787f883a0c5976a68d7c18"}}
  :aliases {:serve {:main-opts ["-m" "atlas.review.server"]}
            :test {:extra-paths ["test"]
                   :main-opts ["-e" "(require 'atlas.review.diff-test 'atlas.review.risk-test) (let [{:keys [fail error]} (clojure.test/run-tests 'atlas.review.diff-test 'atlas.review.risk-test)] (System/exit (if (pos? (+ fail error)) 1 0)))"]}}}
