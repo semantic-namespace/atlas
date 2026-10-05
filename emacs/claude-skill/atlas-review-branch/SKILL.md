@@ -78,7 +78,10 @@ REPL script; prefer it). No REPL may start the app.
 ## 4. Read the change, then write the notebook
 
 1. `git diff --stat <base>` and `git log --oneline <base>..HEAD` for the shape.
-2. **Registry diff and hunk map** (only with an atlas registry). On *each* REPL:
+2. **Registry diff and hunk map** (only with an atlas registry). Hunk owners and
+   change paths come from [sdiff](https://github.com/semantic-namespace/diff)
+   (a checkout at `~/git/semantic-namespace/diff`, or `SDIFF_HOME`, plus `bb`);
+   without it they fall back to line overlap. On *each* REPL:
    ```clojure
    (load-file "<SKILL>/scripts/semantic.clj")
    (atlas-review.semantic/dump-registry! "<tmp>/registry-<base|branch>.edn")
