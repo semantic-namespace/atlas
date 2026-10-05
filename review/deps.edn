@@ -2,5 +2,5 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         io.github.semantic-namespace/atlas {:local/root "../core"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
-                                          :git/sha "ee3e57fe3961a2bd2a7126e5fe4d171ab363dd01"}}
+                                          :git/sha "a32db6984d9caaa72a1ae04414540c5f64e7d820"}}
  :aliases {:serve {:main-opts ["-m" "atlas.review.server"]}}}
