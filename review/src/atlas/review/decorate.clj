@@ -180,7 +180,12 @@
     (let [id (if (keyword? id) id (edn/read-string (str id)))]
       (when-not (in ctx #(lookup/identity-for id)) (str "no entity " id " in the registry")))))
 
+(defn entity-view [ctx id]
+  (when (:org ctx)
+    (list (declares ctx id) (affects ctx id))))
+
 (d/use-context! context)
+(d/add-entity-renderer! ::registry entity-view)
 (d/add-form-decorator! ::registry registry-decoration)
 (d/add-header-decorator! ::registry registry-header)
 (d/add-ref-validator! ::entity validate-entity)
