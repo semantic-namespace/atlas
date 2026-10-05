@@ -21,6 +21,17 @@ labelled.
 clojure -M:serve --org acme --project shop [--port 7878] [--host 127.0.0.1]
 ```
 
+A view over a pull request of the atlas repo itself, with the registry
+decoration of an entity the view names:
+
+![A view section with the entity :fn.ide/check-invariants decorated from the registry](docs/img/view.png)
+
+The entity block alone: what it declares, with its state against the base
+version, and who depends on it, what consumes what it produces, which test
+cases cover it:
+
+![The registry decoration of one entity](docs/img/entity.png)
+
 `ATLAS_CLOUD_URL` names the cloud holding the versions (default
 `http://localhost:8090`). The base is the newest `vN.N.N` version. The
 candidate is the version named `pr<N>-<head sha>`; when it is missing the
