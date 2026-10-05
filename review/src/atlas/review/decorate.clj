@@ -63,36 +63,51 @@
 (defn- state-of [{:keys [cand-v]} d]
   (cond (:new? d) "new in this PR" (:deleted? d) "deleted by this PR" (changed? d) "contract changed" cand-v "contract unchanged" :else "as on main; no candidate version staged"))
 
+(defn- test-case? [props] (= :atlas/test-case (:atlas/type props)))
+
+(defn- cap [xs n] (if (> (count xs) n) (concat (take n xs) [(str "+" (- (count xs) n) " more")]) xs))
+
 (defn declares [ctx id]
   (let [[cid props] (in ctx #(do [(lookup/identity-for id) (lookup/props-for id)]))
-        d (delta ctx id)]
-    (if-not cid
-      (derived (source-name ctx) [:p "declares " (ent id) ", " (if (:deleted? d) "deleted by this PR" "not in the registry")])
-      (derived (if (:cand-v ctx) (str "registry store " (:base-v ctx) " → CI " (:cand-v ctx)) (source-name ctx))
-               [:p "declares " (ent id) " " [:span.mute (name (:atlas/type props))] " · "
-                [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} (state-of ctx d)) "tag-note" "tag-ext")} (state-of ctx d)]]
-               [:div.aspects (interpose " " (for [a (sort-by str cid)]
-                                              [:span.aspect {:class (cond ((:aspects-added d #{}) a) "add" ((:aspects-removed d #{}) a) "del")} (str a)]))]
-               (when-let [c (seq (select-keys props contract-keys))]
-                 [:table.contract [:tbody (for [[k v] c] [:tr [:td (name k)] [:td (interpose " " (for [x (if (coll? v) v [v])] [:code (str x)]))]])]])
-               (when (or (seq (:props-added d)) (seq (:props-removed d)))
-                 [:table.contract.delta
-                  [:tbody (for [[cls tuples] [["del" (sort-by str (:props-removed d))] ["add" (sort-by str (:props-added d))]] [_ attr v] tuples]
-                            [:tr {:class cls} [:td (name attr)] [:td [:code (pr-str v)]]])]])))))
+        d (delta ctx id)
+        state (state-of ctx d)
+        state-tag [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} state) "tag-note" "tag-ext")} state]]
+    (cond
+      (not cid)
+      (derived "contract" [:p "declares " (ent id) ", " (if (:deleted? d) "deleted by this PR" "not in the registry")])
+
+      (test-case? props)
+      (derived "contract" [:p "test case on " (ent (:test-case/target props)) " · " state-tag])
+
+      :else
+      (let [added (sort-by str (:aspects-added d #{})) removed (sort-by str (:aspects-removed d #{}))
+            rows (fn [m] [:table.contract [:tbody (for [[k v] m] [:tr [:td (name k)] [:td (interpose " " (for [x (if (coll? v) v [v])] [:code (str x)]))]])]])]
+        (derived "contract"
+                 [:p "declares " (ent id) " " [:span.mute (name (:atlas/type props))] " · " state-tag " · "
+                  [:span.mute {:title (str/join " " (map str (sort-by str cid)))} (str (count cid) " aspects")]]
+                 (when (or (seq added) (seq removed))
+                   [:div.aspects (interpose " " (concat (for [a added] [:span.aspect.add (str "+" a)])
+                                                        (for [a removed] [:span.aspect.del (str "-" a)])))])
+                 (cond
+                   (:new? d) (when-let [c (seq (select-keys props contract-keys))] (rows c))
+                   (or (seq (:props-added d)) (seq (:props-removed d)))
+                   [:table.contract.delta
+                    [:tbody (for [[cls tuples] [["del" (sort-by str (:props-removed d))] ["add" (sort-by str (:props-added d))]] [_ attr v] tuples]
+                              [:tr {:class cls} [:td (name attr)] [:td [:code (pr-str v)]]])]]))))))
 
 (defn affects [ctx id]
   (in ctx (fn []
             (when-let [props (lookup/props-for id)]
-              (let [produced (concat (:execution-function/response props) (:endpoint/output props))
-                    deps (ide/dependents-of id)
-                    tests (tests-of id)]
-                (derived (source-name ctx)
-                         [:h5 "Declares it as a dependency"] (ids deps)
-                         (when (seq produced)
-                           (list [:h5 "Consumes what it produces"]
-                                 [:ul.ids (for [k produced :let [cs (ide/consumers-of k)]]
-                                            [:li [:code (str k)] " → " (if (seq cs) (interpose ", " (map ent cs)) [:span.mute "nobody"])])]))
-                         [:h5 "Covered by"] (ids tests)))))))
+              (when-not (test-case? props)
+                (let [produced (concat (:execution-function/response props) (:endpoint/output props))
+                      deps (ide/dependents-of id)
+                      consumed (for [k produced :let [cs (ide/consumers-of k)] :when (seq cs)] [k cs])
+                      tests (tests-of id)]
+                  (when (or (seq deps) (seq consumed) (seq tests))
+                    (derived "graph"
+                             (when (seq deps) [:p "used by " (interpose ", " (map #(if (string? %) [:span.mute %] (ent %)) (cap deps 6)))])
+                             (for [[k cs] consumed] [:p [:code (str k)] " → " (interpose ", " (map #(if (string? %) [:span.mute %] (ent %)) (cap cs 4)))])
+                             (when (seq tests) [:p.mute {:title (str/join " " (map str tests))} (str (count tests) " test case" (when (> (count tests) 1) "s") " cover it")])))))))))
 
 (def ^:private kw-re #"(?<![\w:]):([\w.\-]+/[\w.\-!?*+]+)")
 
@@ -126,7 +141,7 @@
 
 (defn risk-line [ctx id]
   (when-let [{:keys [level reasons]} (risk-of ctx id)]
-    (derived "registry graph"
+    (derived "graph"
              [:p (level-tag level) " " (interpose " · " reasons)])))
 
 (defn registry-decoration [ctx file form]
@@ -177,12 +192,17 @@
                   (when reason [:p.mute reason]))
          (let [{:keys [new changed deleted]} (diff/summary base cand)
                a (anchors report)
-               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))]
+               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))
+               target-of (fn [id] (reg/with-version cand (let [p (lookup/props-for id)] (when (test-case? p) (:test-case/target p)))))
+               grouped (fn [xs] (let [{tests true others false} (group-by #(boolean (target-of %)) xs)]
+                                  (concat (for [id others] [:li (link id)])
+                                          (for [[t ts] (group-by target-of tests)]
+                                            [:li {:title (str/join " " (map str ts))} (str (count ts) " test case" (when (> (count ts) 1) "s") " on ") (ent t)]))))]
            (derived (str "registry store " base-v " → CI " cand-v)
                     [:p "Registry: " (count new) " new, " (count changed) " changed, " (count deleted) " deleted"
                      (when (every? empty? [new changed deleted]) " — this PR changes no contract")]
-                    (when (seq new) (list [:h5 "New"] [:ul.ids (for [id new] [:li (link id)])]))
-                    (when (seq changed) (list [:h5 "Changed"] [:ul.ids (for [id changed] [:li (link id)])]))
+                    (when (seq new) (list [:h5 "New"] [:ul.ids (grouped new)]))
+                    (when (seq changed) (list [:h5 "Changed"] [:ul.ids (grouped changed)]))
                     (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
        (risk-summary ctx report)
        (entity-annotations ctx)))))
