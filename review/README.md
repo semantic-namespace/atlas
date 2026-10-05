@@ -41,11 +41,3 @@ version, and who depends on it, what consumes what it produces, which test
 cases cover it:
 
 ![The registry decoration of one entity](docs/img/entity.png)
-
-`ATLAS_CLOUD_URL` names the cloud holding the versions (default
-`http://localhost:8090`). The base is the newest `vN.N.N` version. The
-candidate is the version named `pr<N>-<head sha>`; when it is missing the
-server downloads the registry CI built for that head (the `registry` artifact
-of the project's `atlas-registry` workflow, through `gh`) and stages it with
-`ATLAS_CLOUD_KEY`. When CI has no run for the head, the page says so and
-shows entities as on main.
