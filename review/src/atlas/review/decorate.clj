@@ -2,6 +2,7 @@
   (:require [atlas.ide :as ide]
             [atlas.registry :as registry]
             [atlas.registry.lookup :as lookup]
+            [atlas.review.candidate :as candidate]
             [atlas.review.registry :as reg]
             [clojure.edn :as edn]
             [clojure.string :as str]
@@ -13,21 +14,31 @@
 
 (defn configure! [org project] (reset! config {:org org :project project}))
 
-(defn- candidate-for [org project {:keys [num head]}]
+(defonce ^:private staging-attempts (atom {}))
+
+(defn- candidate-for [org project {:keys [num head repo]}]
   (let [prefix (str "pr" num "-")
         mine (filter #(str/starts-with? % prefix) (reg/versions org project))
         exact (some #(when (str/starts-with? head (subs % (count prefix))) %) mine)]
-    (cond exact {:version exact}
-          (seq mine) {:version (last mine) :stale? true}
-          :else nil)))
+    (if exact
+      {:version exact}
+      (let [attempt (or (@staging-attempts [num head])
+                        (let [r (try (candidate/stage! org project repo num head) (catch Exception e {:reason (ex-message e)}))]
+                          (swap! staging-attempts assoc [num head] r)
+                          r))]
+        (cond (:version attempt) attempt
+              (seq mine) {:version (last mine) :stale? true :reason (:reason attempt)}
+              :else {:reason (:reason attempt)})))))
+
+(defn forget-attempt! [num head] (swap! staging-attempts dissoc [num head]))
 
 (defn context [report]
   (let [{:keys [org project]} @config]
     (if-not org
       {:report report}
       (let [base-v (reg/latest-main org project)
-            {:keys [version stale?]} (candidate-for org project (:pr report))]
-        (cond-> {:report report :org org :project project :base-v base-v :cand-v version :stale? stale?
+            {:keys [version stale? reason]} (candidate-for org project (:pr report))]
+        (cond-> {:report report :org org :project project :base-v base-v :cand-v version :stale? stale? :reason reason
                  :base (reg/version org project base-v)}
           version (assoc :cand (reg/version org project version)))))))
 
@@ -141,11 +152,12 @@
 
 (defn registry-header [ctx report]
   (when (:org ctx)
-    (let [{:keys [org project base-v cand-v stale?]} ctx]
+    (let [{:keys [org project base-v cand-v stale? reason]} ctx]
      (list
       (if-not cand-v
         (derived (str "atlas-cloud " org "/" project)
-                 [:p "registry " [:code base-v] " · no candidate version staged for this PR, so entities are shown as on main"])
+                 [:p "registry " [:code base-v] " · no registry for this PR's head, so entities are shown as on main"]
+                 (when reason [:p.mute reason]))
         (let [dd (reg/diff org project base-v cand-v)
               a (anchors report)
               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))
@@ -155,7 +167,7 @@
               changed (distinct (concat changed (remove (set new) props)))
               deleted (map :snap/dev-id (:deleted dd))]
           (derived (str "atlas-cloud diff " base-v " → " cand-v)
-                   (when stale? [:p.mute "the staged candidate is older than the PR head"])
+                   (when stale? [:p.mute "this candidate is older than the PR head" (when reason (str "; " reason))])
                    [:p "Registry: " (count new) " new, " (count changed) " changed, " (count deleted) " deleted"
                     (when (every? empty? [new changed deleted]) " — this PR changes no contract")]
                    (when (seq new) (list [:h5 "New"] [:ul.ids (for [id new] [:li (link id)])]))

@@ -16,6 +16,8 @@
             (swap! cache assoc url v)
             v)))))
 
+(defn forget! [path] (swap! cache dissoc (str *cloud-url* path)))
+
 (defn versions [org project] (:versions (fetch-edn (str "/" org "/" project "/versions"))))
 
 (defn latest-main [org project]
