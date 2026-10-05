@@ -1,5 +1,6 @@
 (ns atlas.review.decorate
   (:require [atlas.ide :as ide]
+            [clojure.set]
             [atlas.registry :as registry]
             [atlas.registry.lookup :as lookup]
             [atlas.review.candidate :as candidate]
@@ -10,7 +11,8 @@
             [clojure.string :as str]
             [rewrite-clj.node :as n]
             [sdiff.core :as core]
-            [sdiff.decorate :as d :refer [derived]]))
+            [sdiff.decorate :as d :refer [derived]]
+            [sdiff.group :as group]))
 
 (defonce ^:private attempts (atom {}))
 
@@ -216,7 +218,122 @@
   (when (:base ctx)
     (list (risk-line ctx id) (declares ctx id) (affects ctx id))))
 
+(defn- declared-by [report]
+  (into {} (for [f (:clj report) :when (= :semantic (:verdict f)) form (:forms f)
+                 :let [id (declared-id form)] :when id]
+             [[(:path f) (d/form-id form)] id])))
+
+(defn- related [ctx id]
+  (in ctx #(when-let [p (lookup/props-for id)]
+             (cond-> (set (remove string? (ide/dependents-of id)))
+               (:test-case/target p) (conj (:test-case/target p))))))
+
+(defn- domains [ctx ids]
+  (in ctx #(sort (distinct (for [id ids a (lookup/identity-for id) :when (= "domain" (namespace a))] (name a))))))
+
+(defn- code-edges [report declared]
+  (let [owner (into {} (map (fn [[k v]] [v k]) declared))]
+    (into (group/call-edges report)
+          (for [[n kws] (group/keyword-mentions report) kw kws
+                :let [m (owner kw)] :when (and m (not= m n))]
+            #{n m}))))
+
+(defn- seed-groups
+  "Forms that declare entities, merged when the registry relates their entities."
+  [ctx declared]
+  (let [owner (into {} (map (fn [[k v]] [v k]) declared))
+        edges (for [[n id] declared r (related ctx id) :let [m (owner r)] :when (and m (not= m n))] #{n m})]
+    (group/components (keys declared) edges)))
+
+(defn- attach
+  "`{node #{group-index}}`: nodes reached from `owner`'s groups in `active`
+  through `edges`, each with every group at the least distance. A node two
+  groups reach equally, or one of the `hubs`, is not walked through."
+  [owner edges hubs active]
+  (let [adj (reduce (fn [m e] (let [[a b] (seq e)] (-> m (update a (fnil conj #{}) b) (update b (fnil conj #{}) a)))) {} edges)]
+    (loop [frontier (keys owner) owner owner]
+      (let [step (reduce (fn [m n]
+                           (let [gs (owner n)]
+                             (if (and (= 1 (count gs)) (active (first gs)) (not (hubs n)))
+                               (reduce (fn [m x] (if (owner x) m (update m x (fnil into #{}) gs))) m (adj n))
+                               m)))
+                         {} frontier)]
+        (if (empty? step) owner (recur (keys step) (merge owner step)))))))
+
+(defn- base-name [path] (-> path (str/replace #".*/" "") (str/replace #"\.clj[cs]?$" "")))
+
+(defn- keep-test-files-together
+  "Each test file's forms go to one group: the group of the source file it is
+  named after, when the PR changes one, else the group most of its forms
+  reached."
+  [owner nodes declared hubs]
+  (let [single (fn [n] (let [gs (owner n)] (when (= 1 (count gs)) (first gs))))
+        majority (fn [ns] (some->> (seq (keep single ns)) frequencies (sort-by (fn [[g c]] [(- c) g])) ffirst))
+        by-file (group-by first nodes)
+        by-name (into {} (for [[p ns] by-file :when (not (group/test-path? p))] [(base-name p) ns]))]
+    (reduce (fn [owner [p ns]]
+              (let [paired (by-name (str/replace (base-name p) #"_test$" ""))
+                    target (or (when paired (majority paired)) (majority ns))]
+                (if-not target
+                  owner
+                  (reduce (fn [o n] (if (or (declared n) (hubs n)) o (assoc o n #{target}))) owner ns))))
+            owner
+            (filter (comp group/test-path? key) by-file))))
+
+(defn by-meaning
+  "One group per changed part of the system: the forms that declare entities
+  the registry relates, with the code that reaches them through calls or
+  keyword mentions, nearest group first. Code two groups reach equally is
+  shared. Code no group reaches joins the group holding most of its file, or
+  is grouped by its own calls. Groups come in order of their highest risk."
+  [ctx report]
+  (if-not (:base ctx)
+    (group/by-calls ctx report)
+    (let [declared (declared-by report)
+          nodes (group/nodes report)
+          new-modules (for [f (:clj report)
+                            :when (and (= "A" (:status f)) (= :semantic (:verdict f)) (not (group/test-path? (:path f)))
+                                       (not-any? #(declared [(:path f) (d/form-id %)]) (:forms f)))]
+                        (mapv #(vector (:path f) (d/form-id %)) (:forms f)))
+          entity-seeds (seed-groups ctx declared)
+          seeds (vec (concat entity-seeds new-modules))
+          edges (code-edges report declared)
+          hubs (apply disj (group/hubs edges 3) (keys declared))
+          start (into {} (for [[i g] (map-indexed vector seeds) n g] [n #{i}]))
+          first-pass (attach start edges hubs (set (range (count entity-seeds))))
+          owner (keep-test-files-together (attach first-pass edges hubs (set (range (count seeds)))) nodes declared hubs)
+          by-group (group-by (fn [n] (let [gs (owner n)] (cond (hubs n) :shared (nil? gs) :none (= 1 (count gs)) (first gs) :else :shared))) nodes)
+          file-home (into {} (for [[path ns] (group-by first (mapcat (fn [i] (map #(vector (first %) i) (by-group i))) (range (count seeds))))]
+                               [path (key (apply max-key val (frequencies (map second ns))))]))
+          {homed true orphans false} (group-by #(boolean (file-home (first %))) (:none by-group))
+          members (reduce (fn [m n] (update m (file-home (first n)) (fnil conj []) n)) (into {} (for [i (range (count seeds))] [i (vec (by-group i))])) homed)
+          members (update-vals members (fn [ns] (filterv (set ns) nodes)))
+          risk (memoize #(risk-of ctx %))
+          test? (fn [id] (in ctx #(test-case? (lookup/props-for id))))
+          lead (fn [ids] (first (sort-by (fn [id] [(if (test? id) 1 0) (- (or (:score (risk id)) -1)) (str id)]) ids)))
+          describe (fn [ns]
+                     (let [ids (keep declared ns)
+                           main (remove test? ids)
+                           top (lead ids)
+                           ds (when (seq main) (sort (reduce clojure.set/intersection (map #(set (domains ctx [%])) main))))]
+                       (str (count ns) " form" (when (> (count ns) 1) "s")
+                            (if (seq main) (str ", " (count main) " entit" (if (= 1 (count main)) "y" "ies")) ", a new namespace outside the registry")
+                            (when (> (count ids) (count main)) (str " and " (- (count ids) (count main)) " test case" (when (> (- (count ids) (count main)) 1) "s")))
+                            (when (seq ds) (str " · " (str/join ", " (take 3 ds))))
+                            (when-let [l (some-> top risk :level name)] (str " · " l " risk")))))
+          weight (fn [ns] (reduce max -1 (keep #(some-> (declared %) risk :score) ns)))]
+      (concat
+       (for [[_ ns] (sort-by (fn [[_ ns]] [(- (weight ns)) (- (count ns))]) members) :when (seq ns)]
+         (group/section (str "Around " (or (lead (keep declared ns)) (some #(when (str/starts-with? (second %) "ns ") (subs (second %) 3)) ns) (second (first ns))))
+                        (describe ns) ns))
+       (when-let [sh (seq (:shared by-group))]
+         [(group/section "Shared by several groups" "Changed forms used from three or more source files, or reached equally by two groups." sh)])
+       (when (seq orphans)
+         (group/by-calls ctx (assoc report :clj (for [f (:clj report)]
+                                                  (update f :forms (fn [fs] (filterv #((set orphans) [(:path f) (d/form-id %)]) fs)))))))))))
+
 (d/use-context! context)
+(d/add-grouper! :meaning "meaning" "registry store + clj-kondo" by-meaning)
 (d/add-entity-renderer! ::registry entity-view)
 (d/add-form-decorator! ::registry registry-decoration)
 (d/add-header-decorator! ::registry registry-header)
