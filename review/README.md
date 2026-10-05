@@ -6,7 +6,7 @@ derived decorations from the registry, beside each changed form and at the
 top:
 
 - the entity a form declares, with its contract and the delta between the
-  main version and the PR's candidate version from the atlas-cloud diff;
+  recorded version at the PR's merge base and the registry CI built for its head;
 - who depends on that entity, who consumes what it produces, which test
   cases cover it;
 - the data keys the changed code mentions, with their producers and consumers;
@@ -18,8 +18,18 @@ registry. Inferred annotations, from a reviewer or a model, render apart and
 labelled.
 
 ```
-clojure -M:serve --org acme --project shop [--port 7878] [--host 127.0.0.1]
+clojure -M:serve --store <registry store checkout> --prefix <path inside it> [--branch origin/main] [--port 7878] [--host 127.0.0.1]
 ```
+
+Two registries are compared. The base is the version the project's CI
+recorded in its registry store (the git repository written by `atlas.store`,
+one commit per recorded registry, the source sha in the commit message) for
+the PR's merge base, or the newest recorded version when that commit was not
+recorded. The candidate is the registry CI built for the PR head, downloaded
+through `gh` from the workflow run's artifact (`SDIFF_REGISTRY_WORKFLOW` and
+`SDIFF_REGISTRY_ARTIFACT` name them; defaults `atlas-registry` and
+`registry`). When CI has no run for the head, the page says so and shows
+entities as on main.
 
 A view over a pull request of the atlas repo itself, with the registry
 decoration of an entity the view names:

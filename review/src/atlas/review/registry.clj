@@ -1,37 +1,56 @@
 (ns atlas.review.registry
-  (:require [babashka.http-client :as http]
+  (:require [atlas.registry :as registry]
+            [atlas.store.canonical :as canon]
             [clojure.edn :as edn]
-            [atlas.registry :as registry]))
+            [clojure.java.shell :refer [sh]]
+            [clojure.string :as str]))
 
-(def ^:dynamic *cloud-url* (or (System/getenv "ATLAS_CLOUD_URL") "http://localhost:8090"))
+(defonce config (atom {:store nil :prefix nil :branch "origin/main"}))
+
+(defn configure! [store prefix branch]
+  (reset! config {:store store :prefix (str (str/replace prefix #"/$" "") "/") :branch (or branch "origin/main")}))
 
 (defonce ^:private cache (atom {}))
 
-(defn- fetch-edn [path]
-  (let [url (str *cloud-url* path)]
-    (or (@cache url)
-        (let [{:keys [status body]} (http/get url {:throw false :timeout 120000})]
-          (when (not= 200 status) (throw (ex-info (str "atlas-cloud " status " for " path) {:status status})))
-          (let [v (edn/read-string {:default (fn [_ v] v)} body)]
-            (swap! cache assoc url v)
-            v)))))
+(defn- git [& args]
+  (let [{:keys [exit out err]} (apply sh "git" "-C" (:store @config) args)]
+    (if (zero? exit) out (throw (ex-info (str "registry store: " (str/trim err)) {:args args})))))
 
-(defn forget! [path] (swap! cache dissoc (str *cloud-url* path)))
+(defn- normalise [reg] (into {} (map (fn [[k e]] [(if (vector? k) (set k) k) e])) reg))
 
-(defn versions [org project] (:versions (fetch-edn (str "/" org "/" project "/versions"))))
+(defn versions
+  "Recorded versions, newest first: `{:commit :source :subject}`, where source
+  is the project sha the version was built from."
+  []
+  (let [{:keys [prefix branch]} @config]
+    (for [l (str/split-lines (git "log" "--format=%H %s" branch "--" prefix)) :when (seq l)
+          :let [[commit subject] (str/split l #" " 2)]]
+      {:commit commit :subject subject :source (second (re-matches #"registry: (\S+).*" (or subject "")))})))
 
-(defn latest-main [org project]
-  (->> (versions org project)
-       (keep #(when-let [[_ a b c] (re-matches #"v(\d+)\.(\d+)\.(\d+)(?:-.*)?" %)] [(mapv parse-long [a b c]) %]))
-       (sort-by first) last second))
+(defn version-for
+  "The recorded version built from `sha`, or nil."
+  [sha]
+  (some #(when (and (:source %) (str/starts-with? sha (:source %))) %) (versions)))
 
-(defn version
-  "A stored version as a registry map, keys normalised to sets so it can be
-  bound as `atlas.registry/*registry-override*`."
-  [org project v]
-  (into {} (map (fn [[k e]] [(if (vector? k) (set k) k) e])) (fetch-edn (str "/" org "/" project "/" v))))
+(defn latest [] (first (versions)))
 
-(defn diff [org project from to] (fetch-edn (str "/" org "/" project "/diff?from=" from "&to=" to)))
+(defn label [{:keys [commit source]}] (str (subs commit 0 7) (when source (str " (" source ")"))))
+
+(defn registry-at
+  "The registry recorded at a store commit, keys normalised to sets."
+  [commit]
+  (or (@cache commit)
+      (let [prefix (:prefix @config)
+            paths (filter #(re-find #"/entities/[^/]+\.edn$" %) (str/split-lines (git "ls-tree" "-r" "--name-only" commit "--" prefix)))
+            files (into {} (for [p paths] [(subs p (count prefix)) (git "show" (str commit ":" p))]))
+            reg (normalise (canon/files->registry files))]
+        (swap! cache assoc commit reg)
+        reg)))
+
+(defn from-file
+  "A registry map from an EDN file, keys normalised to sets."
+  [f]
+  (normalise (edn/read-string {:default (fn [_ v] v)} (slurp f))))
 
 (defmacro with-version [reg & body]
   `(binding [registry/*registry-override* ~reg] ~@body))
