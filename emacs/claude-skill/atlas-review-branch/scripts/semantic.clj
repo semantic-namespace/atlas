@@ -13,10 +13,11 @@
     (atlas-review.semantic/write-extended! r \"<notebook>.groupings.org\") ; every hunk, grouped
 
   Forms are read with tools.reader in the file's own namespace and aliases, so
-  ::alias/key resolves as the compiler would. Ownership is textual: a form owns a
-  hunk when their line ranges overlap. Treat the result as a lead to verify in
-  the diff, not as proof."
-  (:require [clojure.java.shell :as sh]
+  ::alias/key resolves as the compiler would. Hunk owners come from sdiff
+  (semantic-namespace/diff) when it is installed, else from line overlap, which
+  is a lead to verify in the diff, not proof."
+  (:require [clojure.edn :as edn]
+            [clojure.java.shell :as sh]
             [clojure.string :as str]
             [clojure.tools.reader :as r]
             [clojure.tools.reader.reader-types :as rt]
@@ -130,19 +131,67 @@
 
 (defn- overlaps? [[a b] [c d]] (and a c (<= a d) (<= c b)))
 
+(def ^:dynamic *sdiff-home*
+  (or (System/getenv "SDIFF_HOME") (str (System/getProperty "user.home") "/git/semantic-namespace/diff")))
+
+(defn structural
+  "sdiff file reports of WT against BASE by path; nil when sdiff is not installed."
+  [wt base]
+  (let [{:keys [exit out err]} (try (sh/sh "bb" "sdiff" "edn" wt base "." :dir *sdiff-home*)
+                                    (catch Exception e {:exit -1 :err (ex-message e)}))]
+    (if (zero? exit)
+      (into {} (for [f (:clj (edn/read-string out))] [(:path f) f]))
+      (binding [*out* *err*]
+        (println "atlas-review: sdiff unavailable, owners come from line overlap:" (str/trim (str err)))
+        nil))))
+
+(defn- read-owner [{:keys [ns aliases]} src]
+  (when src
+    (binding [*ns* (if ns (create-ns ns) *ns*)
+              r/*alias-map* (fn [a] (or (get aliases a) (symbol (str "?" a))))
+              r/*read-eval* false]
+      (try (form-owner (r/read-string {:read-cond :allow :features #{:clj}} src))
+           (catch Exception _ nil)))))
+
+(defn- rows [node] (when (:row node) [(:row node) (:end-row node)]))
+
+(defn- path-str [form c]
+  (str (str/join " " (remove nil? (:id form)))
+       (when (seq (:path c))
+         (str " › " (str/join " › " (map #(if (vector? %) (str/join " " %) (str %)) (:path c)))))))
+
+(defn- structural-touch [forms h]
+  (for [f forms
+        :let [new-hit (and (not= :delete (:kind h)) (overlaps? (:new h) (rows (:new f))))
+              old-hit (and (not= :add (:kind h)) (overlaps? (:old h) (rows (:old f))))]
+        :when (or new-hit old-hit)
+        :let [paths (distinct (for [c (:changes f)
+                                    :when (or (and new-hit (overlaps? (:new h) (rows (:new c))))
+                                              (and old-hit (overlaps? (:old h) (rows (:old c)))))]
+                                (path-str f c)))]]
+    {:form f :paths (if (seq paths) (vec paths) [(path-str f nil)])}))
+
 (defn file-map
-  "Each hunk of FILE with the forms it touches, their owners, and the keywords it mentions."
-  [wt base file]
-  (let [exists? (.exists (java.io.File. wt file))
-        fs (if exists? (try (forms wt file) (catch Exception _ [])) [])
-        info (when exists? (ns-info (slurp (java.io.File. wt file))))
-        base-src (let [x (sh/sh "git" "show" (str base ":" file) :dir wt)] (when (zero? (:exit x)) (:out x)))
-        base-info (when base-src (ns-info base-src))]
-    (for [h (hunks wt base file)]
-      (let [touched (filter #(overlaps? (:new h) [(:line %) (:end-line %)]) fs)]
-        (assoc h :file file
-               :owners (vec (distinct (keep :owner touched)))
-               :mentions (into (mentions info (:added h)) (mentions base-info (:removed h))))))))
+  "Each hunk of FILE with the forms it changed, their owners, change paths and the keywords it mentions."
+  ([wt base file] (file-map wt base file nil))
+  ([wt base file sforms]
+   (let [exists? (.exists (java.io.File. wt file))
+         fs (if (and exists? (nil? sforms)) (try (forms wt file) (catch Exception _ [])) [])
+         info (when exists? (ns-info (slurp (java.io.File. wt file))))
+         base-src (let [x (sh/sh "git" "show" (str base ":" file) :dir wt)] (when (zero? (:exit x)) (:out x)))
+         base-info (when base-src (ns-info base-src))]
+     (for [h (hunks wt base file)]
+       (let [st (when sforms (structural-touch sforms h))
+             owners (if sforms
+                      (mapcat (fn [{:keys [form]}] (keep identity [(read-owner info (get-in form [:new :src]))
+                                                                  (read-owner base-info (get-in form [:old :src]))]))
+                              st)
+                      (keep :owner (filter #(overlaps? (:new h) [(:line %) (:end-line %)]) fs)))]
+         (cond-> (assoc h :file file
+                        :owners (vec (distinct owners))
+                        :mentions (into (mentions info (:added h)) (mentions base-info (:removed h))))
+           sforms (assoc :paths (vec (mapcat :paths st))
+                         :cosmetic (every? #(= :comments (:op %)) (mapcat (comp :changes :form) st)))))))))
 
 ;;; Analysis
 
@@ -155,10 +204,11 @@
         known (into (into (set (keys br-reg)) (keys base-reg)) (into (data-keys br-reg) (data-keys base-reg)))
         deps (set (map #(keyword (subs % 1)) (mapcat (fn [[_ p]] (:deps p)) br-reg)))
         components (set (filter #(= :atlas/structure-component (:type (br-reg %))) (keys br-reg)))
-        hs (vec (for [f (changed-files wt base) h (file-map wt base f)]
+        smap (structural wt base)
+        hs (vec (for [f (changed-files wt base) h (file-map wt base f (some-> smap (get f) :forms))]
                   (let [k (set (filter known (:mentions h)))]
                     (assoc h :known k
-                           :entities (vec (filter br-reg (concat (map :id (filter #(= :entity (:kind %)) (:owners h))) k)))
+                           :entities (vec (filter #(or (br-reg %) (base-reg %)) (concat (map :id (filter #(= :entity (:kind %)) (:owners h))) k)))
                            :data-keys (vec (remove #(or (br-reg %) (deps %) (components %)) k))))))
         cdiff (contract-diff base-reg br-reg)
         moved (->> cdiff
@@ -226,14 +276,16 @@
   [{:keys [wt hunks br-reg cdiff moved]} path]
   (let [row (fn [h] (str "  - " (link wt h) " " (name (:kind h))
                          (let [os (remove #(= :entity (:kind %)) (:owners h))] (when (seq os) (str " ~" (str/join ", " (map (comp str :id) os)) "~")))
-                         (when (seq (:entities h)) (str " → " (str/join ", " (map str (distinct (:entities h))))))))
+                         (when (seq (:entities h)) (str " → " (str/join ", " (map str (distinct (:entities h))))))
+                         (when (seq (:paths h)) (str " · " (str/join "; " (map #(str "=" % "=") (take 3 (:paths h))))))
+                         (when (:cosmetic h) " · formatting or comments only")))
         by (fn [f] (->> hunks (mapcat (fn [h] (map (fn [g] [g h]) (f h)))) (group-by first)
                         (map (fn [[g xs]] [g (map second xs)])) (sort-by (comp - count second))))
         section (fn [title groups] (str "* " title "\n" (str/join (for [[g hs] groups] (str "** " g "  (" (count hs) ")\n" (str/join "\n" (map row hs)) "\n")))))
         facets (fn [h] (set (filter #(#{"services" "entity" "action"} (namespace %)) (mapcat #(:aspects (br-reg %)) (:entities h)))))]
     (spit path
           (str "#+TITLE: Extended data — every hunk, grouped\n#+STARTUP: overview\n"
-               "~var~ = the non-registry form the hunk touches; → = registry entities it defines or mentions.\n\n"
+               "~var~ = the non-registry form the hunk touches; → = registry entities it defines or mentions; =…= = where in the form it changed.\n\n"
                "* Contract diff\n" (str/join "\n" (for [[id d] cdiff] (str "- =" id "= " (pr-str d)))) "\n"
                (section "By data key mentioned" (by (fn [h] (or (seq (:data-keys h)) [:none]))))
                (section "By compound-id facet" (by (fn [h] (or (seq (facets h)) [:none]))))
