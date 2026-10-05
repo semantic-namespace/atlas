@@ -86,8 +86,8 @@
       (derived (if (:cand-v ctx) (str "atlas-cloud diff " (:base-v ctx) " → " (:cand-v ctx)) (source-name ctx))
                [:p "declares " (ent id) " " [:span.mute (name (:atlas/type props))] " · "
                 [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} (state-of ctx d)) "tag-note" "tag-ext")} (state-of ctx d)]]
-               [:div.aspects (for [a (sort-by str cid)]
-                               [:span.aspect {:class (cond ((:aspects-added d #{}) a) "add" ((:aspects-removed d #{}) a) "del")} (str a)])]
+               [:div.aspects (interpose " " (for [a (sort-by str cid)]
+                                              [:span.aspect {:class (cond ((:aspects-added d #{}) a) "add" ((:aspects-removed d #{}) a) "del")} (str a)]))]
                (when-let [c (seq (select-keys props contract-keys))]
                  [:table.contract [:tbody (for [[k v] c] [:tr [:td (name k)] [:td (interpose " " (for [x (if (coll? v) v [v])] [:code (str x)]))]])]])
                (when (or (seq (:props-added d)) (seq (:props-removed d)))
