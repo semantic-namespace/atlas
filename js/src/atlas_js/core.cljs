@@ -9,9 +9,16 @@
    the library is needed at compile time."
   (:require [atlas.registry :as registry]
             [atlas.query :as query]
+            [atlas.query.architecture :as architecture]
+            [atlas.registry.analysis :as analysis]
             [atlas.invariant :as inv]
             [atlas.ontology :as ont]
             [atlas.datalog :as datalog]
+            [atlas.ontology.data-schema]
+            [atlas.ontology.execution-function]
+            [atlas.ontology.interface-endpoint]
+            [atlas.ontology.interface-protocol]
+            [atlas.ontology.structure-component]
             [clojure.edn :as edn]
             [clojure.set :as set]))
 
@@ -102,6 +109,34 @@
   [edn-string]
   (let [data (edn/read-string edn-string)]
     (reset! registry/registry data)
+    (datalog/reset-db-cache!)
+    (count data)))
+
+(def ^:private builtin-extractors
+  "Datalog extractors registered in code. A stored extractor keeps its schema
+   but not its :datalog-extractor/fn, so these are merged back over it."
+  (into {} (filter #(contains? (key %) :atlas/datalog-extractor)) @registry/registry))
+
+(defn- store-entries
+  "Entity forms from one store file: a sequence of [compound-id props] pairs."
+  [content]
+  (edn/read-string (str "[" content "]")))
+
+(defn load-store!
+  "Load a registry from atlas-store files, replacing the current registry.
+   `files` is either an object of {path content}, where only paths under
+   `entities/` are read (as atlas.store.canonical/files->registry does), or an
+   array of file contents. Code-registered datalog extractors are kept, so the
+   datalog queries work on a loaded store. Returns the number of entities loaded."
+  [files]
+  (let [contents (if (array? files)
+                   (array-seq files)
+                   (keep (fn [path]
+                           (when (re-find #"(^|/)entities/[^/]+\.edn$" path)
+                             (aget files path)))
+                         (array-seq (js/Object.keys files))))
+        data (into {} (mapcat store-entries) contents)]
+    (reset! registry/registry (merge-with merge data builtin-extractors))
     (datalog/reset-db-cache!)
     (count data)))
 
@@ -231,16 +266,16 @@
 ;; =============================================================================
 
 (defn dependency-graph [id-key deps-key]
-  (to-js (query/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (architecture/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn by-tier [id-key]
-  (to-js (query/by-tier @registry/registry (->clj-kw id-key))))
+  (to-js (architecture/by-tier @registry/registry (->clj-kw id-key))))
 
 (defn domain-coupling [id-key deps-key]
-  (to-js (query/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (architecture/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn impact-of-change [entity-id id-key deps-key response-key]
-  (to-js (query/impact-of-change @registry/registry
+  (to-js (architecture/impact-of-change @registry/registry
                                   (->clj-kw entity-id)
                                   (->clj-kw id-key)
                                   (->clj-kw deps-key)
@@ -285,7 +320,7 @@
 (defn registered-types [] (to-js (registry/registered-types)))
 (defn entity-type [identity] (to-js (registry/entity-type (js-set->clj-set identity))))
 (defn aspects [identity] (to-js (registry/aspects (js-set->clj-set identity))))
-(defn summary [] (to-js (registry/summary)))
+(defn summary [] (to-js (analysis/summary)))
 (defn validate-types [] (to-js (registry/validate-registry-types)))
 
 ;; =============================================================================

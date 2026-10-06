@@ -10,6 +10,7 @@
   {:target :esm
    :output-dir "dist"
    :modules {:atlas {:exports {loadRegistry        atlas-js.core/load-registry!
+                               loadStore           atlas-js.core/load-store!
                                getRegistry         atlas-js.core/get-registry
                                register            atlas-js.core/register!
                                resetRegistry       atlas-js.core/reset-registry!
@@ -73,13 +74,16 @@
                                ;; Conversion helpers
                                toJS                atlas-js.core/to-js
                                toClj               atlas-js.core/to-clj}}}
-   :compiler-options {:optimizations :advanced}}
+   ;; :advanced munges Datascript's Datom fields: d/q silently returns [] and
+   ;; every datalog export is empty. :simple keeps them intact.
+   :compiler-options {:optimizations :simple}}
 
   ;; ─── Slim build (registry + query + ontology, NO datascript) ───
   :atlas-js-slim
   {:target :esm
    :output-dir "dist-slim"
    :modules {:atlas {:exports {loadRegistry        atlas-js.core-slim/load-registry!
+                               loadStore           atlas-js.core-slim/load-store!
                                getRegistry         atlas-js.core-slim/get-registry
                                register            atlas-js.core-slim/register!
                                resetRegistry       atlas-js.core-slim/reset-registry!
@@ -137,6 +141,7 @@
   {:target :esm
    :output-dir "dist-dev"
    :modules {:atlas {:exports {loadRegistry        atlas-js.core/load-registry!
+                               loadStore           atlas-js.core/load-store!
                                getRegistry         atlas-js.core/get-registry
                                register            atlas-js.core/register!
                                resetRegistry       atlas-js.core/reset-registry!
@@ -185,6 +190,7 @@
   {:target :esm
    :output-dir "dist-slim-dev"
    :modules {:atlas {:exports {loadRegistry        atlas-js.core-slim/load-registry!
+                               loadStore           atlas-js.core-slim/load-store!
                                getRegistry         atlas-js.core-slim/get-registry
                                register            atlas-js.core-slim/register!
                                resetRegistry       atlas-js.core-slim/reset-registry!

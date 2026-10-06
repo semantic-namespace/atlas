@@ -8,8 +8,8 @@ The same `.cljc` source that runs on the JVM is compiled to JS. Every function b
 
 | Build | File | Gzipped | Includes |
 |-------|------|---------|----------|
-| **Full** | `dist/atlas.js` | 125 KB | Registry + Query + Datalog + Invariants |
-| **Slim** | `dist-slim/atlas.js` | 72 KB | Registry + Query + Ontology (no Datascript) |
+| **Full** | `dist/atlas.js` | 434 KB | Registry + Query + Datalog + Invariants + standard ontologies |
+| **Slim** | `dist-slim/atlas.js` | 75 KB | Registry + Query + Ontology (no Datascript) |
 
 Use **slim** for registration, querying, and analytics.
 Use **full** when you also need datalog graph traversal (upstream/downstream closure, blast radius).
@@ -79,7 +79,7 @@ Full documentation for each function lives in the [Clojure API reference](../doc
 
 | Group | Functions |
 |-------|-----------|
-| Registry | `loadRegistry`, `getRegistry`, `resetRegistry`, `register` |
+| Registry | `loadRegistry`, `loadStore`, `getRegistry`, `resetRegistry`, `register` |
 | Query | `findByAspect`, `findByDevId`, `findDevIdsWithAspect`, `findExact`, `where`, `allIdentities` |
 | Scoring | `matchScore`, `queryMatches`, `semanticSimilarity` |
 | Analytics | `aspectFrequency`, `relatedAspects`, `identityStats` |
