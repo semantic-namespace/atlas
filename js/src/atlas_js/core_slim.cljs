@@ -5,6 +5,8 @@
    Significantly smaller bundle (~125KB less)."
   (:require [atlas.registry :as registry]
             [atlas.query :as query]
+            [atlas.query.architecture :as architecture]
+            [atlas.registry.analysis :as analysis]
             [atlas.ontology :as ont]
             [clojure.edn :as edn]
             [clojure.set :as set]))
@@ -67,6 +69,27 @@
 
 (defn load-registry! [edn-string]
   (let [data (edn/read-string edn-string)]
+    (reset! registry/registry data)
+    (count data)))
+
+(defn- store-entries
+  "Entity forms from one store file: a sequence of [compound-id props] pairs."
+  [content]
+  (edn/read-string (str "[" content "]")))
+
+(defn load-store!
+  "Load a registry from atlas-store files, replacing the current registry.
+   `files` is either an object of {path content}, where only paths under
+   `entities/` are read (as atlas.store.canonical/files->registry does), or an
+   array of file contents. Returns the number of entities loaded."
+  [files]
+  (let [contents (if (array? files)
+                   (array-seq files)
+                   (keep (fn [path]
+                           (when (re-find #"(^|/)entities/[^/]+\.edn$" path)
+                             (aget files path)))
+                         (array-seq (js/Object.keys files))))
+        data (into {} (mapcat store-entries) contents)]
     (reset! registry/registry data)
     (count data)))
 
@@ -152,16 +175,16 @@
 ;; =============================================================================
 
 (defn dependency-graph [id-key deps-key]
-  (to-js (query/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (architecture/dependency-graph @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn by-tier [id-key]
-  (to-js (query/by-tier @registry/registry (->clj-kw id-key))))
+  (to-js (architecture/by-tier @registry/registry (->clj-kw id-key))))
 
 (defn domain-coupling [id-key deps-key]
-  (to-js (query/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
+  (to-js (architecture/domain-coupling @registry/registry (->clj-kw id-key) (->clj-kw deps-key))))
 
 (defn impact-of-change [entity-id id-key deps-key response-key]
-  (to-js (query/impact-of-change @registry/registry
+  (to-js (architecture/impact-of-change @registry/registry
                                   (->clj-kw entity-id) (->clj-kw id-key)
                                   (->clj-kw deps-key) (->clj-kw response-key))))
 
@@ -201,7 +224,7 @@
 (defn registered-types [] (to-js (registry/registered-types)))
 (defn entity-type [identity] (to-js (registry/entity-type (js-set->clj-set identity))))
 (defn aspects [identity] (to-js (registry/aspects (js-set->clj-set identity))))
-(defn summary [] (to-js (registry/summary)))
+(defn summary [] (to-js (analysis/summary)))
 (defn validate-types [] (to-js (registry/validate-registry-types)))
 
 ;; =============================================================================
