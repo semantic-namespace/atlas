@@ -1,7 +1,7 @@
 {
   "name": "@semantic-namespace/atlas",
-  "version": "0.1.0-alpha",
-  "description": "Atlas semantic registry for JavaScript \u2014 query, analyze, and reason about software architecture",
+  "version": "0.1.1-alpha",
+  "description": "Atlas semantic registry for JavaScript — query, analyze, and reason about software architecture",
   "type": "module",
   "main": "dist/atlas.js",
   "module": "dist/atlas.js",
