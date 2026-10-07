@@ -48,6 +48,19 @@
   [kws-by-pos file node]
   (let [{:keys [row col]} (meta node)] (get kws-by-pos [file row col])))
 
+(defn- deps-keywords
+  "Keywords under any `*/deps` key of the first map literal among `args`: the
+  components an entity says it needs."
+  [kws-by-pos file args]
+  (when-let [m (first (filter #(= :map (n/tag %)) args))]
+    (let [kids (filter code? (n/children m))]
+      (set (for [[k v] (partition 2 kids)
+                 :when (some-> (kw-at kws-by-pos file k) name (= "deps"))
+                 :when (#{:set :vector} (n/tag v))
+                 x (filter code? (n/children v))
+                 :let [kw (kw-at kws-by-pos file x)] :when kw]
+             kw)))))
+
 (defn- set-keywords [kws-by-pos file node]
   (when (= :set (n/tag node))
     (set (keep #(kw-at kws-by-pos file %) (filter code? (n/children node))))))
@@ -77,7 +90,8 @@
                                        type (when (re-find #"register!$" head)
                                               (some->> (second args) (kw-at kws-by-pos file)))]
                                  :when id]
-                             [id {:node [file row] :type type :aspects (some #(set-keywords kws-by-pos file %) args)}]))
+                             [id {:node [file row] :type type :aspects (some #(set-keywords kws-by-pos file %) args)
+                                  :deps (deps-keywords kws-by-pos file args)}]))
         components (into {} (for [{:keys [file row head args]} forms
                                   :when (and head (= "defmethod" head) (re-find component-heads (n/string (first args))))
                                   :let [k (some->> (second args) (kw-at kws-by-pos file))] :when k]
@@ -139,19 +153,26 @@
   direct calls and keyword bridges, stopping at any other registered entity
   (`:reached`), the I/O it may do once protocol calls fan out to every
   implementation (`:may`), the I/O it reaches through other entities, the aspects it declares, and the
-  comparable kinds where its own I/O and its aspects disagree. `aspects-of-kind` maps each kind to the aspects
+  comparable kinds where its own I/O and its declarations disagree. A kind
+  counts as declared by an aspect in `aspects-of-kind`, or by a component in
+  the entity's `*/deps` matching `deps-of-kind`, since a database or a cache is
+  usually declared once, on the component the entity depends on. `aspects-of-kind` maps each kind to the aspects
   that would declare it; kinds absent from it are reported but not compared."
-  [g aspects-of-kind executable?]
+  ([g aspects-of-kind executable?] (compare-aspects g aspects-of-kind executable? {}))
+  ([g aspects-of-kind executable? deps-of-kind]
   (for [entity-nodes [(set (map :node (vals (:registers g))))]
-        [id {:keys [node aspects type]}] (sort-by key (:registers g))
+        [id {:keys [node aspects type deps]}] (sort-by key (:registers g))
         :when (executable? type)
         :let [reached (reach (assoc g :edges (:direct-edges g)) node entity-nodes)
               may (reach g node entity-nodes)
               transitive (reach g node)
-              declared (set (for [[kind as] aspects-of-kind :when (some (or aspects #{}) as)] kind))
+              by-aspect (set (for [[kind as] aspects-of-kind :when (some (or aspects #{}) as)] kind))
+              by-dep (set (for [[kind re] deps-of-kind d deps :when (re-find re (str d))] kind))
+              declared (into by-aspect by-dep)
               comparable (set (keys aspects-of-kind))
               derived (set (filter comparable (keys reached)))]]
-    {:id id :type type :reached reached :may (set (keys may)) :transitive (set (keys transitive)) :declared declared
+    {:id id :type type :reached reached :may (set (keys may)) :transitive (set (keys transitive))
+     :declared declared :by-dep by-dep :deps deps :aspects aspects
      :generic (boolean (some #{:integration/external} aspects))
      :undeclared (sort (remove declared derived))
-     :unreached (sort (remove derived declared))}))
+     :unreached (sort (remove derived declared))})))
