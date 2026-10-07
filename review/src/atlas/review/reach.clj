@@ -195,3 +195,42 @@
      :generic (boolean (some #{:integration/external} aspects))
      :undeclared (sort (remove declared derived))
      :unreached (sort (remove derived declared))})))
+
+(defn- io-nodes
+  "Nodes from which some I/O site can be reached."
+  [{:keys [edges io]}]
+  (let [rev (reduce (fn [m [from tos]] (reduce #(update %1 %2 (fnil conj #{}) from) m tos)) {} edges)]
+    (loop [frontier (vec (keys io)) seen (set (keys io))]
+      (if-let [n (peek frontier)]
+        (let [nx (remove seen (rev n))] (recur (into (pop frontier) nx) (into seen nx)))
+        seen))))
+
+(defn- visited [{:keys [edges]} node stop]
+  (loop [frontier [node] seen #{node}]
+    (if-let [n (peek frontier)]
+      (let [nx (when (or (= n node) (not (stop n))) (remove seen (edges n)))]
+        (recur (into (pop frontier) nx) (into seen nx)))
+      seen)))
+
+(defn snapshot
+  "What a review needs from one commit, keyed by source path relative to
+  `root`: per executable entity its file, own I/O with one path per kind, the
+  I/O it may reach, its declarations and where they disagree; per form that
+  leads to I/O, the kinds it reaches; and per entity, which of those forms its
+  own I/O passes through."
+  [g root aspects-of-kind executable? deps-of-kind]
+  (let [root (str root "/")
+        rel (fn [[f r]] [(if (str/starts-with? f root) (subs f (count root)) f) r])
+        stop (set (map :node (vals (:registers g))))
+        direct (assoc g :edges (:direct-edges g))
+        ions (io-nodes direct)
+        rows (compare-aspects g aspects-of-kind executable? deps-of-kind)]
+    {:entities (into {} (for [r rows :let [node (get-in g [:registers (:id r) :node])]]
+                          [(:id r) (-> r
+                                       (select-keys [:type :may :declared :undeclared :unreached :by-dep])
+                                       (assoc :node (rel node)
+                                              :own (update-vals (:reached r) #(mapv rel %))))]))
+     :nodes (into {} (for [n ions :when (not (stop n))]
+                       [(rel n) (set (keys (reach direct n stop)))]))
+     :passes (into {} (for [r rows :let [node (get-in g [:registers (:id r) :node])]]
+                        [(:id r) (set (map rel (filter ions (visited direct node stop))))]))}))
