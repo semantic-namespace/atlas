@@ -20,10 +20,15 @@
         (requiring-resolve 'pod.borkdude.clj-kondo/run!))
     (requiring-resolve 'clj-kondo.core/run!)))
 
-(defn analyse [root dirs]
-  (:analysis ((runner) {:lint (mapv #(str (io/file root %)) dirs)
-                        :config {:output {:level :off :canonical-paths true}
-                                 :analysis {:keywords true :protocol-impls true :java-class-usages true}}})))
+(defn analyse
+  "clj-kondo's analysis, with the unresolved-symbol findings added as
+  `:unresolved`, since calls to functions defined at load time show up there."
+  [root dirs]
+  (let [{:keys [analysis findings]} ((runner) {:lint (mapv #(str (io/file root %)) dirs)
+                                                :config {:output {:canonical-paths true}
+                                                         :linters {:unresolved-symbol {:level :warning}}
+                                                         :analysis {:keywords true :protocol-impls true :java-class-usages true}}})]
+    (assoc analysis :unresolved (filter #(= :unresolved-symbol (:type %)) findings))))
 
 (defn- sources [root dirs]
   (for [d dirs f (file-seq (io/file root d))
@@ -72,9 +77,11 @@
   `config`: `:registration-heads` and `:component-heads` regexes matched against
   a form's head symbol, `:sinks` `{kind regex}` over called namespaces,
   `:services` `{service regex}` naming an HTTP call by the namespace making it,
-  `:java-sinks` `{kind regex}` over Java classes used, and `:opaque` a regex of
-  namespaces whose forms are not walked through."
-  [root dirs {:keys [registration-heads component-heads sinks services java-sinks opaque]}]
+  `:java-sinks` `{kind regex}` over Java classes used, `:generators`
+  `{kind regex}` over qualified vars that define functions at load time (a
+  call to a var such a namespace does not visibly define is that kind of I/O),
+  and `:opaque` a regex of namespaces whose forms are not walked through."
+  [root dirs {:keys [registration-heads component-heads sinks services java-sinks generators opaque]}]
   (let [a (analyse root dirs)
         kws-by-pos (into {} (for [{:keys [filename row col ns name]} (:keywords a) :when ns]
                               [[filename row col] (keyword (str ns) name)]))
@@ -129,6 +136,18 @@
                      (let [from (form-at filename row)]
                        (reduce #(update %1 from (fnil conj #{}) %2) m (when (and from to) (sink-kinds filename to)))))
                    {} (:var-usages a))
+        defined (set (map (juxt :ns :name) (:var-definitions a)))
+        generated (reduce (fn [m {:keys [from to name]}]
+                            (reduce (fn [m [kind re]] (if (re-find re (str to "/" name)) (assoc m from kind) m)) m generators))
+                          {} (:var-usages a))
+        io (reduce (fn [m {:keys [filename row to name]}]
+                     (let [kind (generated to) from (form-at filename row)]
+                       (if (and kind from (not (defined [to name]))) (update m from (fnil conj #{}) kind) m)))
+                   io (:var-usages a))
+        io (reduce (fn [m {:keys [filename row]}]
+                     (let [kind (generated (ns-of filename)) from (form-at filename row)]
+                       (if (and kind from) (update m from (fnil conj #{}) kind) m)))
+                   io (:unresolved a))
         io (reduce (fn [m {:keys [filename row class]}]
                      (let [from (form-at filename row)]
                        (reduce #(update %1 from (fnil conj #{}) %2) m
