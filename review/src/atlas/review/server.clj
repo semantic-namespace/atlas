@@ -1,15 +1,20 @@
 (ns atlas.review.server
   (:require [atlas.review.decorate]
+            [atlas.review.deps-bridge :as deps-bridge]
             [atlas.review.registry :as reg]
             [sdiff.serve :as serve]))
 
 (defn -main [& args]
   (let [opt (fn [k d] (or (second (drop-while #(not= k %) args)) d))
-        store (opt "--store" nil) prefix (opt "--prefix" nil)]
-    (when-not (and store prefix)
-      (println "usage: --store <registry store checkout> --prefix <path inside it> [--branch origin/main] [--port 7878] [--host 127.0.0.1]")
+        store (opt "--store" nil) prefix (opt "--prefix" nil)
+        defining (opt "--defining" "(^|/)(register!|bind|init-key)$")]
+    (when (and store (not prefix))
+      (println "usage: [--store <registry store checkout> --prefix <path inside it> [--branch origin/main]] [--defining <regex over the var that defines a keyword>] [--port 7878] [--host 127.0.0.1]")
       (System/exit 2))
-    (reg/configure! store prefix (opt "--branch" "origin/main"))
+    (when store (reg/configure! store prefix (opt "--branch" "origin/main")))
+    (deps-bridge/install! (re-pattern defining))
     (let [{:keys [url]} (serve/start! (parse-long (opt "--port" "7878")) (opt "--host" "127.0.0.1"))]
-      (println (str "atlas review server on " url "  (registry from " store "/" (:prefix @reg/config) "; Ctrl-C to stop)"))
+      (println (str "atlas review server on " url
+                    (if store (str "  (registry from " store "/" (:prefix @reg/config) ")") "  (no registry store)")
+                    (str "  (keyword bridge " defining ")")))
       @(promise))))

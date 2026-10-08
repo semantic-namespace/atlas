@@ -1,15 +1,18 @@
 (ns atlas.review.decorate
   (:require [atlas.ide :as ide]
+            [clojure.set]
             [atlas.registry :as registry]
             [atlas.registry.lookup :as lookup]
             [atlas.review.candidate :as candidate]
             [atlas.review.diff :as diff]
             [atlas.review.registry :as reg]
+            [atlas.review.risk :as risk]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [rewrite-clj.node :as n]
             [sdiff.core :as core]
-            [sdiff.decorate :as d :refer [derived]]))
+            [sdiff.decorate :as d :refer [derived]]
+            [sdiff.group :as group]))
 
 (defonce ^:private attempts (atom {}))
 
@@ -62,36 +65,51 @@
 (defn- state-of [{:keys [cand-v]} d]
   (cond (:new? d) "new in this PR" (:deleted? d) "deleted by this PR" (changed? d) "contract changed" cand-v "contract unchanged" :else "as on main; no candidate version staged"))
 
+(defn- test-case? [props] (= :atlas/test-case (:atlas/type props)))
+
+(defn- cap [xs n] (if (> (count xs) n) (concat (take n xs) [(str "+" (- (count xs) n) " more")]) xs))
+
 (defn declares [ctx id]
   (let [[cid props] (in ctx #(do [(lookup/identity-for id) (lookup/props-for id)]))
-        d (delta ctx id)]
-    (if-not cid
-      (derived (source-name ctx) [:p "declares " (ent id) ", " (if (:deleted? d) "deleted by this PR" "not in the registry")])
-      (derived (if (:cand-v ctx) (str "registry store " (:base-v ctx) " → CI " (:cand-v ctx)) (source-name ctx))
-               [:p "declares " (ent id) " " [:span.mute (name (:atlas/type props))] " · "
-                [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} (state-of ctx d)) "tag-note" "tag-ext")} (state-of ctx d)]]
-               [:div.aspects (interpose " " (for [a (sort-by str cid)]
-                                              [:span.aspect {:class (cond ((:aspects-added d #{}) a) "add" ((:aspects-removed d #{}) a) "del")} (str a)]))]
-               (when-let [c (seq (select-keys props contract-keys))]
-                 [:table.contract [:tbody (for [[k v] c] [:tr [:td (name k)] [:td (interpose " " (for [x (if (coll? v) v [v])] [:code (str x)]))]])]])
-               (when (or (seq (:props-added d)) (seq (:props-removed d)))
-                 [:table.contract.delta
-                  [:tbody (for [[cls tuples] [["del" (sort-by str (:props-removed d))] ["add" (sort-by str (:props-added d))]] [_ attr v] tuples]
-                            [:tr {:class cls} [:td (name attr)] [:td [:code (pr-str v)]]])]])))))
+        d (delta ctx id)
+        state (state-of ctx d)
+        state-tag [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} state) "tag-note" "tag-ext")} state]]
+    (cond
+      (not cid)
+      (derived "contract" [:p "declares " (ent id) ", " (if (:deleted? d) "deleted by this PR" "not in the registry")])
+
+      (test-case? props)
+      (derived "contract" [:p "test case on " (ent (:test-case/target props)) " · " state-tag])
+
+      :else
+      (let [added (sort-by str (:aspects-added d #{})) removed (sort-by str (:aspects-removed d #{}))
+            rows (fn [m] [:table.contract [:tbody (for [[k v] m] [:tr [:td (name k)] [:td (interpose " " (for [x (if (coll? v) v [v])] [:code (str x)]))]])]])]
+        (derived "contract"
+                 [:p "declares " (ent id) " " [:span.mute (name (:atlas/type props))] " · " state-tag " · "
+                  [:span.mute {:title (str/join " " (map str (sort-by str cid)))} (str (count cid) " aspects")]]
+                 (when (or (seq added) (seq removed))
+                   [:div.aspects (interpose " " (concat (for [a added] [:span.aspect.add (str "+" a)])
+                                                        (for [a removed] [:span.aspect.del (str "-" a)])))])
+                 (cond
+                   (:new? d) (when-let [c (seq (select-keys props contract-keys))] (rows c))
+                   (or (seq (:props-added d)) (seq (:props-removed d)))
+                   [:table.contract.delta
+                    [:tbody (for [[cls tuples] [["del" (sort-by str (:props-removed d))] ["add" (sort-by str (:props-added d))]] [_ attr v] tuples]
+                              [:tr {:class cls} [:td (name attr)] [:td [:code (pr-str v)]]])]]))))))
 
 (defn affects [ctx id]
   (in ctx (fn []
             (when-let [props (lookup/props-for id)]
-              (let [produced (concat (:execution-function/response props) (:endpoint/output props))
-                    deps (ide/dependents-of id)
-                    tests (tests-of id)]
-                (derived (source-name ctx)
-                         [:h5 "Declares it as a dependency"] (ids deps)
-                         (when (seq produced)
-                           (list [:h5 "Consumes what it produces"]
-                                 [:ul.ids (for [k produced :let [cs (ide/consumers-of k)]]
-                                            [:li [:code (str k)] " → " (if (seq cs) (interpose ", " (map ent cs)) [:span.mute "nobody"])])]))
-                         [:h5 "Covered by"] (ids tests)))))))
+              (when-not (test-case? props)
+                (let [produced (concat (:execution-function/response props) (:endpoint/output props))
+                      deps (ide/dependents-of id)
+                      consumed (for [k produced :let [cs (ide/consumers-of k)] :when (seq cs)] [k cs])
+                      tests (tests-of id)]
+                  (when (or (seq deps) (seq consumed) (seq tests))
+                    (derived "graph"
+                             (when (seq deps) [:p "used by " (interpose ", " (map #(if (string? %) [:span.mute %] (ent %)) (cap deps 6)))])
+                             (for [[k cs] consumed] [:p [:code (str k)] " → " (interpose ", " (map #(if (string? %) [:span.mute %] (ent %)) (cap cs 4)))])
+                             (when (seq tests) [:p.mute {:title (str/join " " (map str tests))} (str (count tests) " test case" (when (> (count tests) 1) "s") " cover it")])))))))))
 
 (def ^:private kw-re #"(?<![\w:]):([\w.\-]+/[\w.\-!?*+]+)")
 
@@ -114,13 +132,28 @@
                         [:li [:code (str k)] " · produced by " (if (seq p) (interpose ", " (map ent p)) [:span.mute "nobody"])
                          " · consumed by " (if (seq c) (interpose ", " (map ent c)) [:span.mute "nobody"])])])))
 
+(defn- risk-of [{:keys [base cand] :as ctx} id]
+  (let [d (delta ctx id)
+        change (cond (:deleted? d) :deleted (or (:new? d) (changed? d)) :contract :else :code)]
+    (reg/with-version (if (= :deleted change) base (or cand base))
+      (when (lookup/identity-for id) (risk/assess id change)))))
+
+(defn- level-tag [level]
+  [:span.tag {:class (case level :high "tag-del" :medium "tag-ext" "tag-note")} (str (name level) " risk")])
+
+(defn risk-line [ctx id]
+  (when-let [{:keys [level reasons]} (risk-of ctx id)]
+    (derived "graph"
+             [:p (level-tag level) " " (interpose " · " reasons)])))
+
 (defn registry-decoration [ctx file form]
   (when (:base ctx)
     (let [full-form (some #(when (= (:id form) (:id %)) %) (:forms (some (fn [f] (when (= (:path file) (:path f)) f)) (:clj (:report ctx)))))
           id (declared-id form)
           was-id (when (:was full-form) (declared-id {:id (:was full-form)}))
           file* (some #(when (= (:path file) (:path %)) %) (:clj (:report ctx)))]
-      (when-let [parts (seq (remove nil? [(when id (declares ctx id))
+      (when-let [parts (seq (remove nil? [(when id (risk-line ctx id))
+                                          (when id (declares ctx id))
                                           (when (and was-id (not= was-id id)) (derived (source-name ctx) [:p "formerly declared " (ent was-id)]))
                                           (when id (affects ctx id))
                                           (when file* (mentions ctx file* full-form))]))]
@@ -134,6 +167,23 @@
     [:div.ent-annotations
      (for [a as] [:div [:p.mute "on " (ent (:entity (:on a)))] (d/render-annotation a)])]))
 
+(defn risk-summary [{:keys [base cand] :as ctx} report]
+  (when base
+    (let [a (anchors report)
+          {:keys [new changed deleted]} (if cand (diff/summary base cand) {})
+          ids (distinct (concat (keys a) new changed deleted))
+          test-case? (fn [id] (reg/with-version (or cand base) (= :atlas/test-case (:atlas/type (lookup/props-for id)))))
+          rows (->> ids (remove test-case?) (keep #(risk-of ctx %)) (sort-by (juxt (comp - :score) (comp str :id))))
+          link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (ent id)))
+          row (fn [{:keys [id level reasons]}] [:li (level-tag level) " " (link id) " — " (interpose " · " reasons)])
+          [top more] (split-at 5 rows)]
+      (when (seq rows)
+        (derived "registry graph"
+                 [:h5 "Risk, from the system graph"]
+                 [:ul.ids.risk (map row top)]
+                 (when (seq more)
+                   [:details [:summary (str (count more) " more, lower in the ranking")] [:ul.ids.risk (map row more)]]))))))
+
 (defn registry-header [ctx report]
   (when (:base ctx)
     (let [{:keys [base base-v cand cand-v reason]} ctx]
@@ -144,13 +194,19 @@
                   (when reason [:p.mute reason]))
          (let [{:keys [new changed deleted]} (diff/summary base cand)
                a (anchors report)
-               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))]
+               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))
+               target-of (fn [id] (reg/with-version cand (let [p (lookup/props-for id)] (when (test-case? p) (:test-case/target p)))))
+               grouped (fn [xs] (let [{tests true others false} (group-by #(boolean (target-of %)) xs)]
+                                  (concat (for [id others] [:li (link id)])
+                                          (for [[t ts] (group-by target-of tests)]
+                                            [:li {:title (str/join " " (map str ts))} (str (count ts) " test case" (when (> (count ts) 1) "s") " on ") (ent t)]))))]
            (derived (str "registry store " base-v " → CI " cand-v)
                     [:p "Registry: " (count new) " new, " (count changed) " changed, " (count deleted) " deleted"
                      (when (every? empty? [new changed deleted]) " — this PR changes no contract")]
-                    (when (seq new) (list [:h5 "New"] [:ul.ids (for [id new] [:li (link id)])]))
-                    (when (seq changed) (list [:h5 "Changed"] [:ul.ids (for [id changed] [:li (link id)])]))
+                    (when (seq new) (list [:h5 "New"] [:ul.ids (grouped new)]))
+                    (when (seq changed) (list [:h5 "Changed"] [:ul.ids (grouped changed)]))
                     (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
+       (risk-summary ctx report)
        (entity-annotations ctx)))))
 
 (defn validate-entity [ctx on]
@@ -160,9 +216,124 @@
 
 (defn entity-view [ctx id]
   (when (:base ctx)
-    (list (declares ctx id) (affects ctx id))))
+    (list (risk-line ctx id) (declares ctx id) (affects ctx id))))
+
+(defn- declared-by [report]
+  (into {} (for [f (:clj report) :when (= :semantic (:verdict f)) form (:forms f)
+                 :let [id (declared-id form)] :when id]
+             [[(:path f) (d/form-id form)] id])))
+
+(defn- related [ctx id]
+  (in ctx #(when-let [p (lookup/props-for id)]
+             (cond-> (set (remove string? (ide/dependents-of id)))
+               (:test-case/target p) (conj (:test-case/target p))))))
+
+(defn- domains [ctx ids]
+  (in ctx #(sort (distinct (for [id ids a (lookup/identity-for id) :when (= "domain" (namespace a))] (name a))))))
+
+(defn- code-edges [report declared]
+  (let [owner (into {} (map (fn [[k v]] [v k]) declared))]
+    (into (group/call-edges report)
+          (for [[n kws] (group/keyword-mentions report) kw kws
+                :let [m (owner kw)] :when (and m (not= m n))]
+            #{n m}))))
+
+(defn- seed-groups
+  "Forms that declare entities, merged when the registry relates their entities."
+  [ctx declared]
+  (let [owner (into {} (map (fn [[k v]] [v k]) declared))
+        edges (for [[n id] declared r (related ctx id) :let [m (owner r)] :when (and m (not= m n))] #{n m})]
+    (group/components (keys declared) edges)))
+
+(defn- attach
+  "`{node #{group-index}}`: nodes reached from `owner`'s groups in `active`
+  through `edges`, each with every group at the least distance. A node two
+  groups reach equally, or one of the `hubs`, is not walked through."
+  [owner edges hubs active]
+  (let [adj (reduce (fn [m e] (let [[a b] (seq e)] (-> m (update a (fnil conj #{}) b) (update b (fnil conj #{}) a)))) {} edges)]
+    (loop [frontier (keys owner) owner owner]
+      (let [step (reduce (fn [m n]
+                           (let [gs (owner n)]
+                             (if (and (= 1 (count gs)) (active (first gs)) (not (hubs n)))
+                               (reduce (fn [m x] (if (owner x) m (update m x (fnil into #{}) gs))) m (adj n))
+                               m)))
+                         {} frontier)]
+        (if (empty? step) owner (recur (keys step) (merge owner step)))))))
+
+(defn- base-name [path] (-> path (str/replace #".*/" "") (str/replace #"\.clj[cs]?$" "")))
+
+(defn- keep-test-files-together
+  "Each test file's forms go to one group: the group of the source file it is
+  named after, when the PR changes one, else the group most of its forms
+  reached."
+  [owner nodes declared hubs]
+  (let [single (fn [n] (let [gs (owner n)] (when (= 1 (count gs)) (first gs))))
+        majority (fn [ns] (some->> (seq (keep single ns)) frequencies (sort-by (fn [[g c]] [(- c) g])) ffirst))
+        by-file (group-by first nodes)
+        by-name (into {} (for [[p ns] by-file :when (not (group/test-path? p))] [(base-name p) ns]))]
+    (reduce (fn [owner [p ns]]
+              (let [paired (by-name (str/replace (base-name p) #"_test$" ""))
+                    target (or (when paired (majority paired)) (majority ns))]
+                (if-not target
+                  owner
+                  (reduce (fn [o n] (if (or (declared n) (hubs n)) o (assoc o n #{target}))) owner ns))))
+            owner
+            (filter (comp group/test-path? key) by-file))))
+
+(defn by-meaning
+  "One group per changed part of the system: the forms that declare entities
+  the registry relates, with the code that reaches them through calls or
+  keyword mentions, nearest group first. Code two groups reach equally is
+  shared. Code no group reaches joins the group holding most of its file, or
+  is grouped by its own calls. Groups come in order of their highest risk."
+  [ctx report]
+  (if-not (:base ctx)
+    (group/by-calls ctx report)
+    (let [declared (declared-by report)
+          nodes (group/nodes report)
+          new-modules (for [f (:clj report)
+                            :when (and (= "A" (:status f)) (= :semantic (:verdict f)) (not (group/test-path? (:path f)))
+                                       (not-any? #(declared [(:path f) (d/form-id %)]) (:forms f)))]
+                        (mapv #(vector (:path f) (d/form-id %)) (:forms f)))
+          entity-seeds (seed-groups ctx declared)
+          seeds (vec (concat entity-seeds new-modules))
+          edges (code-edges report declared)
+          hubs (apply disj (group/hubs edges 3) (keys declared))
+          start (into {} (for [[i g] (map-indexed vector seeds) n g] [n #{i}]))
+          first-pass (attach start edges hubs (set (range (count entity-seeds))))
+          owner (keep-test-files-together (attach first-pass edges hubs (set (range (count seeds)))) nodes declared hubs)
+          by-group (group-by (fn [n] (let [gs (owner n)] (cond (hubs n) :shared (nil? gs) :none (= 1 (count gs)) (first gs) :else :shared))) nodes)
+          file-home (into {} (for [[path ns] (group-by first (mapcat (fn [i] (map #(vector (first %) i) (by-group i))) (range (count seeds))))]
+                               [path (key (apply max-key val (frequencies (map second ns))))]))
+          {homed true orphans false} (group-by #(boolean (file-home (first %))) (:none by-group))
+          members (reduce (fn [m n] (update m (file-home (first n)) (fnil conj []) n)) (into {} (for [i (range (count seeds))] [i (vec (by-group i))])) homed)
+          members (update-vals members (fn [ns] (filterv (set ns) nodes)))
+          risk (memoize #(risk-of ctx %))
+          test? (fn [id] (in ctx #(test-case? (lookup/props-for id))))
+          lead (fn [ids] (first (sort-by (fn [id] [(if (test? id) 1 0) (- (or (:score (risk id)) -1)) (str id)]) ids)))
+          describe (fn [ns]
+                     (let [ids (keep declared ns)
+                           main (remove test? ids)
+                           top (lead ids)
+                           ds (when (seq main) (sort (reduce clojure.set/intersection (map #(set (domains ctx [%])) main))))]
+                       (str (count ns) " form" (when (> (count ns) 1) "s")
+                            (if (seq main) (str ", " (count main) " entit" (if (= 1 (count main)) "y" "ies")) ", a new namespace outside the registry")
+                            (when (> (count ids) (count main)) (str " and " (- (count ids) (count main)) " test case" (when (> (- (count ids) (count main)) 1) "s")))
+                            (when (seq ds) (str " · " (str/join ", " (take 3 ds))))
+                            (when-let [l (some-> top risk :level name)] (str " · " l " risk")))))
+          weight (fn [ns] (reduce max -1 (keep #(some-> (declared %) risk :score) ns)))]
+      (concat
+       (for [[_ ns] (sort-by (fn [[_ ns]] [(- (weight ns)) (- (count ns))]) members) :when (seq ns)]
+         (group/section (str "Around " (or (lead (keep declared ns)) (some #(when (str/starts-with? (second %) "ns ") (subs (second %) 3)) ns) (second (first ns))))
+                        (describe ns) ns))
+       (when-let [sh (seq (:shared by-group))]
+         [(group/section "Shared by several groups" "Changed forms used from three or more source files, or reached equally by two groups." sh)])
+       (when (seq orphans)
+         (group/by-calls ctx (assoc report :clj (for [f (:clj report)]
+                                                  (update f :forms (fn [fs] (filterv #((set orphans) [(:path f) (d/form-id %)]) fs)))))))))))
 
 (d/use-context! context)
+(d/add-grouper! :meaning "meaning" "registry store + clj-kondo" by-meaning)
 (d/add-entity-renderer! ::registry entity-view)
 (d/add-form-decorator! ::registry registry-decoration)
 (d/add-header-decorator! ::registry registry-header)

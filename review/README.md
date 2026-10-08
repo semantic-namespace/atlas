@@ -11,7 +11,12 @@ top:
   cases cover it;
 - the data keys the changed code mentions, with their producers and consumers;
 - a header listing every entity the PR's registry diff touched, linked to the
-  form that changed it, or marked when no form in the diff did.
+  form that changed it, or marked when no form in the diff did;
+- a risk ranking from the system graph: for each changed entity, whether its
+  contract changed, how many entities depend on it, which entry points
+  (endpoints, MCP tools, workflows, prompts) it reaches, which services it
+  talks to, whether it writes, and whether any test case covers it or what
+  depends on it. Each level shows the reasons that produced it.
 
 All of it answers through `atlas.ide` with the stored version bound as the
 registry. Inferred annotations, from a reviewer or a model, render apart and
