@@ -8,7 +8,7 @@
     (try
       (registry/register! :fn.t/core :atlas/execution-function #{:services/mail :domain/t}
                           {:execution-function/context [] :execution-function/response [:t/out] :execution-function/deps #{}})
-      (registry/register! :endpoint.t/api :atlas/yorba-endpoint #{:domain/t :endpoint/t}
+      (registry/register! :endpoint.t/api :atlas/endpoint #{:domain/t :endpoint/t}
                           {:endpoint/deps [:fn.t/core]})
       (registry/register! :fn.t/leaf :atlas/execution-function #{:domain/t :leaf/t}
                           {:execution-function/context [] :execution-function/response [] :execution-function/deps #{}})
