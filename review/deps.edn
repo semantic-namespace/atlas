@@ -3,7 +3,7 @@
         io.github.semantic-namespace/atlas {:local/root "../core"}
         io.github.semantic-namespace/atlas-store {:local/root "../store"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
-                                          :git/sha "8a3f37c9a786d3210d577329eb42e1eb485afb52"}}
+                                          :git/sha "65aa79aaf7e503fcbd75139ce4f7cf6294602325"}}
  :aliases {:serve {:main-opts ["-m" "atlas.review.server"]}
            :test {:extra-paths ["test"]
-                  :main-opts ["-e" "(require 'atlas.review.diff-test 'atlas.review.risk-test 'atlas.review.group-test 'atlas.review.reach-test 'atlas.review.deps-bridge-test) (let [{:keys [fail error]} (clojure.test/run-tests 'atlas.review.diff-test 'atlas.review.risk-test 'atlas.review.group-test 'atlas.review.reach-test 'atlas.review.deps-bridge-test)] (System/exit (if (pos? (+ fail error)) 1 0)))"]}}}
+                  :main-opts ["-e" "(require 'atlas.review.diff-test 'atlas.review.risk-test 'atlas.review.group-test 'atlas.review.reach-test 'atlas.review.deps-bridge-test 'atlas.review.ownership-test) (let [{:keys [fail error]} (clojure.test/run-tests 'atlas.review.diff-test 'atlas.review.risk-test 'atlas.review.group-test 'atlas.review.reach-test 'atlas.review.deps-bridge-test 'atlas.review.ownership-test)] (System/exit (if (pos? (+ fail error)) 1 0)))"]}}}
