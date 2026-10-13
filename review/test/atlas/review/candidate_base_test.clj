@@ -30,15 +30,16 @@
   (git! dir date "commit" "-q" "--allow-empty" "-m" msg)
   (git! dir nil "rev-parse" "HEAD"))
 
-(defn- record! [dir date reg src]
+(defn- record! [dir date reg src & [subject]]
   (let [root (io/file dir "registries" "app")]
     (doseq [f (reverse (file-seq root))] (io/delete-file f true))
     (doseq [[p content] (canon/registry->files reg)]
       (let [f (io/file root p)] (io/make-parents f) (spit f content))))
   (git! dir nil "add" "-A")
-  (git! dir date "commit" "-q" "-m" (str "registry: " (subs src 0 7)) "-m" (str "Source-Sha: " src)))
+  (git! dir date "commit" "-q" "-m" (or subject (str "registry: " (subs src 0 7))) "-m" (str "Source-Sha: " src)))
 
 (def ^:dynamic *project* nil)
+(def ^:dynamic *store* nil)
 (def ^:dynamic *shas* nil)
 
 (defn- tmp-dir [prefix] (.toFile (java.nio.file.Files/createTempDirectory prefix (make-array java.nio.file.attribute.FileAttribute 0))))
@@ -65,6 +66,7 @@
       (let [saved @reg/config]
         (reg/configure! (str store) "registries/app" "main")
         (try (binding [*project* project
+                       *store* store
                        *shas* {:p0 p0 :p1 p1 :p2 p2 :p3 p3 :head head}
                        candidate/*dir* (io/file tmp "candidates")]
                (t))
@@ -106,13 +108,13 @@
 
 (defn- page
   "The context and header text of the PR's page, with `gh` answered by `fake-gh`."
-  [opts]
+  [{:keys [against] :as opts}]
   (let [head (*shas* :head)
         report {:base (*shas* :p2) :head head :pr {:repo "owner/repo" :num 9 :head head} :clj []}]
     (reset! @#'candidate/known {})
     (decorate/forget-attempt! 9 head)
     (with-redefs [candidate/gh (fake-gh opts)]
-      (binding [d/*params* {}]
+      (binding [d/*params* (if against {"against" against} {})]
         (let [ctx (decorate/context report)]
           [ctx (str/join "\n" (map d/hiccup->text (decorate/registry-header ctx report)))])))))
 
@@ -171,3 +173,73 @@
   (is (= (version-of :p1) (reg/recorded-by "main" "2026-10-13T14:26:59+02:00")))
   (is (nil? (reg/recorded-by "main" "2026-10-13T07:59:59Z")))
   (is (= [(version-of :p3)] (reg/since "main" (version-of :p1)))))
+
+(defn- deploy!
+  "Commits `branch` in the project off commit `from` (main itself when `branch`
+  is main) and records `reg` as what dev runs, deployed from that commit."
+  [branch from reg]
+  (let [src (if (= "main" branch)
+              (*shas* from)
+              (do (git! *project* nil "checkout" "-q" "-b" branch (*shas* from))
+                  (let [c (commit! *project* "2026-10-13T13:00:00Z" branch)]
+                    (git! *project* nil "checkout" "-q" "main")
+                    c)))]
+    (git! *store* nil "checkout" "-q" "--orphan" "deployed/dev")
+    (record! *store* "2026-10-13T13:05:00Z" reg src (str "registry: " (subs src 0 7) " deployed to dev from " branch))
+    (git! *store* nil "checkout" "-q" "-f" "main")
+    src))
+
+(def deployed-ahead (registry :fn/x :fn/y :fn/w))
+
+(defn- risk-rows [h] (filter #(re-find #"^- (\S+ risk|context) " %) (str/split-lines h)))
+
+(defn- against-dev [opts] (page (merge {:created-at "2026-10-13T09:01:00Z" :meta {:base-sha (*shas* :p2)} :against "deployed/dev"} opts)))
+
+(deftest an-environment-older-than-the-base-shows-what-was-merged-since-its-deploy
+  (deploy! "main" :p0 (registry :fn/x))
+  (let [[ctx h] (against-dev {})]
+    (is (= :descends (get-in ctx [:against :step])))
+    (is (= before-merge (:merge ctx)))
+    (is (str/includes? h "Merged since dev's deploy, not there yet: 1 new, 0 changed, 0 deleted"))
+    (is (str/includes? h "merged, not yet on dev"))
+    (is (re-find #":fn/gone — .* · merged since dev's deploy, not this PR" h))
+    (is (not (str/includes? h "Differs between")))))
+
+(deftest an-environment-deployed-from-a-branch-ahead-of-the-base-is-not-merged-since
+  (let [f1 (deploy! "feature" :p3 deployed-ahead)
+        [ctx h] (against-dev {})]
+    (is (= :behind (get-in ctx [:against :step])))
+    (is (= f1 (get-in ctx [:against :source-sha])))
+    (is (= before-merge (:merge ctx)) "the PR's base, not the newer main the environment holds")
+    (is (str/includes? h "Differs between dev and this PR's base: dev runs feature; this PR is built on an older main: 1 new, 0 changed, 2 deleted"))
+    (is (str/includes? h ": older than what dev runs"))
+    (is (not (str/includes? h "Merged since")))
+    (is (not (str/includes? h "merged since dev's deploy")))
+    (is (not (str/includes? h "merged, not yet on dev")))
+    (is (str/includes? h "This PR: 1 new, 0 changed, 0 deleted"))
+    (doseq [id [":fn/y" ":fn/w" ":fn/gone"]]
+      (is (re-find (re-pattern (str "context " id " — differs between dev and this PR's base, not this PR")) h) id))
+    (is (re-find #"^- \S+ risk :fn/z " (first (risk-rows h))) "this PR's own entity first, the environment's differences after it")
+    (is (every? #(str/starts-with? % "- context ") (rest (risk-rows h))))
+    (is (str/includes? (d/hiccup->text (decorate/declares ctx :fn/y)) "in what dev runs, not in this PR's base; not this PR"))
+    (is (str/includes? (d/hiccup->text (decorate/declares ctx :fn/z)) "new in this PR"))))
+
+(deftest an-environment-deployed-from-a-branch-that-diverged-from-the-base-is-not-merged-since
+  (deploy! "side" :p0 deployed-ahead)
+  (let [[ctx h] (against-dev {})]
+    (is (= :diverged (get-in ctx [:against :step])))
+    (is (str/includes? h "Differs between dev and this PR's base: dev runs side; this PR is built on a main that diverged from it: 1 new, 0 changed, 2 deleted"))
+    (is (str/includes? h ": diverged from what dev runs"))
+    (is (not (str/includes? h "merged since dev's deploy")))
+    (is (re-find #"context :fn/y — differs between dev and this PR's base, not this PR" h))))
+
+(deftest when-ancestry-cannot-be-told-the-environment-step-is-only-a-difference
+  (deploy! "feature" :p3 deployed-ahead)
+  (let [[ctx h] (against-dev {:compare-fails? true})]
+    (is (nil? (get-in ctx [:against :step])))
+    (is (= before-merge (:merge ctx)))
+    (is (str/includes? h "Differs between dev and this PR's base: 1 new, 0 changed, 2 deleted"))
+    (is (not (str/includes? h "dev runs feature")))
+    (is (str/includes? h ": not known to be older or newer than what dev runs"))
+    (is (not (str/includes? h "merged since dev's deploy")))
+    (is (re-find #"context :fn/w — differs between dev and this PR's base, not this PR" h))))

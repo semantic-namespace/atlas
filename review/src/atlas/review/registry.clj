@@ -92,6 +92,29 @@
         t (if-let [v (recorded-by branch t)] {:version v :how :committed} {:version (oldest branch) :how :oldest})
         :else {:version (latest branch) :how :latest}))))
 
+(defn- position [branch sha]
+  (first (keep-indexed (fn [i v] (when (built-from? sha v) i)) (versions branch))))
+
+(defn relation
+  "How version `to` of `line` stands to version `from` of another branch:
+  `:descends` when `from` was built from `to`'s commit or an ancestor of it,
+  `:behind` when `to`'s commit is an ancestor of `from`'s, `:diverged` when
+  neither, nil when that cannot be told. Versions both recorded on `line` are
+  ordered by the store; others are asked of `ancestor?`."
+  [line from to ancestor?]
+  (let [a (or (:source-sha from) (:source from))
+        b (or (:source-sha to) (:source to))]
+    (when (and a b)
+      (if (or (str/starts-with? a b) (str/starts-with? b a))
+        :descends
+        (let [i (position line a) j (position line b)]
+          (if (and i j)
+            (if (>= i j) :descends :behind)
+            (case (ancestor? a b)
+              true :descends
+              false (case (ancestor? b a) true :behind false :diverged nil)
+              nil)))))))
+
 (defn base-recorded-by
   "The version on `branch` to compare a registry built at time `t` with, when
   the commit it was built on is unknown: the newest recorded by then."
