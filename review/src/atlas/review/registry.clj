@@ -47,6 +47,59 @@
   ([] (latest (:branch @config)))
   ([branch] (first (versions branch))))
 
+(defn oldest [branch] (last (versions branch)))
+
+(defn- instant [t] (.toInstant (java.time.OffsetDateTime/parse t)))
+
+(defn recorded-by
+  "The newest version on `branch` the store recorded at or before `t`, an
+  ISO-8601 time, or nil."
+  [branch t]
+  (let [t (instant t)]
+    (some #(when-not (.isAfter (instant (:date %)) t) %) (versions branch))))
+
+(defn since
+  "The versions on `branch` recorded after `v`, newest first."
+  [branch v]
+  (take-while #(not= (:commit v) (:commit %)) (versions branch)))
+
+(defn- newest-within
+  "The newest version on `branch` built from `sha` or an ancestor of it, asking
+  `ancestor?` about each version newest first; `:none` when no version is that
+  old, nil as soon as `ancestor?` cannot tell."
+  [branch sha ancestor?]
+  (reduce (fn [none v]
+            (let [built (or (:source-sha v) (:source v))]
+              (case (when built (ancestor? built sha)) true (reduced v) false none (reduced nil))))
+          :none (versions branch)))
+
+(defn base-for
+  "The version on `branch` to compare a registry built on project commit `sha`
+  with, as `{:version v :how how}`. How is `:exact` when the store recorded
+  `sha` itself; `:ancestor` for the newest version built from an ancestor of
+  it, by `ancestor?` (true, false, or nil when it cannot tell); `:committed`
+  for the newest recorded by `sha`'s commit time, from `committed-at`, when
+  ancestry is unknown; `:oldest` when the store has no version that old;
+  `:latest` when nothing places `sha`."
+  [branch sha {:keys [ancestor? committed-at]}]
+  (if-let [v (version-for branch sha)]
+    {:version v :how :exact}
+    (let [found (when sha (newest-within branch sha ancestor?))
+          t (when (and sha (nil? found)) (committed-at sha))]
+      (cond
+        (map? found) {:version found :how :ancestor}
+        (= :none found) {:version (oldest branch) :how :oldest}
+        t (if-let [v (recorded-by branch t)] {:version v :how :committed} {:version (oldest branch) :how :oldest})
+        :else {:version (latest branch) :how :latest}))))
+
+(defn base-recorded-by
+  "The version on `branch` to compare a registry built at time `t` with, when
+  the commit it was built on is unknown: the newest recorded by then."
+  [branch t]
+  (if-let [v (recorded-by branch t)]
+    {:version v :how :run-time}
+    {:version (oldest branch) :how :oldest}))
+
 (defonce ^:private fetched (atom {}))
 
 (defn refresh!

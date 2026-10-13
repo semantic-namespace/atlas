@@ -26,12 +26,40 @@
 
 (defn- stored [v] (str (subs (:commit v) 0 7) (when-let [s (or (:source-sha v) (:source v))] (str " (built from " (subs s 0 (min 12 (count s))) ")"))))
 
+(defn- short-sha [s] (when s (subs s 0 (min 7 (count s)))))
+
+(defn- choose-base
+  "The version on `line` the candidate is compared with: the newest recorded
+  at or before the commit CI built it on, named by the artifact's sidecar;
+  without one, the newest recorded by the time the run started; without a
+  candidate, the newest at or before the PR's merge base."
+  [line report {:keys [registry built-on run-at]}]
+  (let [ancestry (candidate/ancestry (get-in report [:pr :repo]))]
+    (cond
+      (:base-sha built-on) (assoc (reg/base-for line (:base-sha built-on) ancestry) :sha (:base-sha built-on) :of :ci)
+      (and registry run-at) (assoc (reg/base-recorded-by line run-at) :run-at run-at)
+      :else (assoc (reg/base-for line (:base report) ancestry) :sha (:base report) :of :merge-base))))
+
+(defn- base-note
+  "How the base version was chosen, after its label."
+  [{:keys [version how sha of run-at]}]
+  (let [whose (if (= :ci of) "the PR's base" "this PR's merge base")
+        built (short-sha (or (:source-sha version) (:source version) (:commit version)))
+        inferred (when run-at (str " (inferred from the CI run's start " run-at ")"))]
+    (case how
+      :exact (str " · " whose)
+      (:ancestor :committed) (str " · registry unchanged from " built " to " whose " " (short-sha sha) (when (= :committed how) ", by commit time"))
+      :run-time (str " · registry unchanged from " built " to the PR's base" inferred)
+      :oldest (list " " [:span.tag.tag-ext "the store has no version as old as this PR's base; comparing with the oldest one"] inferred)
+      :latest (str " · " whose " could not be placed in the store; comparing with the newest"))))
+
 (defn context
-  "The registries a report is read against. The base is the version recorded
-  on the configured branch for the PR's merge base, or the newest there. With
-  an `against` request parameter naming another store branch, the base is the
-  newest version on that branch, and the merge-base version is kept as `:merge`
-  so the header can tell what was merged since from what the PR changes."
+  "The registries a report is read against. The base is the newest version
+  recorded on the configured branch at or before the commit the candidate was
+  built on (see `choose-base`), with `:stale` the versions recorded after it.
+  With an `against` request parameter naming another store branch, the base is
+  the newest version on that branch, and that version is kept as `:merge` so
+  the header can tell what was merged since from what the PR changes."
   [report]
   (if-not (:store @reg/config)
     {:report report}
@@ -39,17 +67,19 @@
           asked (not-empty (get d/*params* "against"))
           ref (when asked (reg/resolve-against asked))
           env-v (when (and ref (not= ref line)) (reg/latest ref))
-          merge-v (reg/version-for line (:base report))
-          base-v (or merge-v (reg/latest line))
-          base-label (str (reg/label base-v) (when-not merge-v ", the newest recorded; the merge base itself was not recorded"))
+          {:keys [registry label reason] :as cand} (candidate-for (:pr report))
+          {base-v :version :as choice} (choose-base line report cand)
+          base-label (reg/label base-v)
+          note (base-note choice)
           problem (cond (and asked (not ref)) (str "against=" asked ": the registry store has no such branch; compared against " line " instead")
-                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " ref " holds no recorded registry; compared against " line " instead"))
-          {:keys [registry label reason]} (candidate-for (:pr report))]
-      (cond-> {:report report :line line :exact? (boolean merge-v)
-               :base-v base-label
+                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " ref " holds no recorded registry; compared against " line " instead"))]
+      (cond-> {:report report :line line
+               :base-v base-label :base-note note
                :base (reg/registry-at (:commit base-v))
                :cand-v label :reason reason}
-        registry (assoc :cand registry)
+        registry (assoc :cand registry
+                        :stale (reg/since line base-v)
+                        :built-on (or (some-> (:base-sha (:built-on cand)) short-sha) (when-let [t (:run-at cand)] (str line " as of " t))))
         problem (assoc :against-problem problem)
         env-v (assoc :against (assoc env-v :ref ref :name (or (:env env-v) asked))
                      :merge-v base-label :merge (reg/registry-at (:commit base-v))
@@ -239,18 +269,29 @@
           (when (seq changed) (list [:h5 "Changed"] [:ul.ids (grouped changed)]))
           (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
 
+(defn- stale-note [{:keys [stale built-on line]}]
+  (when (seq stale)
+    (let [n (count stale)]
+      [:p [:span.tag.tag-ext "stale candidate"]
+       " Built against " built-on "; " n " registry change" (when (> n 1) "s") " merged since"
+       [:span.mute {:title (str/join " " (map :subject stale))}
+        " (" (str/join ", " (cap (map #(short-sha (or (:source-sha %) (:source %) (:commit %))) stale) 5)) ")"]
+       ". Re-run CI to see this PR against current " [:code line] "."])))
+
 (defn- base-line
   "Which registry the page is compared against, and how it was chosen."
-  [{:keys [line base-v exact? against merge-v cand-v]}]
+  [{:keys [line base-v base-note against merge-v cand-v] :as ctx}]
   (if-not against
-    [:p "base " [:code line] " @ " base-v (when exact? " · this PR's merge base")]
+    (list [:p "base " [:code line] " @ " base-v base-note]
+          (stale-note ctx))
     (let [{:keys [ref name from date]} against
           off-line? (and from (not= from line) (not (str/ends-with? line (str "/" from))))]
       (list [:p "base " [:code ref] " @ " base-v " · what " name " runs"
-             (when from (list ", deployed from " [:code from])) (when date (str ", recorded " date))
+             (when (and from (not off-line?)) (list ", deployed from " [:code from])) (when date (str ", recorded " date))
              (when off-line? (list " " [:span.tag.tag-ext (str "deployed from " from ", not " line)]))]
-            [:p "→ " [:code line] " @ " merge-v " · this PR's merge base: merged, not yet on " name]
-            [:p "→ this PR · " (if cand-v (str "CI " cand-v) "no registry for its head")]))))
+            [:p "→ " [:code line] " @ " merge-v base-note ": merged, not yet on " name]
+            [:p "→ this PR · " (if cand-v (str "CI " cand-v) "no registry for its head")]
+            (stale-note ctx)))))
 
 (defn registry-header [ctx report]
   (when (:base ctx)
