@@ -193,3 +193,13 @@
         (is (not (str/includes? on-line ", not main")))
         (is (re-find #"what staging runs, recorded \S+ deployed from hotfix, not main" off-line))
         (is (not (str/includes? off-line ", deployed from hotfix")))))))
+
+(deftest the-header-offers-the-line-and-each-environment
+  (with-candidate
+    (fn []
+      (let [plain (decorate/against-switch (context {}) report)
+            on-dev (decorate/against-switch (context {"against" "deployed/dev"}) report)
+            links (fn [h] (set (map second (re-seq #"href \"([^\"]+)\"" (pr-str h)))))]
+        (is (= "compare with: main · dev · staging" (d/hiccup->text plain)))
+        (is (= #{"/pr?ref=owner%2Frepo%237&against=deployed%2Fdev" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links plain)))
+        (is (= #{"/pr?ref=owner%2Frepo%237" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links on-dev)))))))

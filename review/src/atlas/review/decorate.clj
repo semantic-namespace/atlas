@@ -5,6 +5,7 @@
             [atlas.registry.lookup :as lookup]
             [atlas.review.candidate :as candidate]
             [atlas.review.diff :as diff]
+            [atlas.review.env :as env]
             [atlas.review.registry :as reg]
             [atlas.review.risk :as risk]
             [clojure.edn :as edn]
@@ -336,10 +337,26 @@
       :diverged (str "Differs between " name " and this PR's base: " runs "; this PR is built on " (a-or-an line) " that diverged from it")
       (str "Differs between " name " and this PR's base"))))
 
+(defn against-switch
+  "Links to this PR read against the line and against each environment the
+  store records, the current one unlinked."
+  [ctx report]
+  (let [{:keys [repo num]} (:pr report)
+        envs (keys (env/recorded))
+        here (some-> ctx :against :ref reg/shown)
+        href (fn [against] (d/with-params (str "/pr?ref=" (java.net.URLEncoder/encode (str repo "#" num) "UTF-8"))
+                             (cond-> (dissoc (or d/*params* {}) "against") against (assoc "against" against))))
+        choice (fn [against label] (if (= against here) [:strong label] [:a {:href (href against)} label]))]
+    (when (and repo num (seq envs))
+      [:p.against-switch "compare with: "
+       (interpose " · " (cons (choice nil (reg/shown (:line ctx)))
+                              (for [e envs] (choice (str "deployed/" e) e))))])))
+
 (defn registry-header [ctx report]
   (when (:base ctx)
     (let [{:keys [base base-v cand cand-v reason against merge merge-v against-problem]} ctx]
       (list
+       (against-switch ctx report)
        (when against-problem (d/problem against-problem))
        (cond
          against
