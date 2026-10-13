@@ -36,6 +36,37 @@ through `gh` from the workflow run's artifact (`SDIFF_REGISTRY_WORKFLOW` and
 `registry`). When CI has no run for the head, the page says so and shows
 entities as on main.
 
+### Comparing against another store branch
+
+A store can hold more than the line `--branch` names: a `deployed/<env>`
+branch with one commit per deploy (subject `registry: <sha> deployed to <env>
+from <git branch>`, trailer `Source-Sha: <full sha>`), for example. The
+`against` request parameter picks one of them as the base:
+
+```
+/pr?ref=owner/repo#12&against=deployed/dev
+```
+
+From the MCP tools, pass `params` `"against=deployed/dev"`. The header and
+the text output always name the base used.
+
+- Absent, or naming the configured branch (`main` finds `origin/main`): the
+  base is chosen as above.
+- Another branch of the store: the base is the newest version on it, what that
+  environment runs. The version for the PR's merge base on the configured
+  branch is read too, and the header shows the two steps,
+  `<env> → merge base (merged, not yet there) → this PR`, each with its own
+  new, changed and deleted entities. Per-form states and risk rows say which
+  step a difference belongs to.
+- A name that is not a branch of the store: the header says so and the base
+  is chosen as when absent.
+
+The value is matched against the store's own branches (`git for-each-ref`
+over `refs/heads` and `refs/remotes`; `deployed/dev` finds
+`origin/deployed/dev` when only the remote has it) and never reaches git
+otherwise. Resolving it fetches the store, at most once a minute per branch,
+since nothing else refreshes the checkout.
+
 A view over a pull request of the atlas repo itself, with the registry
 decoration of an entity the view names:
 

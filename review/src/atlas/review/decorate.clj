@@ -24,17 +24,36 @@
 
 (defn forget-attempt! [num head] (swap! attempts dissoc [num head]))
 
-(defn context [report]
+(defn- stored [v] (str (subs (:commit v) 0 7) (when-let [s (or (:source-sha v) (:source v))] (str " (built from " (subs s 0 (min 12 (count s))) ")"))))
+
+(defn context
+  "The registries a report is read against. The base is the version recorded
+  on the configured branch for the PR's merge base, or the newest there. With
+  an `against` request parameter naming another store branch, the base is the
+  newest version on that branch, and the merge-base version is kept as `:merge`
+  so the header can tell what was merged since from what the PR changes."
+  [report]
   (if-not (:store @reg/config)
     {:report report}
-    (let [base-v (or (reg/version-for (:base report)) (reg/latest))
-          exact? (boolean (reg/version-for (:base report)))
+    (let [line (:branch @reg/config)
+          asked (not-empty (get d/*params* "against"))
+          ref (when asked (reg/resolve-against asked))
+          env-v (when (and ref (not= ref line)) (reg/latest ref))
+          merge-v (reg/version-for line (:base report))
+          base-v (or merge-v (reg/latest line))
+          base-label (str (reg/label base-v) (when-not merge-v ", the newest recorded; the merge base itself was not recorded"))
+          problem (cond (and asked (not ref)) (str "against=" asked ": the registry store has no such branch; compared against " line " instead")
+                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " ref " holds no recorded registry; compared against " line " instead"))
           {:keys [registry label reason]} (candidate-for (:pr report))]
-      (cond-> {:report report
-               :base-v (str (reg/label base-v) (when-not exact? ", the newest recorded; the merge base itself was not recorded"))
+      (cond-> {:report report :line line :exact? (boolean merge-v)
+               :base-v base-label
                :base (reg/registry-at (:commit base-v))
                :cand-v label :reason reason}
-        registry (assoc :cand registry)))))
+        registry (assoc :cand registry)
+        problem (assoc :against-problem problem)
+        env-v (assoc :against (assoc env-v :ref ref :name (or (:env env-v) asked))
+                     :merge-v base-label :merge (reg/registry-at (:commit base-v))
+                     :base-v (stored env-v) :base (reg/registry-at (:commit env-v)))))))
 
 (defn- in [{:keys [cand base]} f] (reg/with-version (or cand base) (f)))
 
@@ -62,8 +81,24 @@
 (defn- tests-of [id]
   (sort (for [[_ e] (registry/current-registry) :when (and (= :atlas/test-case (:atlas/type e)) (= id (:test-case/target e)))] (:atlas/dev-id e))))
 
-(defn- state-of [{:keys [cand-v]} d]
-  (cond (:new? d) "new in this PR" (:deleted? d) "deleted by this PR" (changed? d) "contract changed" cand-v "contract unchanged" :else "as on main; no candidate version staged"))
+(defn- state-of
+  "`[text quiet?]`, the state of `id` against the base. Against an environment
+  each difference is put on its step: merged since the deploy, or this PR."
+  [{:keys [cand cand-v merge base against]} id d]
+  (let [env (:name against)
+        since (str "since " env "'s deploy (merged, not there yet)")
+        own (when (and against cand) (diff/entity-delta merge cand id))
+        drift (when against (diff/entity-delta base merge id))]
+    (cond
+      (:new? d) [(if (or (not against) (:new? own)) "new in this PR" (str "new " since))]
+      (:deleted? d) [(if (or (not against) (:deleted? own)) "deleted by this PR" (str "deleted " since))]
+      (changed? d) [(cond (not against) "contract changed"
+                          (and (changed? own) (changed? drift)) (str "contract changed by this PR and " since)
+                          (changed? own) "contract changed by this PR"
+                          :else (str "contract changed " since))]
+      cand-v ["contract unchanged" true]
+      against [(str "as " env " runs it; no candidate version staged") true]
+      :else ["as on main; no candidate version staged" true])))
 
 (defn- test-case? [props] (= :atlas/test-case (:atlas/type props)))
 
@@ -72,11 +107,11 @@
 (defn declares [ctx id]
   (let [[cid props] (in ctx #(do [(lookup/identity-for id) (lookup/props-for id)]))
         d (delta ctx id)
-        state (state-of ctx d)
-        state-tag [:span.tag {:class (if (contains? #{"contract unchanged" "as on main; no candidate version staged"} state) "tag-note" "tag-ext")} state]]
+        [state quiet?] (state-of ctx id d)
+        state-tag [:span.tag {:class (if quiet? "tag-note" "tag-ext")} state]]
     (cond
       (not cid)
-      (derived "contract" [:p "declares " (ent id) ", " (if (:deleted? d) "deleted by this PR" "not in the registry")])
+      (derived "contract" [:p "declares " (ent id) ", " (if (:deleted? d) state "not in the registry")])
 
       (test-case? props)
       (derived "contract" [:p "test case on " (ent (:test-case/target props)) " · " state-tag])
@@ -167,15 +202,17 @@
     [:div.ent-annotations
      (for [a as] [:div [:p.mute "on " (ent (:entity (:on a)))] (d/render-annotation a)])]))
 
-(defn risk-summary [{:keys [base cand] :as ctx} report]
+(defn risk-summary [{:keys [base cand merge against] :as ctx} report]
   (when base
     (let [a (anchors report)
           {:keys [new changed deleted]} (if cand (diff/summary base cand) {})
+          own (when (and against cand) (set (apply concat (vals (diff/summary merge cand)))))
+          step (fn [id] (when (and own (not (own id))) [:span.mute (str " · merged since " (:name against) "'s deploy, not this PR")]))
           ids (distinct (concat (keys a) new changed deleted))
           test-case? (fn [id] (reg/with-version (or cand base) (= :atlas/test-case (:atlas/type (lookup/props-for id)))))
           rows (->> ids (remove test-case?) (keep #(risk-of ctx %)) (sort-by (juxt (comp - :score) (comp str :id))))
           link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (ent id)))
-          row (fn [{:keys [id level reasons]}] [:li (level-tag level) " " (link id) " — " (interpose " · " reasons)])
+          row (fn [{:keys [id level reasons]}] [:li (level-tag level) " " (link id) " — " (interpose " · " reasons) (step id)])
           [top more] (split-at 5 rows)]
       (when (seq rows)
         (derived "registry graph"
@@ -184,28 +221,70 @@
                  (when (seq more)
                    [:details [:summary (str (count more) " more, lower in the ranking")] [:ul.ids.risk (map row more)]]))))))
 
+(defn- counts [{:keys [new changed deleted]}]
+  (str (count new) " new, " (count changed) " changed, " (count deleted) " deleted"))
+
+(defn- entity-lists
+  "The new, changed and deleted entities of `summary`, each linked to the form
+  that declares it; test cases are read from registry `to`."
+  [report to {:keys [new changed deleted]}]
+  (let [a (anchors report)
+        link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))
+        target-of (fn [id] (reg/with-version to (let [p (lookup/props-for id)] (when (test-case? p) (:test-case/target p)))))
+        grouped (fn [xs] (let [{tests true others false} (group-by #(boolean (target-of %)) xs)]
+                           (concat (for [id others] [:li (link id)])
+                                   (for [[t ts] (group-by target-of tests)]
+                                     [:li {:title (str/join " " (map str ts))} (str (count ts) " test case" (when (> (count ts) 1) "s") " on ") (ent t)]))))]
+    (list (when (seq new) (list [:h5 "New"] [:ul.ids (grouped new)]))
+          (when (seq changed) (list [:h5 "Changed"] [:ul.ids (grouped changed)]))
+          (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
+
+(defn- base-line
+  "Which registry the page is compared against, and how it was chosen."
+  [{:keys [line base-v exact? against merge-v cand-v]}]
+  (if-not against
+    [:p "base " [:code line] " @ " base-v (when exact? " · this PR's merge base")]
+    (let [{:keys [ref name from date]} against
+          off-line? (and from (not= from line) (not (str/ends-with? line (str "/" from))))]
+      (list [:p "base " [:code ref] " @ " base-v " · what " name " runs"
+             (when from (list ", deployed from " [:code from])) (when date (str ", recorded " date))
+             (when off-line? (list " " [:span.tag.tag-ext (str "deployed from " from ", not " line)]))]
+            [:p "→ " [:code line] " @ " merge-v " · this PR's merge base: merged, not yet on " name]
+            [:p "→ this PR · " (if cand-v (str "CI " cand-v) "no registry for its head")]))))
+
 (defn registry-header [ctx report]
   (when (:base ctx)
-    (let [{:keys [base base-v cand cand-v reason]} ctx]
+    (let [{:keys [base base-v cand cand-v reason against merge merge-v against-problem]} ctx]
       (list
-       (if-not cand
+       (when against-problem (d/problem against-problem))
+       (cond
+         against
+         (let [drift (diff/summary base merge)
+               own (when cand (diff/summary merge cand))
+               env (:name against)]
+           (derived (str "registry store " (:ref against) " " base-v " → " (:line ctx) " " merge-v (when cand-v (str " → CI " cand-v)))
+                    (base-line ctx)
+                    (when-not cand [:p "no registry for this PR's head, so entities are shown as " env " runs them"])
+                    (when (and (not cand) reason) [:p.mute reason])
+                    [:p "Merged since " env "'s deploy, not there yet: " (counts drift)]
+                    (entity-lists report merge drift)
+                    (when own
+                      (list [:p "This PR: " (counts own) (when (every? empty? (vals own)) " — this PR changes no contract")]
+                            (entity-lists report cand own)))))
+
+         (not cand)
          (derived "registry store"
+                  (base-line ctx)
                   [:p "registry " [:code base-v] " · no registry for this PR's head, so entities are shown as on main"]
                   (when reason [:p.mute reason]))
-         (let [{:keys [new changed deleted]} (diff/summary base cand)
-               a (anchors report)
-               link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (list (ent id) " " [:span.mute "(no form in this diff)"])))
-               target-of (fn [id] (reg/with-version cand (let [p (lookup/props-for id)] (when (test-case? p) (:test-case/target p)))))
-               grouped (fn [xs] (let [{tests true others false} (group-by #(boolean (target-of %)) xs)]
-                                  (concat (for [id others] [:li (link id)])
-                                          (for [[t ts] (group-by target-of tests)]
-                                            [:li {:title (str/join " " (map str ts))} (str (count ts) " test case" (when (> (count ts) 1) "s") " on ") (ent t)]))))]
+
+         :else
+         (let [s (diff/summary base cand)]
            (derived (str "registry store " base-v " → CI " cand-v)
-                    [:p "Registry: " (count new) " new, " (count changed) " changed, " (count deleted) " deleted"
-                     (when (every? empty? [new changed deleted]) " — this PR changes no contract")]
-                    (when (seq new) (list [:h5 "New"] [:ul.ids (grouped new)]))
-                    (when (seq changed) (list [:h5 "Changed"] [:ul.ids (grouped changed)]))
-                    (when (seq deleted) (list [:h5 "Deleted"] [:ul.ids (for [id deleted] [:li (ent id)])])))))
+                    (base-line ctx)
+                    [:p "Registry: " (counts s)
+                     (when (every? empty? (vals s)) " — this PR changes no contract")]
+                    (entity-lists report cand s))))
        (risk-summary ctx report)
        (entity-annotations ctx)))))
 
@@ -332,6 +411,7 @@
          (group/by-calls ctx (assoc report :clj (for [f (:clj report)]
                                                   (update f :forms (fn [fs] (filterv #((set orphans) [(:path f) (d/form-id %)]) fs)))))))))))
 
+(d/add-param! "against")
 (d/use-context! context)
 (d/add-grouper! :meaning "meaning" "registry store + clj-kondo" by-meaning)
 (d/add-entity-renderer! ::registry entity-view)
