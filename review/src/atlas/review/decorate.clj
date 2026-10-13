@@ -59,7 +59,10 @@
   built on (see `choose-base`), with `:stale` the versions recorded after it.
   With an `against` request parameter naming another store branch, the base is
   the newest version on that branch, and that version is kept as `:merge` so
-  the header can tell what was merged since from what the PR changes."
+  the header can tell what was merged since from what the PR changes. Under
+  `:against`, `:step` is how the PR's base stands to what the environment runs
+  (see `reg/relation`): only when it descends from it is the first step
+  something merged since the deploy."
   [report]
   (if-not (:store @reg/config)
     {:report report}
@@ -81,7 +84,8 @@
                         :stale (reg/since line base-v)
                         :built-on (or (some-> (:base-sha (:built-on cand)) short-sha) (when-let [t (:run-at cand)] (str line " as of " t))))
         problem (assoc :against-problem problem)
-        env-v (assoc :against (assoc env-v :ref ref :name (or (:env env-v) asked))
+        env-v (assoc :against (assoc env-v :ref ref :name (or (:env env-v) asked)
+                                     :step (reg/relation line env-v base-v (:ancestor? (candidate/ancestry (get-in report [:pr :repo])))))
                      :merge-v base-label :merge (reg/registry-at (:commit base-v))
                      :base-v (stored env-v) :base (reg/registry-at (:commit env-v)))))))
 
@@ -111,21 +115,34 @@
 (defn- tests-of [id]
   (sort (for [[_ e] (registry/current-registry) :when (and (= :atlas/test-case (:atlas/type e)) (= id (:test-case/target e)))] (:atlas/dev-id e))))
 
+(defn- merged-step? [against] (= :descends (:step against)))
+
+(defn- differs [env] (str "differs between " env " and this PR's base"))
+
 (defn- state-of
   "`[text quiet?]`, the state of `id` against the base. Against an environment
-  each difference is put on its step: merged since the deploy, or this PR."
+  each difference is put on its step: merged since the deploy, or this PR.
+  When the PR's base does not descend from what the environment runs, the
+  first step is only a difference between the two, not something merged."
   [{:keys [cand cand-v merge base against]} id d]
   (let [env (:name against)
         since (str "since " env "'s deploy (merged, not there yet)")
+        step (if (merged-step? against)
+               {:new (str "new " since) :deleted (str "deleted " since)
+                :changed (str "contract changed " since) :both (str "contract changed by this PR and " since)}
+               {:new (str "not in what " env " runs; " (differs env) ", not this PR")
+                :deleted (str "in what " env " runs, not in this PR's base; not this PR")
+                :changed (str "contract " (differs env) ", not this PR")
+                :both (str "contract changed by this PR and " (differs env))})
         own (when (and against cand) (diff/entity-delta merge cand id))
         drift (when against (diff/entity-delta base merge id))]
     (cond
-      (:new? d) [(if (or (not against) (:new? own)) "new in this PR" (str "new " since))]
-      (:deleted? d) [(if (or (not against) (:deleted? own)) "deleted by this PR" (str "deleted " since))]
+      (:new? d) [(if (or (not against) (:new? own)) "new in this PR" (:new step))]
+      (:deleted? d) [(if (or (not against) (:deleted? own)) "deleted by this PR" (:deleted step))]
       (changed? d) [(cond (not against) "contract changed"
-                          (and (changed? own) (changed? drift)) (str "contract changed by this PR and " since)
+                          (and (changed? own) (changed? drift)) (:both step)
                           (changed? own) "contract changed by this PR"
-                          :else (str "contract changed " since))]
+                          :else (:changed step))]
       cand-v ["contract unchanged" true]
       against [(str "as " env " runs it; no candidate version staged") true]
       :else ["as on main; no candidate version staged" true])))
@@ -237,12 +254,19 @@
     (let [a (anchors report)
           {:keys [new changed deleted]} (if cand (diff/summary base cand) {})
           own (when (and against cand) (set (apply concat (vals (diff/summary merge cand)))))
-          step (fn [id] (when (and own (not (own id))) [:span.mute (str " · merged since " (:name against) "'s deploy, not this PR")]))
+          merged? (merged-step? against)
+          other? (fn [id] (boolean (and own (not (own id)))))
+          step (fn [id] (when (other? id) [:span.mute (str " · merged since " (:name against) "'s deploy, not this PR")]))
           ids (distinct (concat (keys a) new changed deleted))
           test-case? (fn [id] (reg/with-version (or cand base) (= :atlas/test-case (:atlas/type (lookup/props-for id)))))
-          rows (->> ids (remove test-case?) (keep #(risk-of ctx %)) (sort-by (juxt (comp - :score) (comp str :id))))
+          aside? (fn [id] (and (not merged?) (other? id)))
+          rows (->> ids (remove test-case?) (keep #(risk-of ctx %))
+                    (sort-by (juxt (comp aside? :id) (comp - :score) (comp str :id))))
           link (fn [id] (if-let [h (a id)] [:a {:href (str "#" h)} (ent id)] (ent id)))
-          row (fn [{:keys [id level reasons]}] [:li (level-tag level) " " (link id) " — " (interpose " · " reasons) (step id)])
+          row (fn [{:keys [id level reasons]}]
+                (if (aside? id)
+                  [:li [:span.tag.tag-note "context"] " " (link id) " — " [:span.mute (str (differs (:name against)) ", not this PR")]]
+                  [:li (level-tag level) " " (link id) " — " (interpose " · " reasons) (step id)]))
           [top more] (split-at 5 rows)]
       (when (seq rows)
         (derived "registry graph"
@@ -289,9 +313,25 @@
       (list [:p "base " [:code ref] " @ " base-v " · what " name " runs"
              (when (and from (not off-line?)) (list ", deployed from " [:code from])) (when date (str ", recorded " date))
              (when off-line? (list " " [:span.tag.tag-ext (str "deployed from " from ", not " line)]))]
-            [:p "→ " [:code line] " @ " merge-v base-note ": merged, not yet on " name]
+            [:p "→ " [:code line] " @ " merge-v base-note ": "
+             (case (:step against)
+               :descends (str "merged, not yet on " name)
+               :behind (str "older than what " name " runs")
+               :diverged (str "diverged from what " name " runs")
+               (str "not known to be older or newer than what " name " runs"))]
             [:p "→ this PR · " (if cand-v (str "CI " cand-v) "no registry for its head")]
             (stale-note ctx)))))
+
+(defn- step-title
+  "The first step of the header against an environment, named by how the
+  PR's base stands to what the environment runs."
+  [{:keys [name step from source-sha source]} line]
+  (let [runs (str name " runs " (or from (short-sha (or source-sha source))))]
+    (case step
+      :descends (str "Merged since " name "'s deploy, not there yet")
+      :behind (str "Differs between " name " and this PR's base: " runs "; this PR is built on an older " line)
+      :diverged (str "Differs between " name " and this PR's base: " runs "; this PR is built on a " line " that diverged from it")
+      (str "Differs between " name " and this PR's base"))))
 
 (defn registry-header [ctx report]
   (when (:base ctx)
@@ -307,7 +347,7 @@
                     (base-line ctx)
                     (when-not cand [:p "no registry for this PR's head, so entities are shown as " env " runs them"])
                     (when (and (not cand) reason) [:p.mute reason])
-                    [:p "Merged since " env "'s deploy, not there yet: " (counts drift)]
+                    [:p (step-title against (:line ctx)) ": " (counts drift)]
                     (entity-lists report merge drift)
                     (when own
                       (list [:p "This PR: " (counts own) (when (every? empty? (vals own)) " — this PR changes no contract")]

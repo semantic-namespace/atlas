@@ -79,6 +79,18 @@ the text output always name the base used.
   `<env> → merge base (merged, not yet there) → this PR`, each with its own
   new, changed and deleted entities. Per-form states and risk rows say which
   step a difference belongs to.
+- The first step is called merged since the deploy only when the PR's base
+  descends from what the environment runs: the environment's `Source-Sha`
+  is the base version's commit or an ancestor of it, by the order of the
+  line's versions when both are recorded there, else by GitHub's compare.
+  An environment is often deployed from a branch that already holds newer
+  line commits than the PR's base, and then the step runs backwards. The
+  header then says `Differs between <env> and this PR's base: <env> runs
+  <branch>; this PR is built on an older <line>` (or `on a <line> that
+  diverged from it`, or just `Differs between <env> and this PR's base` when
+  GitHub cannot tell), and the risk ranking lists those entities after the
+  PR's own, as `context`, `differs between <env> and this PR's base, not
+  this PR`, with no risk level. The counts are the same either way.
 - A name that is not a branch of the store: the header says so and the base
   is chosen as when absent.
 
