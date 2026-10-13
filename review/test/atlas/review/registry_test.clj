@@ -48,6 +48,8 @@
     (record! origin merged (str "registry: " (subs src2 0 7)) src2)
     (git! origin "checkout" "-q" "--orphan" "deployed/dev")
     (record! origin deployed (str "registry: " (subs src1 0 7) " deployed to dev from main") src1)
+    (git! origin "checkout" "-q" "--orphan" "deployed/staging")
+    (record! origin deployed (str "registry: " (subs src1 0 7) " deployed to staging from hotfix") src1)
     (git! origin "checkout" "-q" "main")
     (git! tmp "clone" "-q" (str origin) (str store))
     (let [saved @reg/config]
@@ -161,3 +163,13 @@
     (fn []
       (binding [d/*params* {"against" "deployed/dev"}]
         (is (= "origin/deployed/dev" (get-in (#'reach-review/context report) [:against :ref])))))))
+
+(deftest the-branch-an-environment-was-deployed-from-is-named-once
+  (with-candidate
+    (fn []
+      (let [on-line (header (context {"against" "deployed/dev"}))
+            off-line (header (context {"against" "deployed/staging"}))]
+        (is (str/includes? on-line "what dev runs, deployed from main"))
+        (is (not (str/includes? on-line ", not origin/main")))
+        (is (re-find #"what staging runs, recorded \S+ deployed from hotfix, not origin/main" off-line))
+        (is (not (str/includes? off-line ", deployed from hotfix")))))))

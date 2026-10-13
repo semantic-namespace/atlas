@@ -26,15 +26,36 @@ labelled.
 clojure -M:serve --store <registry store checkout> --prefix <path inside it> [--branch origin/main] [--port 7878] [--host 127.0.0.1]
 ```
 
-Two registries are compared. The base is the version the project's CI
-recorded in its registry store (the git repository written by `atlas.store`,
-one commit per recorded registry, the source sha in the commit message) for
-the PR's merge base, or the newest recorded version when that commit was not
-recorded. The candidate is the registry CI built for the PR head, downloaded
-through `gh` from the workflow run's artifact (`SDIFF_REGISTRY_WORKFLOW` and
-`SDIFF_REGISTRY_ARTIFACT` name them; defaults `atlas-registry` and
-`registry`). When CI has no run for the head, the page says so and shows
-entities as on main.
+Two registries are compared. The candidate is the registry CI built for the
+PR head, downloaded through `gh` from the workflow run's artifact
+(`SDIFF_REGISTRY_WORKFLOW` and `SDIFF_REGISTRY_ARTIFACT` name them; defaults
+`atlas-registry` and `registry`). When CI has no run for the head, the page
+says so and shows entities as on main.
+
+The base is a version the project's CI recorded in its registry store (the
+git repository written by `atlas.store`, one commit per recorded registry,
+the source sha in the commit message and a `Source-Sha:` trailer). The store
+records only commits that changed the registry, and CI builds the candidate
+from a merge of the PR into the line as it was then, so the base is the
+newest version recorded at or before the commit the candidate was built on:
+
+- The artifact may carry a sidecar, `atlas-registry.meta.edn`, beside
+  `atlas-registry.edn`: `{:base-sha "<full sha>" :head-sha "<full sha>"}`,
+  the base being the first parent of the merge commit CI built. The version
+  built from that sha is used when the store has it; otherwise the newest
+  version whose source is an ancestor of it (GitHub's compare, through `gh`);
+  when ancestry cannot be read, the newest version the store recorded by that
+  commit's time.
+- Without the sidecar, the newest version the store recorded by the time the
+  CI run started, and the header says the base was inferred.
+- Without a candidate, the same rules over the PR's merge base.
+
+The header says how the base was chosen: the PR's base itself, or that the
+registry was unchanged from the chosen version to it. When the store has no
+version that old, it compares with the oldest one and warns. When versions
+were recorded on the line after the chosen one, the header marks the
+candidate stale, counts them, and asks for CI to be re-run to see the PR
+against the current line.
 
 ### Comparing against another store branch
 
@@ -53,8 +74,8 @@ the text output always name the base used.
 - Absent, or naming the configured branch (`main` finds `origin/main`): the
   base is chosen as above.
 - Another branch of the store: the base is the newest version on it, what that
-  environment runs. The version for the PR's merge base on the configured
-  branch is read too, and the header shows the two steps,
+  environment runs. The version on the configured
+  branch, chosen as above, is read too, and the header shows the two steps,
   `<env> → merge base (merged, not yet there) → this PR`, each with its own
   new, changed and deleted entities. Per-form states and risk rows say which
   step a difference belongs to.
