@@ -120,18 +120,6 @@
        (when-let [el (js/document.getElementById "v3-scroll-area")]
          (set! (.-scrollTop el) n))))))
 
-(defn- navigate-to!
-  "POST new view state to the server — browser updates via SSE."
-  [mode entity-str aspect-str]
-  (-> (js/fetch "/api/v3/state"
-                (clj->js {:method  "POST"
-                          :headers {"Content-Type" "application/json"}
-                          :body    (js/JSON.stringify
-                                    (clj->js {:mode   mode
-                                              :entity entity-str
-                                              :aspect aspect-str}))}))
-      (.catch (fn [e] (js/console.error "navigate-to! error" e)))))
-
 (defn- nav-snapshot [s]
   {:view-state     (:view-state s)
    :scroll-top     (capture-scroll)
@@ -145,6 +133,61 @@
       (assoc :filter-text    (or (:filter-text entry) ""))
       (assoc :search-text    "")))
 
+(defonce ^:private live? (atom false))
+
+(def ^:private nav-keys [:mode :entity :aspect :data-key])
+
+(defn- view->hash [view]
+  (str "#" (.toString (js/URLSearchParams.
+                       (clj->js (into {} (remove (comp nil? val)) (select-keys view nav-keys)))))))
+
+(defn- hash->view []
+  (let [p (js/URLSearchParams. (subs (.-hash js/location) 1))]
+    (when-let [mode (.get p "mode")]
+      {:mode mode :entity (.get p "entity") :aspect (.get p "aspect") :data-key (.get p "data-key")})))
+
+(defn- show-view!
+  "Make `view` current. A view that differs from the current one in what it
+  shows is a navigation: the current one goes on the back stack."
+  [view]
+  (swap! app-state
+         (fn [s]
+           (if (= (select-keys (:view-state s) nav-keys) (select-keys view nav-keys))
+             (assoc s :view-state (merge (:view-state s) view))
+             (-> s
+                 (update :nav-history (fn [h] (vec (take-last 50 (conj h (nav-snapshot s))))))
+                 (assoc :nav-future [])
+                 (assoc :view-state (merge (:view-state s) view))
+                 (assoc :expanded-lists {})
+                 (assoc :filter-text "")
+                 (assoc :search-text ""))))))
+
+(defn- post-state! [view]
+  (-> (js/fetch "/api/v3/state"
+                (clj->js {:method  "POST"
+                          :headers {"Content-Type" "application/json"}
+                          :body    (js/JSON.stringify (clj->js view))}))
+      (.catch (fn [e] (js/console.error "post-state! error" e)))))
+
+(defn- navigate-to!
+  "Show a view here and record it in the URL, so each viewer navigates on
+  their own and a view can be linked. Where the server holds view state, it
+  is told too, so an LLM driving the page and the viewer stay in step."
+  [mode target aspect]
+  (let [view (merge (select-keys (:view-state @app-state) [:entity :aspect :data-key])
+                    {:mode mode}
+                    (case mode
+                      ("entity-focus" "blast-radius") (when target {:entity target})
+                      "dataflow-focus" (when target {:data-key target})
+                      "domain-survey" (when aspect {:aspect aspect})
+                      nil))]
+    (show-view! view)
+    (.pushState js/history nil "" (view->hash view))
+    (when @live? (post-state! view))))
+
+(defn- replace-hash! []
+  (.replaceState js/history nil "" (view->hash (:view-state @app-state))))
+
 (defn- back!
   "Go back one step; push current state onto nav-future."
   []
@@ -155,6 +198,7 @@
                (-> (apply-entry! s entry)
                    (update :nav-history pop)
                    (update :nav-future conj (nav-snapshot s)))))
+      (replace-hash!)
       (restore-scroll! (:scroll-top entry)))))
 
 (defn- forward!
@@ -167,6 +211,7 @@
                (-> (apply-entry! s entry)
                    (update :nav-future pop)
                    (update :nav-history conj (nav-snapshot s)))))
+      (replace-hash!)
       (restore-scroll! (:scroll-top entry)))))
 
 ;; =============================================================================
@@ -608,13 +653,15 @@
           [search-result-item m])])]))
 
 (defn- clear-scenario! []
-  (-> (js/fetch "/api/v3/state"
+  (swap! app-state update :view-state merge {:scenario nil :step nil :step-total nil :narrative nil})
+  (when @live?
+   (-> (js/fetch "/api/v3/state"
                 (clj->js {:method  "POST"
                           :headers {"Content-Type" "application/json"}
                           :body    (js/JSON.stringify
                                     (clj->js {:scenario nil :step nil :step-total nil
                                               :narrative nil}))}))
-      (.catch (fn [e] (js/console.error "clear-scenario! error" e)))))
+      (.catch (fn [e] (js/console.error "clear-scenario! error" e))))))
 
 (defn- scenario-bar [scenario step step-total]
   [:div {:style (s :padding "4px 16px"
@@ -825,23 +872,23 @@
 
 (defn init []
   (js/console.log "Atlas UI v3 initializing…")
-  ;; Subscribe to SSE state updates
-  (api/subscribe-sse!
-   (fn [new-view-state]
-     (js/console.log "SSE state:" (clj->js new-view-state))
-     (swap! app-state
-            (fn [s]
-              (-> s
-                  (update :nav-history
-                          (fn [h] (vec (take-last 50 (conj h (nav-snapshot s))))))
-                  (assoc :nav-future [])          ; new tool call clears forward stack
-                  (assoc :view-state new-view-state)
-                  (assoc :expanded-lists {})
-                  (assoc :filter-text "")
-                  (assoc :search-text "")))))
-   (fn [err]
-     (js/console.warn "SSE error:" err)))
-  ;; Fetch registry once
+  (api/fetch-live-state!
+   (fn [_]
+     (reset! live? true)
+     (api/subscribe-sse!
+      (fn [new-view-state]
+        (show-view! new-view-state)
+        (replace-hash!))
+      (fn [err]
+        (js/console.warn "SSE error:" err)))
+     (when-let [v (hash->view)] (post-state! v)))
+   (fn []
+     (js/console.log "No server view state: navigating locally")))
+  (when-let [v (hash->view)] (show-view! v))
+  (.addEventListener js/window "popstate"
+                     (fn [_] (when-let [v (hash->view)]
+                               (show-view! v)
+                               (when @live? (post-state! v)))))
   (api/fetch-registry!
    (fn [data]
      (let [registry (or (:atlas-ui.api.response/registry data) data)]

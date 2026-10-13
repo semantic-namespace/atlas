@@ -41,6 +41,20 @@
        :error-handler   (fn [err]
                           (on-error {:type :fetch-error :error err}))})))
 
+(defn fetch-live-state!
+  "GET /api/v3/state. Calls on-live with the server's view state when the
+  server holds one (the atlas-ui server does), on-absent otherwise, so the
+  page can navigate on its own where it is mounted without that endpoint."
+  [on-live on-absent]
+  (let [port (get-url-param "port")
+        url  (if port
+               (str (.-protocol js/location) "//" (.-hostname js/location) ":" port "/api/v3/state")
+               "/api/v3/state")]
+    (-> (js/fetch url)
+        (.then (fn [r] (if (.-ok r) (.json r) (throw (js/Error. (str "status " (.-status r)))))))
+        (.then (fn [data] (on-live (js->clj data :keywordize-keys true))))
+        (.catch (fn [_] (on-absent))))))
+
 (defn subscribe-sse!
   "Open SSE connection to /api/v3/events.
   Calls on-state with a keywordized map each time the server pushes state.
