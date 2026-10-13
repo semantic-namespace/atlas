@@ -157,6 +157,12 @@
         remotes (try (set (str/split-lines (git "remote"))) (catch Exception _ #{}))]
     (if (and branch (remotes remote)) branch ref)))
 
+(defn named
+  "The store branch `asked` names, or nil, without fetching; see `resolve-against`."
+  [asked]
+  (when (and (string? asked) (seq asked))
+    (allowed (branches) asked)))
+
 (defn resolve-against
   "The store branch `asked` names, or nil when the store has no such branch.
   `asked` is matched against the store's own branch names and never reaches
@@ -164,8 +170,8 @@
   remote has it. Fetches the store first, at most once per TTL per branch."
   [asked]
   (when (and (string? asked) (seq asked))
-    (refresh! (or (allowed (branches) asked) ::unknown))
-    (allowed (branches) asked)))
+    (refresh! (or (named asked) ::unknown))
+    (named asked)))
 
 (defn label [{:keys [commit source]}] (str (subs commit 0 7) (when source (str " (" source ")"))))
 

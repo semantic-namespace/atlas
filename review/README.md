@@ -23,7 +23,7 @@ registry. Inferred annotations, from a reviewer or a model, render apart and
 labelled.
 
 ```
-clojure -M:serve --store <registry store checkout> --prefix <path inside it> [--branch origin/main] [--port 7878] [--host 127.0.0.1]
+clojure -M:serve --store <registry store checkout> --prefix <path inside it> [--branch origin/main] [--repo owner/name] [--envs dev,staging,production] [--port 7878] [--host 127.0.0.1]
 ```
 
 Two registries are compared. The candidate is the registry CI built for the
@@ -99,6 +99,40 @@ over `refs/heads` and `refs/remotes`; `deployed/dev` finds
 `origin/deployed/dev` when only the remote has it) and never reaches git
 otherwise. Resolving it fetches the store, at most once a minute per branch,
 since nothing else refreshes the checkout.
+
+### The environment page
+
+`/env` (listed on the index as Environments) shows what every environment
+runs against the newest version of the line, computed from the store when
+the page is asked for. One row per `deployed/<env>` branch: the store
+version, the project commit it was built from, the git branch it was
+deployed from, when it was recorded, how it stands to the line's newest
+version (behind the line, ahead of it, diverged, or order unknown) and how
+many entities differ on each side. `--envs dev,staging,production` names the
+environments to expect; one with no branch yet shows as `not recorded yet`.
+Without `--envs` only the recorded ones are listed.
+
+`/env?against=deployed/<env>` compares one environment with the line's
+newest version, entity by entity, grouped by risk as on the PR page, each
+marked new, changed or deleted:
+
+- `On <line>, not deployed`: what the line has and the environment does not
+  run, as the line changed it.
+- `Only on <env>'s branch`: what the environment has and the line does not,
+  as the branch it was deployed from changed it.
+
+An environment behind the line shows only the first list, one deployed from
+a branch that already holds the line's newest commit only the second, and a
+diverged one both, each from the newest line version the environment's
+commit descends from. When the order cannot be told, every difference is
+listed together. A sentence above the lists says which case it is.
+
+`--repo owner/name` names the project's GitHub repository: commits link to
+it, the page links the GitHub compare of the two commits, and ancestry that
+the store's own order cannot settle is asked of GitHub's compare through
+`gh`. `against` is matched against the store's branches as on the PR page,
+and the store is fetched at most once a minute; an unknown branch is reported
+above the overview.
 
 A view over a pull request of the atlas repo itself, with the registry
 decoration of an entity the view names:

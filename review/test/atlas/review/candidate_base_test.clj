@@ -1,6 +1,7 @@
 (ns atlas.review.candidate-base-test
   (:require [atlas.review.candidate :as candidate]
             [atlas.review.decorate :as decorate]
+            [atlas.review.env :as env]
             [atlas.review.registry :as reg]
             [atlas.store.canonical :as canon]
             [cheshire.core :as json]
@@ -174,20 +175,22 @@
   (is (nil? (reg/recorded-by "main" "2026-10-13T07:59:59Z")))
   (is (= [(version-of :p3)] (reg/since "main" (version-of :p1)))))
 
-(defn- deploy!
+(defn- deploy-to!
   "Commits `branch` in the project off commit `from` (main itself when `branch`
-  is main) and records `reg` as what dev runs, deployed from that commit."
-  [branch from reg]
+  is main) and records `reg` as what `env` runs, deployed from that commit."
+  [env branch from reg]
   (let [src (if (= "main" branch)
               (*shas* from)
               (do (git! *project* nil "checkout" "-q" "-b" branch (*shas* from))
                   (let [c (commit! *project* "2026-10-13T13:00:00Z" branch)]
                     (git! *project* nil "checkout" "-q" "main")
                     c)))]
-    (git! *store* nil "checkout" "-q" "--orphan" "deployed/dev")
-    (record! *store* "2026-10-13T13:05:00Z" reg src (str "registry: " (subs src 0 7) " deployed to dev from " branch))
+    (git! *store* nil "checkout" "-q" "--orphan" (str "deployed/" env))
+    (record! *store* "2026-10-13T13:05:00Z" reg src (str "registry: " (subs src 0 7) " deployed to " env " from " branch))
     (git! *store* nil "checkout" "-q" "-f" "main")
     src))
+
+(defn- deploy! [branch from reg] (deploy-to! "dev" branch from reg))
 
 (def deployed-ahead (registry :fn/x :fn/y :fn/w))
 
@@ -244,3 +247,88 @@
     (is (str/includes? h ": not known to be older or newer than what dev runs"))
     (is (not (str/includes? h "merged since dev's deploy")))
     (is (re-find #"context :fn/w — differs between dev and this PR's base, not this PR" h))))
+
+(defn- env-hiccup [against]
+  (reset! @#'candidate/known {})
+  (swap! reg/config assoc :repo "owner/repo")
+  (with-redefs [candidate/gh (fake-gh {})]
+    (env/page {:params (if against {"against" against} {})})))
+
+(defn- env-page [against] (d/hiccup->text (env-hiccup against)))
+
+(defn- links [h] (set (keep #(when (map? %) (:href %)) (tree-seq coll? seq h))))
+
+(def side-registry (registry :fn/x :fn/gone :fn/w))
+
+(defn- row [text env] (some #(when (str/starts-with? % (str env " ")) %) (str/split-lines text)))
+
+(deftest the-environment-overview-lists-recorded-and-expected-environments
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (let [side (deploy-to! "staging" "side" :p2 side-registry)
+        saved @env/settings]
+    (reset! env/settings {:envs ["dev" "staging" "production"]})
+    (try
+      (let [h (env-page nil)]
+        (is (= ["dev" "staging"] (keys (env/recorded))))
+        (is (str/includes? (row h "dev") (str (s7 :p1) " main ")))
+        (is (str/includes? (row h "dev") "behind the line 2 on main, not deployed · 0 only on dev's branch"))
+        (is (str/includes? (row h "staging") (str (subs side 0 7) " side ")))
+        (is (str/includes? (row h "staging") "diverged 2 on main, not deployed · 1 only on staging's branch"))
+        (is (= "production not recorded yet" (row h "production")))
+        (is (not (str/includes? h "origin/")))
+        (is (contains? (links (env-hiccup nil)) "/env?against=deployed%2Fstaging")))
+      (finally (reset! env/settings saved)))))
+
+(defn- sections [h]
+  (let [[top on-line] (str/split h #"(?m)^On main, not deployed" 2)
+        [on-line only-env] (if on-line (str/split on-line #"(?m)^Only on " 2) [nil (second (str/split top #"(?m)^Only on " 2))])]
+    {:top top :on-line on-line :only-env only-env}))
+
+(deftest an-environment-deployed-from-a-diverged-branch-lists-both-sides
+  (let [side (deploy-to! "staging" "side" :p2 side-registry)
+        h (env-page "deployed/staging")
+        {:keys [top on-line only-env]} (sections h)]
+    (is (str/includes? top "staging was deployed from side, which diverged from main after " ))
+    (is (str/includes? top (s7 :p1)) "where they parted: the newest main version the side branch holds")
+    (is (contains? (links (env-hiccup "deployed/staging")) (str "https://github.com/owner/repo/compare/" side "..." (*shas* :p3))) "the compare link")
+    (is (contains? (links (env-hiccup "deployed/staging")) (str "https://github.com/owner/repo/commit/" side)))
+    (is (str/includes? on-line " · 1 new, 0 changed, 1 deleted"))
+    (is (re-find #"new :fn/y" on-line))
+    (is (re-find #"deleted :fn/gone" on-line))
+    (is (not (str/includes? on-line ":fn/w")))
+    (is (str/starts-with? only-env "staging's branch · 1 new, 0 changed, 0 deleted"))
+    (is (re-find #"new :fn/w" only-env))
+    (is (not (re-find #":fn/(y|gone)" only-env)))
+    (is (str/includes? h "risk"))))
+
+(deftest an-environment-at-an-older-line-commit-only-lacks-what-the-line-merged
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (let [h (env-page "deployed/dev")
+        {:keys [top on-line only-env]} (sections h)]
+    (is (str/includes? top "dev runs an older main: what follows is on main and not deployed to dev yet."))
+    (is (str/includes? on-line " · 1 new, 0 changed, 1 deleted"))
+    (is (re-find #"new :fn/y" on-line))
+    (is (re-find #"deleted :fn/gone" on-line))
+    (is (nil? only-env))
+    (is (not (str/includes? h "Only on")))))
+
+(deftest an-environment-at-the-line-has-nothing-waiting
+  (deploy-to! "dev" "main" :p3 after-merge)
+  (is (str/includes? (env-page "deployed/dev") "dev runs main's newest registry; nothing on main waits to be deployed.")))
+
+(deftest the-environment-page-names-only-store-branches
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (let [h (env-page "--upload-pack=touch /tmp/x")]
+    (is (str/includes? h "against=--upload-pack=touch /tmp/x: the registry store has no such branch"))
+    (is (str/includes? (row h "dev") "behind the line") "the overview is shown under the problem"))
+  (is (str/includes? (env-page "deployed/production") "against=deployed/production: the registry store has no such branch"))
+  (is (str/includes? (env-page "main") "against=main: that is main itself")))
+
+(deftest an-environment-ahead-of-the-line-only-has-its-branch
+  (deploy-to! "dev" "feature" :p3 deployed-ahead)
+  (let [h (env-page "deployed/dev")
+        {:keys [top on-line only-env]} (sections h)]
+    (is (str/includes? top "dev was deployed from feature, which already holds main's newest commit"))
+    (is (nil? on-line))
+    (is (str/starts-with? only-env "dev's branch · 1 new, 0 changed, 0 deleted"))
+    (is (re-find #"new :fn/w" only-env))))
