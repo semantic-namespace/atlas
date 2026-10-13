@@ -230,6 +230,7 @@
     (is (= :diverged (get-in ctx [:against :step])))
     (is (str/includes? h "Differs between dev and this PR's base: dev runs side; this PR is built on a main that diverged from it: 1 new, 0 changed, 2 deleted"))
     (is (str/includes? h ": diverged from what dev runs"))
+    (is (not (re-find #"\ba (origin|older)\b" h)))
     (is (not (str/includes? h "merged since dev's deploy")))
     (is (re-find #"context :fn/y — differs between dev and this PR's base, not this PR" h))))
 

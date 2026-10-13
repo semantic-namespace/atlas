@@ -118,7 +118,8 @@
         (is (nil? (:against ctx)))
         (is (= (reg/registry-at (:commit (reg/version-for src2))) (:base ctx)))
         (let [h (header ctx)]
-          (is (str/includes? h "base origin/main @ "))
+          (is (str/includes? h "base main @ "))
+          (is (not (str/includes? h "origin/")) "the store's remote is not shown")
           (is (str/includes? h "this PR's merge base"))
           (is (str/includes? h "Registry: 1 new, 1 changed, 0 deleted"))
           (is (not (str/includes? h "deploy"))))
@@ -133,10 +134,11 @@
         (is (= "origin/deployed/dev" (get-in ctx [:against :ref])))
         (is (= deployed (:base ctx)) "the newest on the branch, not a fallback")
         (is (= merged (:merge ctx)))
-        (is (str/includes? h "base origin/deployed/dev @ "))
+        (is (str/includes? h "base deployed/dev @ "))
         (is (str/includes? h "what dev runs, deployed from main"))
         (is (str/includes? h (str "built from " (subs src1 0 12))))
-        (is (str/includes? h "→ origin/main @ "))
+        (is (str/includes? h "→ main @ "))
+        (is (not (str/includes? h "origin/")) "the store's remote is not shown")
         (is (str/includes? h "merged, not yet on dev"))
         (is (str/includes? h "→ this PR · CI run 42"))
         (is (str/includes? h "Merged since dev's deploy, not there yet: 1 new, 0 changed, 1 deleted"))
@@ -155,7 +157,7 @@
       (let [ctx (context {"against" "--upload-pack=x"})
             h (header ctx)]
         (is (nil? (:against ctx)))
-        (is (str/includes? h "against=--upload-pack=x: the registry store has no such branch; compared against origin/main instead"))
+        (is (str/includes? h "against=--upload-pack=x: the registry store has no such branch; compared against main instead"))
         (is (str/includes? h "Registry: 1 new, 1 changed, 0 deleted"))))))
 
 (deftest the-reach-context-keeps-against
@@ -164,12 +166,30 @@
       (binding [d/*params* {"against" "deployed/dev"}]
         (is (= "origin/deployed/dev" (get-in (#'reach-review/context report) [:against :ref])))))))
 
+(deftest store-branches-are-named-without-their-remote
+  (is (= "main" (reg/shown "origin/main")))
+  (is (= "deployed/dev" (reg/shown "origin/deployed/dev")))
+  (is (= "deployed/dev" (reg/shown "deployed/dev")) "a local branch keeps its name")
+  (is (= "elsewhere/main" (reg/shown "elsewhere/main")) "only a remote of the store is dropped"))
+
+(deftest a-diverged-environment-names-the-line-without-its-remote
+  (git! *origin* "checkout" "-q" "--orphan" "deployed/qa")
+  (record! *origin* merged (str "registry: " (subs src3 0 7) " deployed to qa from side") src3)
+  (git! *origin* "checkout" "-q" "main")
+  (swap! reg/config assoc :fetch-ttl-ms 0)
+  (with-redefs [atlas.review.candidate/ancestor? (fn [_ _ _] false)]
+    (with-candidate
+      (fn []
+        (let [h (header (context {"against" "deployed/qa"}))]
+          (is (str/includes? h "qa runs side; this PR is built on a main that diverged from it"))
+          (is (not (re-find #"\ba (origin|older)\b" h))))))))
+
 (deftest the-branch-an-environment-was-deployed-from-is-named-once
   (with-candidate
     (fn []
       (let [on-line (header (context {"against" "deployed/dev"}))
             off-line (header (context {"against" "deployed/staging"}))]
         (is (str/includes? on-line "what dev runs, deployed from main"))
-        (is (not (str/includes? on-line ", not origin/main")))
-        (is (re-find #"what staging runs, recorded \S+ deployed from hotfix, not origin/main" off-line))
+        (is (not (str/includes? on-line ", not main")))
+        (is (re-find #"what staging runs, recorded \S+ deployed from hotfix, not main" off-line))
         (is (not (str/includes? off-line ", deployed from hotfix")))))))

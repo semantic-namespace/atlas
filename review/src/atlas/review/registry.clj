@@ -149,6 +149,14 @@
   (let [spellings (cons asked (map #(str % "/" asked) (remove str/blank? (str/split-lines (git "remote")))))]
     (or (some #{(:branch @config)} spellings) (some names spellings))))
 
+(defn shown
+  "Store branch `ref` as a reader names it, without the remote it is tracked
+  from: `origin/main` is shown as `main`."
+  [ref]
+  (let [[remote branch] (str/split (str ref) #"/" 2)
+        remotes (try (set (str/split-lines (git "remote"))) (catch Exception _ #{}))]
+    (if (and branch (remotes remote)) branch ref)))
+
 (defn resolve-against
   "The store branch `asked` names, or nil when the store has no such branch.
   `asked` is matched against the store's own branch names and never reaches
