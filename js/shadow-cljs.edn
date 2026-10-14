@@ -1,8 +1,7 @@
 {:source-paths ["src" "../core/src"]
 
  :dependencies
- [[datascript "1.6.5"]
-  [com.taoensso/telemere "1.2.1"]]
+ [[datascript "1.6.5"]]
 
  :builds
  {;; ─── Full build (registry + query + datalog + invariants) ───
