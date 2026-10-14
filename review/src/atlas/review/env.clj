@@ -363,7 +363,7 @@
   (let [from (or (:from env-v) "its branch")]
     (cond
       line-ahead?
-      (str env " runs " line " at " (short-sha (built-from env-v)) (when merge? (str " (the merge of #" (:number pr) ")"))
+      (str env " runs " (or (:from env-v) line) " at " (short-sha (built-from env-v)) (when merge? (str " (the merge of #" (:number pr) ")"))
            ", past " line "'s newest recorded registry with the same registry; nothing on " line " waits to be deployed.")
 
       pr-head?
@@ -394,7 +394,7 @@
 (defn- runs
   "What an environment runs, as the overview tells it."
   [{:keys [env-v relation pr pr-head? merge? line-ahead?]} line]
-  (list (cond line-ahead? [:code line] (:from env-v) [:code (:from env-v)] :else "an unnamed branch") " at " (commit-link (built-from env-v))
+  (list (cond (:from env-v) [:code (:from env-v)] line-ahead? [:code (reg/shown line)] :else "an unnamed branch") " at " (commit-link (built-from env-v))
         (cond
           merge? (list " (merge of " (pr-link (:number pr)) ")")
           line-ahead? nil
