@@ -13,7 +13,6 @@
   (:require [clojure.string :as str]
             [clojure.set :as set]
             [clojure.spec.alpha :as s]
-            [taoensso.telemere :as tel]
             #?(:cljs [goog.string :as gstring])))
 
 ;; =============================================================================
@@ -614,6 +613,11 @@
   {:valid? true
    :note "Spec validation not yet implemented"})
 
+(defn- warn!
+  [msg]
+  #?(:cljs (js/console.warn (pr-str msg))
+     :default (binding [*out* *err*] (prn msg))))
+
 (defn- dyn-spec
   "Create a dynamic spec that requires the given keys."
   [keys*]
@@ -640,11 +644,10 @@
                     (if required-keys
                       (if (s/valid? (dyn-spec required-keys) props)
                         true
-                        (do (tel/log! {:level :warn}
-                                      ["NOT VALID"
-                                       {:dev-id (:atlas/dev-id props)
-                                        :compound-id compound-id
-                                        :message (s/explain-str (dyn-spec required-keys) props)}])
+                        (do (warn! ["NOT VALID"
+                                    {:dev-id (:atlas/dev-id props)
+                                     :compound-id compound-id
+                                     :message (s/explain-str (dyn-spec required-keys) props)}])
                             false))
                       true))))
             @registry)))
