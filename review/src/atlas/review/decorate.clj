@@ -5,6 +5,7 @@
             [atlas.registry.lookup :as lookup]
             [atlas.review.candidate :as candidate]
             [atlas.review.diff :as diff]
+            [atlas.review.env :as env]
             [atlas.review.registry :as reg]
             [atlas.review.risk :as risk]
             [clojure.edn :as edn]
@@ -27,6 +28,8 @@
 (defn- stored [v] (str (subs (:commit v) 0 7) (when-let [s (or (:source-sha v) (:source v))] (str " (built from " (subs s 0 (min 12 (count s))) ")"))))
 
 (defn- short-sha [s] (when s (subs s 0 (min 7 (count s)))))
+
+(defn- a-or-an [word] (str (if (re-find #"(?i)^[aeiou]" (str word)) "an " "a ") word))
 
 (defn- choose-base
   "The version on `line` the candidate is compared with: the newest recorded
@@ -74,15 +77,15 @@
           {base-v :version :as choice} (choose-base line report cand)
           base-label (reg/label base-v)
           note (base-note choice)
-          problem (cond (and asked (not ref)) (str "against=" asked ": the registry store has no such branch; compared against " line " instead")
-                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " ref " holds no recorded registry; compared against " line " instead"))]
+          problem (cond (and asked (not ref)) (str "against=" asked ": the registry store has no such branch; compared against " (reg/shown line) " instead")
+                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " (reg/shown ref) " holds no recorded registry; compared against " (reg/shown line) " instead"))]
       (cond-> {:report report :line line
                :base-v base-label :base-note note
                :base (reg/registry-at (:commit base-v))
                :cand-v label :reason reason}
         registry (assoc :cand registry
                         :stale (reg/since line base-v)
-                        :built-on (or (some-> (:base-sha (:built-on cand)) short-sha) (when-let [t (:run-at cand)] (str line " as of " t))))
+                        :built-on (or (some-> (:base-sha (:built-on cand)) short-sha) (when-let [t (:run-at cand)] (str (reg/shown line) " as of " t))))
         problem (assoc :against-problem problem)
         env-v (assoc :against (assoc env-v :ref ref :name (or (:env env-v) asked)
                                      :step (reg/relation line env-v base-v (:ancestor? (candidate/ancestry (get-in report [:pr :repo])))))
@@ -124,7 +127,7 @@
   each difference is put on its step: merged since the deploy, or this PR.
   When the PR's base does not descend from what the environment runs, the
   first step is only a difference between the two, not something merged."
-  [{:keys [cand cand-v merge base against]} id d]
+  [{:keys [cand cand-v merge base against line]} id d]
   (let [env (:name against)
         since (str "since " env "'s deploy (merged, not there yet)")
         step (if (merged-step? against)
@@ -145,7 +148,7 @@
                           :else (:changed step))]
       cand-v ["contract unchanged" true]
       against [(str "as " env " runs it; no candidate version staged") true]
-      :else ["as on main; no candidate version staged" true])))
+      :else [(str "as on " (reg/shown line) "; no candidate version staged") true])))
 
 (defn- test-case? [props] (= :atlas/test-case (:atlas/type props)))
 
@@ -300,20 +303,20 @@
        " Built against " built-on "; " n " registry change" (when (> n 1) "s") " merged since"
        [:span.mute {:title (str/join " " (map :subject stale))}
         " (" (str/join ", " (cap (map #(short-sha (or (:source-sha %) (:source %) (:commit %))) stale) 5)) ")"]
-       ". Re-run CI to see this PR against current " [:code line] "."])))
+       ". Re-run CI to see this PR against current " [:code (reg/shown line)] "."])))
 
 (defn- base-line
   "Which registry the page is compared against, and how it was chosen."
   [{:keys [line base-v base-note against merge-v cand-v] :as ctx}]
   (if-not against
-    (list [:p "base " [:code line] " @ " base-v base-note]
+    (list [:p "base " [:code (reg/shown line)] " @ " base-v base-note]
           (stale-note ctx))
     (let [{:keys [ref name from date]} against
-          off-line? (and from (not= from line) (not (str/ends-with? line (str "/" from))))]
-      (list [:p "base " [:code ref] " @ " base-v " · what " name " runs"
+          off-line? (and from (not= from line) (not= from (reg/shown line)))]
+      (list [:p "base " [:code (reg/shown ref)] " @ " base-v " · what " name " runs"
              (when (and from (not off-line?)) (list ", deployed from " [:code from])) (when date (str ", recorded " date))
-             (when off-line? (list " " [:span.tag.tag-ext (str "deployed from " from ", not " line)]))]
-            [:p "→ " [:code line] " @ " merge-v base-note ": "
+             (when off-line? (list " " [:span.tag.tag-ext (str "deployed from " from ", not " (reg/shown line))]))]
+            [:p "→ " [:code (reg/shown line)] " @ " merge-v base-note ": "
              (case (:step against)
                :descends (str "merged, not yet on " name)
                :behind (str "older than what " name " runs")
@@ -326,24 +329,41 @@
   "The first step of the header against an environment, named by how the
   PR's base stands to what the environment runs."
   [{:keys [name step from source-sha source]} line]
-  (let [runs (str name " runs " (or from (short-sha (or source-sha source))))]
+  (let [runs (str name " runs " (or from (short-sha (or source-sha source))))
+        line (reg/shown line)]
     (case step
       :descends (str "Merged since " name "'s deploy, not there yet")
       :behind (str "Differs between " name " and this PR's base: " runs "; this PR is built on an older " line)
-      :diverged (str "Differs between " name " and this PR's base: " runs "; this PR is built on a " line " that diverged from it")
+      :diverged (str "Differs between " name " and this PR's base: " runs "; this PR is built on " (a-or-an line) " that diverged from it")
       (str "Differs between " name " and this PR's base"))))
+
+(defn against-switch
+  "Links to this PR read against the line and against each environment the
+  store records, the current one unlinked."
+  [ctx report]
+  (let [{:keys [repo num]} (:pr report)
+        envs (keys (env/recorded))
+        here (some-> ctx :against :ref reg/shown)
+        href (fn [against] (d/with-params (str "/pr?ref=" (java.net.URLEncoder/encode (str repo "#" num) "UTF-8"))
+                             (cond-> (dissoc (or d/*params* {}) "against") against (assoc "against" against))))
+        choice (fn [against label] (if (= against here) [:strong label] [:a {:href (href against)} label]))]
+    (when (and repo num (seq envs))
+      [:p.against-switch "compare with: "
+       (interpose " · " (cons (choice nil (reg/shown (:line ctx)))
+                              (for [e envs] (choice (str "deployed/" e) e))))])))
 
 (defn registry-header [ctx report]
   (when (:base ctx)
     (let [{:keys [base base-v cand cand-v reason against merge merge-v against-problem]} ctx]
       (list
+       (against-switch ctx report)
        (when against-problem (d/problem against-problem))
        (cond
          against
          (let [drift (diff/summary base merge)
                own (when cand (diff/summary merge cand))
                env (:name against)]
-           (derived (str "registry store " (:ref against) " " base-v " → " (:line ctx) " " merge-v (when cand-v (str " → CI " cand-v)))
+           (derived (str "registry store " (reg/shown (:ref against)) " " base-v " → " (reg/shown (:line ctx)) " " merge-v (when cand-v (str " → CI " cand-v)))
                     (base-line ctx)
                     (when-not cand [:p "no registry for this PR's head, so entities are shown as " env " runs them"])
                     (when (and (not cand) reason) [:p.mute reason])
@@ -356,7 +376,7 @@
          (not cand)
          (derived "registry store"
                   (base-line ctx)
-                  [:p "registry " [:code base-v] " · no registry for this PR's head, so entities are shown as on main"]
+                  [:p "registry " [:code base-v] " · no registry for this PR's head, so entities are shown as on " (reg/shown (:line ctx))]
                   (when reason [:p.mute reason]))
 
          :else
