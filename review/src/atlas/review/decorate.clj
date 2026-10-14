@@ -219,7 +219,7 @@
 
 (defn- risk-of [{:keys [base cand] :as ctx} id]
   (let [d (delta ctx id)
-        change (cond (:deleted? d) :deleted (or (:new? d) (changed? d)) :contract :else :code)]
+        change (cond (:deleted? d) :deleted (:new? d) :new (changed? d) :contract :else :code)]
     (reg/with-version (if (= :deleted change) base (or cand base))
       (when (lookup/identity-for id) (risk/assess id change)))))
 

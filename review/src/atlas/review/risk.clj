@@ -24,7 +24,8 @@
 
 (defn assess
   "Risk of changing `id`, from the registry bound as current. `change` is
-  :contract, :code or :deleted. Returns the level, the score and every reason
+  :new, :contract, :code or :deleted; a new entity has no earlier contract to
+  have changed, so it scores as a contract change and says new. Returns the level, the score and every reason
   that produced it, so the level can be checked rather than trusted."
   [id change]
   (let [aspects (lookup/identity-for id)
@@ -35,6 +36,7 @@
         ext (external aspects)
         reasons (cond-> []
                   (= :deleted change) (conj [3 "deleted"])
+                  (= :new change) (conj [2 "new"])
                   (= :contract change) (conj [2 "its contract changed"])
                   (seq surfaces) (conj [2 (str "reaches " (count surfaces) " entry point" (when (> (count surfaces) 1) "s") " ("
                                                (apply str (interpose ", " (for [[t n] (sort-by (comp - val) surface-types*)] (str n " " (name t))))) ")")])
