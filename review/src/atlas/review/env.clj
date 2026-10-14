@@ -167,7 +167,7 @@
 
 (defn- meaning
   "What the comparison of `env` with `line` means, in a sentence."
-  [env line {:keys [relation env-v line-v parted parted-how on-line]}]
+  [env line {:keys [relation env-v parted parted-how on-line]}]
   (let [from (or (:from env-v) "its branch")]
     (case relation
       :descends (if (zero? (total on-line))
