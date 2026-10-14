@@ -27,3 +27,12 @@
         (is (some #(re-find #"no test case" %) (:reasons leaf)))
         (is (> (:score core) (:score leaf)))
         (is (#{:low :medium :high} (:level leaf)))))))
+
+(deftest a-new-entity-is-new-not-a-changed-contract
+  (with-entities
+    (fn []
+      (let [new (risk/assess :fn.t/core :new)
+            changed (risk/assess :fn.t/core :contract)]
+        (is (some #{"new"} (:reasons new)))
+        (is (not-any? #(re-find #"contract changed" %) (:reasons new)))
+        (is (= (:score changed) (:score new)))))))

@@ -20,20 +20,32 @@
 
 (defn- parse-version [line]
   (let [[commit date subject trailer] (str/split line #"\u001f" -1)
-        [_ source env from] (re-matches #"registry: (\S+)(?: deployed to (\S+) from (\S+))?.*" (or subject ""))]
-    {:commit commit :date date :subject subject :source source :env env :from from
+        [_ source env from] (re-matches #"registry: (\S+)(?: deployed to (\S+) from (\S+))?.*" (or subject ""))
+        title (when-not env (some-> (re-matches #"registry: \S+ (.+)" (or subject "")) second str/trim not-empty))]
+    {:commit commit :date date :subject subject :source source :env env :from from :title title
      :source-sha (not-empty (str/trim (or trailer "")))}))
 
 (defn versions
   "Recorded versions on `branch` (the configured one by default), newest first:
-  `{:commit :date :subject :source :source-sha :env :from}`. Source is the
-  project sha from the subject, source-sha the `Source-Sha` trailer, env and
-  from the environment and git branch of a `deployed to <env> from <branch>` subject."
+  `{:commit :date :subject :source :source-sha :env :from :title}`. Source is
+  the project sha from the subject, source-sha the `Source-Sha` trailer, env
+  and from the environment and git branch of a `deployed to <env> from
+  <branch>` subject, title the subject of the project commit a line version
+  records, when the store's subject carries it. A version is a commit that
+  changes the registry under the prefix, or an empty `registry: ` commit: the
+  store records a merge or a deploy that leaves the registry as it was
+  without changing a file."
   ([] (versions (:branch @config)))
   ([branch]
-   (for [l (str/split (git "log" "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Source-Sha,valueonly,separator=%x20)%x1e" branch "--" (:prefix @config)) #"\u001e")
-         :let [l (str/trim l)] :when (seq l)]
-     (parse-version l))))
+   (let [prefix (:prefix @config)]
+     (for [chunk (str/split (git "log" "--name-only" "--format=%x1e%H%x1f%cI%x1f%s%x1f%(trailers:key=Source-Sha,valueonly,separator=%x20)" branch) #"\u001e")
+           :let [[head & files] (remove str/blank? (str/split-lines chunk))]
+           :when head
+           :let [v (parse-version (str/trim head))]
+           :when (if (seq files)
+                   (some #(str/starts-with? % prefix) files)
+                   (str/starts-with? (or (:subject v) "") "registry: "))]
+       v))))
 
 (defn- built-from? [sha {:keys [source source-sha]}]
   (boolean (or (and source-sha (= sha source-sha)) (and source (str/starts-with? sha source)))))
@@ -46,6 +58,13 @@
 (defn latest
   ([] (latest (:branch @config)))
   ([branch] (first (versions branch))))
+
+(defn deployed
+  "The newest deploy record on an environment branch: a version whose subject
+  says `deployed to <env>`, or nil. Versions without it, such as the line
+  commits a new branch is seeded with, are not deploys."
+  [branch]
+  (some #(when (:env %) %) (versions branch)))
 
 (defn oldest [branch] (last (versions branch)))
 

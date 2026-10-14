@@ -83,6 +83,19 @@
               #(try (not-empty (str/trim (gh "api" (str "repos/" repo "/commits/" sha) "--jq" ".commit.committer.date")))
                     (catch Exception _ nil))))
 
+(defn pulls-with
+  "The pull requests of `repo` whose commits include project commit `sha`, as
+  `{:number :state :merged? :merge-sha :title}`, merged ones first; nil when
+  GitHub cannot tell."
+  [repo sha]
+  (remembered [repo :pulls sha]
+              #(try (->> (json/parse-string (gh "api" (str "repos/" repo "/commits/" sha "/pulls")) true)
+                         (map (fn [p] {:number (:number p) :state (:state p) :merged? (some? (:merged_at p))
+                                       :merge-sha (when (:merged_at p) (:merge_commit_sha p)) :title (:title p)}))
+                         (sort-by (comp not :merged?))
+                         vec)
+                    (catch Exception _ nil))))
+
 (defn ancestry
   "What `reg/base-for` asks about the commits of `repo`."
   [repo]
