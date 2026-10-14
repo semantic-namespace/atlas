@@ -28,11 +28,21 @@
   (let [s (reg/shown branch)]
     (when (str/starts-with? s deployed) (not-empty (subs s (count deployed))))))
 
-(defn recorded
-  "`{env store-branch}` for every `deployed/<env>` branch of the store, the
-  configured branch's remote first when both it and a local branch exist."
-  []
+(defn- env-branches []
   (into (sorted-map) (for [e (distinct (keep env-of (reg/branches)))] [e (reg/named (str deployed e))])))
+
+(defn recorded
+  "`{env store-branch}` for every `deployed/<env>` branch of the store that
+  holds a deploy record, the configured branch's remote first when both it
+  and a local branch exist."
+  []
+  (into (sorted-map) (filter (comp reg/deployed val)) (env-branches)))
+
+(defn seeded
+  "The environments whose `deployed/<env>` branch holds no deploy record yet,
+  only the line commits it was seeded with."
+  []
+  (sort (keep (fn [[e ref]] (when-not (reg/deployed ref) e)) (env-branches))))
 
 (defn- short-sha [s] (when s (subs s 0 (min 7 (count s)))))
 
@@ -138,7 +148,7 @@
   line and GitHub knows it; `:pr-head?` when it is that pull request's head
   before it was merged and the environment's branch adds nothing to it."
   [line ref]
-  (let [env-v (reg/latest ref)
+  (let [env-v (reg/deployed ref)
         line-v (reg/latest line)
         relation (reg/relation line env-v line-v (:ancestor? (ancestry)))
         env-r (reg/registry-at (:commit env-v))
@@ -205,18 +215,26 @@
 
 (defn- merge-label [v] (if-let [n (pr-number v)] (pr-link n) (commit-link (built-from v))))
 
-(def ^:private type-names {"execution-function" "exec-fn" "interface-endpoint" "endpoint" "structure-component" "component"
-                           "llm-prompt" "LLM prompt" "data-schema" "data schema"})
+(def ^:private type-names {"execution-function" "exec-fn" "interface-endpoint" "endpoint" "endpoint" "endpoint"
+                           "data-key" "data key" "test-case" "test case" "invariant" "invariant"})
+
+(def ^:private known-types (conj (set (vals type-names)) "MCP tool"))
 
 (defn type-label
   "A short name for entity type `t`: exec-fn, endpoint, MCP tool, data key,
-  test case; others by their name without the namespace."
+  test case, invariant; any other type by its name without the namespace."
   [t]
   (let [n (if t (name t) "entity")]
     (or (type-names n)
         (when (str/ends-with? n "mcp-tool") "MCP tool")
-        (when (str/ends-with? n "endpoint") "endpoint")
-        (str/replace n "-" " "))))
+        (when (str/ends-with? n "-endpoint") "endpoint")
+        n)))
+
+(defn type-count
+  "`n` entities of type label `t`: a known type in the plural, any other as
+  its name and the count, since its plural cannot be told."
+  [n t]
+  (if (known-types t) (plural n t) (str t " (" n ")")))
 
 (defn- assessed [from to {:keys [new changed deleted]}]
   (for [[change ids] [[:new new] [:changed changed] [:deleted deleted]] id ids]
@@ -291,11 +309,11 @@
       (let [[prefix names] (relative-names (map :id rs))
             [shown more] (split-at names-shown names)
             rs1 (row-reasons shared (first rs))]
-        [:p.env-group (change-tag (:change (first rs))) " " (plural n t) (when prefix (list " in " [:code prefix])) ": "
+        [:p.env-group (change-tag (:change (first rs))) " " (type-count n t) (when prefix (list " in " [:code prefix])) ": "
          (str/join ", " shown)
          (when (seq more) [:span.mute {:title (str/join ", " more)} (str ", … " (count more) " more")])
          (when (seq rs1) (list " — " (interpose " · " rs1)))])
-      (list [:p.mute.env-type (plural n t)]
+      (list [:p.mute.env-type (type-count n t)]
             [:ul.ids.risk (for [r rs] (entity-row shared also r))]))))
 
 (defn- one-line [title] [:div.env-list [:p [:b title] ": nothing."]])
@@ -374,9 +392,9 @@
           (= :behind relation) (str ", ahead of " line)
           (nil? relation) (str ", order against " line " unknown"))))
 
-(defn- overview-row [line env ref same]
+(defn- overview-row [line env ref same seeded?]
   (if-not ref
-    [:li [:b env] [:span.mute " not recorded yet"]]
+    [:li [:b env] [:span.mute " not recorded yet" (when seeded? (str " (branch seeded from " (reg/shown line) ")"))]]
     (let [{:keys [env-v relation only-env differs merges] :as c} (compare-env line ref)
           ws (waiting merges)]
       [:li [:a {:href (env-href env)} [:b env]] " runs " (runs c line)
@@ -392,9 +410,10 @@
 
 (defn- overview [line problem]
   (let [found (recorded)
-        envs (distinct (concat (:envs @settings) (keys found)))
+        seeds (set (seeded))
+        envs (distinct (concat (:envs @settings) (sort (concat (keys found) seeds))))
         line-v (reg/latest line)
-        sha-of (into {} (for [[e ref] found] [e (built-from (reg/latest ref))]))]
+        sha-of (into {} (for [[e ref] found] [e (built-from (reg/deployed ref))]))]
     (list
      style
      (when problem (d/problem problem))
@@ -406,7 +425,7 @@
         (for [[i e] (map-indexed vector envs)
               :let [sha (sha-of e)
                     same (when sha (some #(when (= sha (sha-of %)) %) (take i envs)))]]
-          (overview-row line e (found e) same))]))))
+          (overview-row line e (found e) same (seeds e)))]))))
 
 (defn- detail [line asked]
   (let [ref (reg/resolve-against asked)
@@ -414,7 +433,8 @@
     (cond
       (not ref) (overview line (str "against=" asked ": the registry store has no such branch"))
       (= ref line) (overview line (str "against=" asked ": that is " (reg/shown line) " itself; pick a " deployed "<env> branch"))
-      (not (reg/latest ref)) (overview line (str "against=" asked ": " (reg/shown ref) " holds no recorded registry"))
+      (not (reg/deployed ref)) (overview line (str "against=" asked ": " (reg/shown ref) " holds no deploy record yet"
+                                                   (when (reg/latest ref) (str ", only the " (reg/shown line) " commits it was seeded with"))))
       :else
       (let [{:keys [env-v line-v relation on-line only-env differs registries] :as c} (compare-env line ref)
             {env-r :env line-r :line part-r :parted} registries

@@ -50,6 +50,13 @@
   ([] (latest (:branch @config)))
   ([branch] (first (versions branch))))
 
+(defn deployed
+  "The newest deploy record on an environment branch: a version whose subject
+  says `deployed to <env>`, or nil. Versions without it, such as the line
+  commits a new branch is seeded with, are not deploys."
+  [branch]
+  (some #(when (:env %) %) (versions branch)))
+
 (defn oldest [branch] (last (versions branch)))
 
 (defn- instant [t] (.toInstant (java.time.OffsetDateTime/parse t)))

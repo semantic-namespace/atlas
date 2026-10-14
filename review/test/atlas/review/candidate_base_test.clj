@@ -440,3 +440,51 @@
   (deploy-to! "dev" "main" :p1 before-merge)
   (is (some #(and (map? %) (= "2026-10-13T13:05:00+00:00" (:title %))) (tree-seq coll? seq (env-hiccup "deployed/dev")))
       "the exact time stays on hover"))
+
+(defn- seed!
+  "Creates `deployed/<env>` from the store's main, as CI does before the
+  environment's first deploy record."
+  [env]
+  (git! *store* nil "branch" (str "deployed/" env) "main"))
+
+(defn- deploy-on-seed!
+  "Records on the seeded `deployed/<env>` a deploy of main's commit `from`."
+  [env from reg]
+  (git! *store* nil "checkout" "-q" (str "deployed/" env))
+  (record! *store* "2026-10-13T13:05:00Z" reg (*shas* from) (str "registry: " (s7 from) " deployed to " env " from main"))
+  (git! *store* nil "checkout" "-q" "-f" "main"))
+
+(deftest a-seeded-environment-branch-is-not-a-deploy
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (seed! "production")
+  (let [h (env-page nil)]
+    (is (= ["dev"] (keys (env/recorded))))
+    (is (= ["production"] (env/seeded)))
+    (is (= "production not recorded yet (branch seeded from main)" (row h "production")))
+    (is (not (str/includes? h "unnamed branch"))))
+  (is (str/includes? (env-page "deployed/production") "against=deployed/production: deployed/production holds no deploy record yet, only the main commits it was seeded with"))
+  (let [[ctx h] (against-dev {:against "deployed/production"})]
+    (is (nil? (:against ctx)))
+    (is (str/includes? h "deployed/production holds no deploy record yet; compared against main instead"))
+    (is (not (str/includes? h "production ·")) "the switcher lists only environments with a deploy record")))
+
+(deftest a-seeded-environment-branch-reads-from-its-deploy-record
+  (seed! "production")
+  (deploy-on-seed! "production" :p1 before-merge)
+  (let [h (env-page nil)]
+    (is (= ["production"] (keys (env/recorded))))
+    (is (empty? (env/seeded)))
+    (is (= (str "production runs main at " (s7 :p1) " · 1 merge with registry changes waiting: " (s7 :p3) " · deployed 19h ago")
+           (row h "production"))))
+  (let [[ctx _] (against-dev {:against "deployed/production"})]
+    (is (= (*shas* :p1) (get-in ctx [:against :source-sha])))
+    (is (= "production" (get-in ctx [:against :env])))))
+
+(deftest only-known-types-are-pluralised
+  (is (= "8 exec-fns" (env/type-count 8 (env/type-label :atlas/execution-function))))
+  (is (= "2 data keys" (env/type-count 2 (env/type-label :atlas/data-key))))
+  (is (= "3 MCP tools" (env/type-count 3 (env/type-label :atlas/app-mcp-tool))))
+  (is (= "2 invariants" (env/type-count 2 (env/type-label :atlas/invariant))))
+  (is (= "8 test cases" (env/type-count 8 (env/type-label :atlas/test-case))))
+  (is (= "app-data (8)" (env/type-count 8 (env/type-label :atlas/app-data))))
+  (is (= "workflow-producer (1)" (env/type-count 1 (env/type-label :atlas/workflow-producer)))))

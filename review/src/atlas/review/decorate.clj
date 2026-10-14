@@ -72,13 +72,13 @@
     (let [line (:branch @reg/config)
           asked (not-empty (get d/*params* "against"))
           ref (when asked (reg/resolve-against asked))
-          env-v (when (and ref (not= ref line)) (reg/latest ref))
+          env-v (when (and ref (not= ref line)) (reg/deployed ref))
           {:keys [registry label reason] :as cand} (candidate-for (:pr report))
           {base-v :version :as choice} (choose-base line report cand)
           base-label (reg/label base-v)
           note (base-note choice)
           problem (cond (and asked (not ref)) (str "against=" asked ": the registry store has no such branch; compared against " (reg/shown line) " instead")
-                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " (reg/shown ref) " holds no recorded registry; compared against " (reg/shown line) " instead"))]
+                        (and ref (not= ref line) (not env-v)) (str "against=" asked ": " (reg/shown ref) " holds no deploy record yet; compared against " (reg/shown line) " instead"))]
       (cond-> {:report report :line line
                :base-v base-label :base-note note
                :base (reg/registry-at (:commit base-v))

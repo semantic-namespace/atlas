@@ -111,7 +111,11 @@ to reach it, by their `#<n>`, how many entities only its branch has, and how
 long ago it was deployed. Two environments on the same commit say so.
 `--envs dev,staging,production` names the environments to expect; one with
 no branch yet shows as `not recorded yet`. Without `--envs` only the
-recorded ones are listed.
+recorded ones are listed. Only a commit whose subject says `deployed to
+<env>` is a deploy: a `deployed/<env>` branch that holds only the line
+commits it was seeded with shows as `not recorded yet (branch seeded from
+<line>)`, here, on the environment's own page and in the PR page's
+environment switcher.
 
 `/env?against=deployed/<env>` compares one environment with the line's
 newest version, entity by entity, each marked new, changed or deleted:
@@ -126,8 +130,9 @@ newest version, entity by entity, each marked new, changed or deleted:
 - `Only on <env>'s branch`: what the environment has and the line does not,
   as the branch it was deployed from changed it.
 
-Within a merge the entities are grouped by type (exec-fn, endpoint, MCP
-tool, data key, test case, or the type's own name); a long group whose rows
+Within a merge the entities are grouped by type (exec-fns, endpoints, MCP
+tools, data keys, test cases, invariants; any other type by its own name
+and a count, as `workflow-producer (3)`); a long group whose rows
 differ in nothing but their names is one line, the names relative to the
 namespace they share. A risk reason every entity on the page gives is said
 once above the lists, so each row keeps only what tells it apart; a high
