@@ -506,3 +506,19 @@
     (let [h (env-page "deployed/production")]
       (is (str/includes? h (str "Tidy the docs (#15) · " (subs m 0 7) " · no registry changes")))
       (is (str/includes? h "· 0 new, 0 changed, 0 deleted · 1 merge since production's commit")))))
+
+(deftest an-environment-at-a-line-merge-not-yet-recorded-runs-the-line
+  (git! *project* nil "checkout" "-q" "main")
+  (let [m (commit! *project* "2026-10-14T07:50:00Z" "Fix a typo (#31)")]
+    (git! *store* nil "checkout" "-q" "--orphan" "deployed/production")
+    (record! *store* "2026-10-14T08:00:00Z" after-merge m (str "registry: " (subs m 0 7) " deployed to production from main"))
+    (git! *store* nil "checkout" "-q" "-f" "main")
+    (let [gh {:pulls {m [{:number 31 :state "closed" :merged_at "2026-10-14T07:50:00Z" :merge_commit_sha m :title "Fix a typo"}]}}
+          h (env-page "deployed/production" gh)]
+      (is (str/includes? h (str "production runs main at " (subs m 0 7) " (the merge of #31), past main's newest recorded registry with the same registry; nothing on main waits to be deployed.")))
+      (is (not (str/includes? h "before it was merged")))
+      (is (str/includes? h "Only on production's branch: nothing."))
+      (is (= (str "production runs main at " (subs m 0 7) " (merge of #31) · nothing waiting · deployed 1h ago")
+             (row (env-page nil gh) "production")))
+      (is (str/includes? (env-page "deployed/production") (str "production runs main at " (subs m 0 7) ", past main's newest recorded registry"))
+          "without GitHub, ancestry alone tells it is the line"))))

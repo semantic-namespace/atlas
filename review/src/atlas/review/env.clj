@@ -145,7 +145,10 @@
   changed it. Without an order between the two, `:differs` holds every
   difference, from the environment to the line. `:pr` is the pull request
   holding the commit the environment runs, when that commit is not on the
-  line and GitHub knows it; `:pr-head?` when it is that pull request's head
+  line and GitHub knows it; `:merge?` when that commit is the pull request's
+  merge itself; `:line-ahead?` when the environment's commit descends from the
+  line's newest version and its branch adds nothing to it, the line past its
+  newest recorded registry; `:pr-head?` when it is that pull request's head
   before it was merged and the environment's branch adds nothing to it."
   [line ref]
   (let [env-v (reg/deployed ref)
@@ -161,10 +164,13 @@
         pr (pull-request line env-v relation)
         on-line (when part-v (only ids (diff/summary part-r line-r)))
         only-env (when part-v (only ids (diff/summary part-r env-r)))
-        pr-head? (boolean (and (:merged? pr) only-env (every? empty? (vals only-env))))
+        same? (boolean (and only-env (every? empty? (vals only-env))))
+        merge? (boolean (when-let [m (:merge-sha pr)] (let [sha (built-from env-v)] (or (str/starts-with? m sha) (str/starts-with? sha m)))))
+        line-ahead? (and same? (= :behind relation))
+        pr-head? (and same? (:merged? pr) (not merge?) (not line-ahead?))
         ms (remove #(and pr-head? (merge-of? pr (:version %))) (merges line (line-start line env-v relation part-v)))
         placed (when on-line (attribute ms (vec (apply concat (vals on-line)))))]
-    (cond-> {:ref ref :env-v env-v :line-v line-v :relation relation :pr pr :pr-head? pr-head?
+    (cond-> {:ref ref :env-v env-v :line-v line-v :relation relation :pr pr :pr-head? pr-head? :merge? merge? :line-ahead? line-ahead?
              :registries {:env env-r :line line-r :parted part-r}}
       part-v (assoc :parted part-v :parted-how (:how part) :on-line on-line :only-env only-env
                     :merges (:merges placed) :unplaced (:unplaced placed))
@@ -353,9 +359,13 @@
 
 (defn- meaning
   "What the comparison of `env` with `line` means, in a sentence."
-  [env line {:keys [relation env-v parted parted-how on-line pr pr-head?]}]
+  [env line {:keys [relation env-v parted parted-how on-line pr pr-head? merge? line-ahead?]}]
   (let [from (or (:from env-v) "its branch")]
     (cond
+      line-ahead?
+      (str env " runs " line " at " (short-sha (built-from env-v)) (when merge? (str " (the merge of #" (:number pr) ")"))
+           ", past " line "'s newest recorded registry with the same registry; nothing on " line " waits to be deployed.")
+
       pr-head?
       (str env " runs " from " — #" (:number pr) " before it was merged (as " (short-sha (:merge-sha pr)) "), registry-wise identical to #"
            (:number pr) " as merged" (if (zero? (total on-line)) (str "; nothing else on " line " waits to be deployed.")
@@ -363,7 +373,8 @@
 
       :else
       (str (when (and pr (not (:merged? pr))) (str env " runs " from " — #" (:number pr) ", not merged yet. "))
-           (when (:merged? pr) (str env " runs " from " — #" (:number pr) " before it was merged (as " (short-sha (:merge-sha pr)) "), with more on its branch since. "))
+           (when merge? (str env " runs " from " at " (short-sha (built-from env-v)) ", the merge of #" (:number pr) ". "))
+           (when (and (:merged? pr) (not merge?)) (str env " runs " from " — #" (:number pr) " before it was merged (as " (short-sha (:merge-sha pr)) "), with more on its branch since. "))
            (case relation
              :descends (if (zero? (total on-line))
                          (str env " runs " line "'s newest registry; nothing on " line " waits to be deployed.")
@@ -382,9 +393,11 @@
 
 (defn- runs
   "What an environment runs, as the overview tells it."
-  [{:keys [env-v relation pr pr-head?]} line]
-  (list (if-let [b (:from env-v)] [:code b] "an unnamed branch") " at " (commit-link (built-from env-v))
+  [{:keys [env-v relation pr pr-head? merge? line-ahead?]} line]
+  (list (cond line-ahead? [:code line] (:from env-v) [:code (:from env-v)] :else "an unnamed branch") " at " (commit-link (built-from env-v))
         (cond
+          merge? (list " (merge of " (pr-link (:number pr)) ")")
+          line-ahead? nil
           pr-head? (list " — " (pr-link (:number pr)) " before it was merged")
           (:merged? pr) (list " — " (pr-link (:number pr)) " before it was merged, with more since")
           pr (list " — " (pr-link (:number pr)) ", not merged yet")
@@ -402,7 +415,7 @@
        (for [part [(cond
                      differs (str (entities (total differs)) " differ")
                      (seq ws) (list (plural (count ws) "merge") " with registry changes waiting: " (interpose ", " (map (comp merge-label :version) ws)))
-                     (#{:descends :diverged} relation) "nothing waiting")
+                     (or (#{:descends :diverged} relation) (:line-ahead? c)) "nothing waiting")
                    (when (and only-env (pos? (total only-env))) (str (entities (total only-env)) " only on its branch"))
                    (list "deployed " (when-el (:date env-v)))]
              :when part]

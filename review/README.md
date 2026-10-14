@@ -151,7 +151,10 @@ which pull requests contain it. When one was merged and the environment's
 branch adds nothing to it, the environment runs that pull request's head
 from before the merge: the page says so, with the merge commit, instead of
 calling the branch diverged, and leaves that merge out of what is waiting.
-An open pull request is named as not merged yet. Without an answer from
+An environment at a commit that descends from the line's newest version,
+with nothing of its own, runs the line past its newest recorded registry,
+and is said so, naming the pull request when the commit is its merge. An open
+pull request is named as not merged yet. Without an answer from
 GitHub the page reads as before.
 
 Times are shown relative to now (`20h ago`, `yesterday 13:38`, a weekday
