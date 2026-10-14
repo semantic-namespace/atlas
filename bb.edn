@@ -4,4 +4,10 @@
                                            :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}}
  :tasks {bb-compat {:doc "Every namespace under core, store and review loads in bb, except those in bb/jvm-only.edn"
                     :requires ([bb-compat])
-                    :task (bb-compat/-main)}}}
+                    :task (bb-compat/-main)}
+         registry {:doc "Registry questions from a git store checkout, no JVM. bb registry <command> <store-dir> [args] [--prefix p] [--json]. Commands: diff <old-ref> <new-ref>; timeline <from-ref> <to-ref> [dev-id]; blast-radius|trace-causes <ref> <dev-id>... [--hops n]; producers-of|consumers-of <ref> <data-key>; dependents|dependencies <ref> <dev-id>; gaps <ref> [--min-similarity x] [--max n]. From another repo: bb --config <atlas-checkout>/bb.edn registry ..."
+                   :requires ([atlas.review.cli :as cli])
+                   :task (apply cli/-main *command-line-args*)}
+         store-cli-smoke {:doc "Builds a throwaway git store from test/app examples and runs every registry command against it"
+                          :requires ([store-cli-smoke])
+                          :task (store-cli-smoke/-main)}}}

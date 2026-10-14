@@ -17,3 +17,4 @@ jobs:
         with:
           bb: 1.12.212
       - run: bb bb-compat
+      - run: bb store-cli-smoke

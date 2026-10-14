@@ -8,7 +8,9 @@
 (defonce config (atom {:store nil :prefix nil :branch "origin/main" :fetch-ttl-ms 60000}))
 
 (defn configure! [store prefix branch]
-  (swap! config assoc :store store :prefix (str (str/replace prefix #"/$" "") "/") :branch (or branch "origin/main")))
+  (swap! config assoc :store store
+         :prefix (if (str/blank? prefix) "" (str (str/replace prefix #"/$" "") "/"))
+         :branch (or branch "origin/main")))
 
 (defonce ^:private cache (atom {}))
 
@@ -199,7 +201,8 @@
   [commit]
   (or (@cache commit)
       (let [prefix (:prefix @config)
-            paths (filter #(re-find #"/entities/[^/]+\.edn$" %) (str/split-lines (git "ls-tree" "-r" "--name-only" commit "--" prefix)))
+            paths (filter #(re-find #"(?:^|/)entities/[^/]+\.edn$" %)
+                         (str/split-lines (apply git "ls-tree" "-r" "--name-only" commit (when (seq prefix) ["--" prefix]))))
             files (into {} (for [p paths] [(subs p (count prefix)) (git "show" (str commit ":" p))]))
             reg (normalise (canon/files->registry files))]
         (swap! cache assoc commit reg)
