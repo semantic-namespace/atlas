@@ -4,6 +4,7 @@
   (:require [datascript.core :as d]
             [clojure.set]
             [atlas.datalog :as datalog]
+            [atlas.datalog.graph :as graph]
             [atlas.registry :as registry]))
 
 (defn query-entity-aspects
@@ -71,29 +72,8 @@
   ([db] (query-structural-gaps db 0.5 20))
   ([db min-similarity] (query-structural-gaps db min-similarity 20))
   ([db min-similarity max-results]
-   (let [all-dev-ids (vec (query-all-entities db))
-         aspects-map (into {} (map (fn [id] [id (query-entity-aspects db id)]) all-dev-ids))
-         deps-map (into {} (map (fn [id] [id (set (datalog/query-dependencies db id))]) all-dev-ids))
-         n (count all-dev-ids)
-         gaps (for [i (range n)
-                    j (range (inc i) n)
-                    :let [dev-a (nth all-dev-ids i)
-                          dev-b (nth all-dev-ids j)
-                          aspects-a (get aspects-map dev-a #{})
-                          aspects-b (get aspects-map dev-b #{})
-                          shared (clojure.set/intersection aspects-a aspects-b)
-                          union (clojure.set/union aspects-a aspects-b)
-                          similarity (if (seq union)
-                                       (/ (count shared) (count union))
-                                       0)
-                          deps-a (get deps-map dev-a #{})
-                          deps-b (get deps-map dev-b #{})
-                          connected? (or (contains? deps-a dev-b)
-                                         (contains? deps-b dev-a))]
-                    :when (and (> similarity min-similarity)
-                               (not connected?))]
-                {:a dev-a
-                 :b dev-b
-                 :similarity (double similarity)
-                 :shared-aspects (vec (sort shared))})]
-     (vec (take max-results (sort-by (comp - :similarity) gaps))))))
+   (graph/gaps (query-all-entities db)
+               #(query-entity-aspects db %)
+               #(set (datalog/query-dependencies db %))
+               min-similarity
+               max-results)))
