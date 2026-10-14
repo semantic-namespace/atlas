@@ -115,7 +115,9 @@ recorded ones are listed. Only a commit whose subject says `deployed to
 <env>` is a deploy: a `deployed/<env>` branch that holds only the line
 commits it was seeded with shows as `not recorded yet (branch seeded from
 <line>)`, here, on the environment's own page and in the PR page's
-environment switcher.
+environment switcher. A record that leaves the registry as it was is an
+empty store commit; it still counts as a version, a deploy or a line merge
+with no registry changes.
 
 `/env?against=deployed/<env>` compares one environment with the line's
 newest version, entity by entity, each marked new, changed or deleted:

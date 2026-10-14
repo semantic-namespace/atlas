@@ -31,12 +31,21 @@
   the project sha from the subject, source-sha the `Source-Sha` trailer, env
   and from the environment and git branch of a `deployed to <env> from
   <branch>` subject, title the subject of the project commit a line version
-  records, when the store's subject carries it."
+  records, when the store's subject carries it. A version is a commit that
+  changes the registry under the prefix, or an empty `registry: ` commit: the
+  store records a merge or a deploy that leaves the registry as it was
+  without changing a file."
   ([] (versions (:branch @config)))
   ([branch]
-   (for [l (str/split (git "log" "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Source-Sha,valueonly,separator=%x20)%x1e" branch "--" (:prefix @config)) #"\u001e")
-         :let [l (str/trim l)] :when (seq l)]
-     (parse-version l))))
+   (let [prefix (:prefix @config)]
+     (for [chunk (str/split (git "log" "--name-only" "--format=%x1e%H%x1f%cI%x1f%s%x1f%(trailers:key=Source-Sha,valueonly,separator=%x20)" branch) #"\u001e")
+           :let [[head & files] (remove str/blank? (str/split-lines chunk))]
+           :when head
+           :let [v (parse-version (str/trim head))]
+           :when (if (seq files)
+                   (some #(str/starts-with? % prefix) files)
+                   (str/starts-with? (or (:subject v) "") "registry: "))]
+       v))))
 
 (defn- built-from? [sha {:keys [source source-sha]}]
   (boolean (or (and source-sha (= sha source-sha)) (and source (str/starts-with? sha source)))))

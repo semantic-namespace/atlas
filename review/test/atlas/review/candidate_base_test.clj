@@ -35,10 +35,9 @@
   (let [root (io/file dir "registries" "app")]
     (doseq [f (reverse (file-seq root))] (io/delete-file f true))
     (doseq [[p content] (canon/registry->files reg)]
-      (let [f (io/file root p)] (io/make-parents f) (spit f content)))
-    (spit (io/file root "source") src))
+      (let [f (io/file root p)] (io/make-parents f) (spit f content))))
   (git! dir nil "add" "-A")
-  (git! dir date "commit" "-q" "-m" (or subject (str "registry: " (subs src 0 7))) "-m" (str "Source-Sha: " src)))
+  (git! dir date "commit" "-q" "--allow-empty" "-m" (or subject (str "registry: " (subs src 0 7))) "-m" (str "Source-Sha: " src)))
 
 (def ^:dynamic *project* nil)
 (def ^:dynamic *store* nil)
@@ -488,3 +487,22 @@
   (is (= "8 test cases" (env/type-count 8 (env/type-label :atlas/test-case))))
   (is (= "app-data (8)" (env/type-count 8 (env/type-label :atlas/app-data))))
   (is (= "workflow-producer (1)" (env/type-count 1 (env/type-label :atlas/workflow-producer)))))
+
+(deftest a-record-that-leaves-the-registry-as-it-was-is-still-a-version
+  (seed! "production")
+  (git! *store* nil "checkout" "-q" "deployed/production")
+  (git! *store* "2026-10-13T13:05:00Z" "commit" "-q" "--allow-empty"
+        "-m" (str "registry: " (s7 :p3) " deployed to production from main") "-m" (str "Source-Sha: " (*shas* :p3)))
+  (git! *store* nil "checkout" "-q" "-f" "main")
+  (let [m (merge-on-main! "Tidy the docs (#15)" after-merge)
+        v (reg/deployed (reg/named "deployed/production"))]
+    (is (= "" (git! *store* nil "diff" "--name-only" "HEAD~1" "HEAD")) "the line's merge record is an empty commit too")
+    (is (= (*shas* :p3) (:source-sha v)))
+    (is (= "production" (:env v)))
+    (is (= ["production"] (keys (env/recorded))))
+    (is (= (str "Tidy the docs (#15)") (:title (reg/latest "main"))))
+    (let [h (env-page nil)]
+      (is (= (str "production runs main at " (s7 :p3) " · nothing waiting · deployed 19h ago") (row h "production"))))
+    (let [h (env-page "deployed/production")]
+      (is (str/includes? h (str "Tidy the docs (#15) · " (subs m 0 7) " · no registry changes")))
+      (is (str/includes? h "· 0 new, 0 changed, 0 deleted · 1 merge since production's commit")))))
