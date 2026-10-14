@@ -104,22 +104,34 @@ since nothing else refreshes the checkout.
 
 `/env` (listed on the index as Environments) shows what every environment
 runs against the newest version of the line, computed from the store when
-the page is asked for. One row per `deployed/<env>` branch: the store
-version, the project commit it was built from, the git branch it was
-deployed from, when it was recorded, how it stands to the line's newest
-version (behind the line, ahead of it, diverged, or order unknown) and how
-many entities differ on each side. `--envs dev,staging,production` names the
-environments to expect; one with no branch yet shows as `not recorded yet`.
-Without `--envs` only the recorded ones are listed.
+the page is asked for. One line per `deployed/<env>` branch: the git branch
+and project commit it was deployed from (or the pull request that commit
+belongs to, see below), which line merges with registry changes are waiting
+to reach it, by their `#<n>`, how many entities only its branch has, and how
+long ago it was deployed. Two environments on the same commit say so.
+`--envs dev,staging,production` names the environments to expect; one with
+no branch yet shows as `not recorded yet`. Without `--envs` only the
+recorded ones are listed.
 
 `/env?against=deployed/<env>` compares one environment with the line's
-newest version, entity by entity, grouped by risk as on the PR page, each
-marked new, changed or deleted:
+newest version, entity by entity, each marked new, changed or deleted:
 
 - `On <line>, not deployed`: what the line has and the environment does not
-  run, as the line changed it.
+  run, under the line merge that last changed each entity, newest merge
+  first. A merge is named by its subject, its `(#<n>)` linked to the pull
+  request, and the commit it was built from. A merge that changed nothing
+  still waiting is listed on one line, as having no registry changes or as
+  having changes that already run on the environment. An entity several
+  merges changed is listed under the newest and names the others.
 - `Only on <env>'s branch`: what the environment has and the line does not,
   as the branch it was deployed from changed it.
+
+Within a merge the entities are grouped by type (exec-fn, endpoint, MCP
+tool, data key, test case, or the type's own name); a long group whose rows
+differ in nothing but their names is one line, the names relative to the
+namespace they share. A risk reason every entity on the page gives is said
+once above the lists, so each row keeps only what tells it apart; a high
+risk is tagged on its row. An empty list is one line.
 
 An environment behind the line shows only the first list, one deployed from
 a branch that already holds the line's newest commit only the second, and a
@@ -127,12 +139,24 @@ diverged one both, each from the newest line version the environment's
 commit descends from. When the order cannot be told, every difference is
 listed together. A sentence above the lists says which case it is.
 
-`--repo owner/name` names the project's GitHub repository: commits link to
-it, the page links the GitHub compare of the two commits, and ancestry that
-the store's own order cannot settle is asked of GitHub's compare through
-`gh`. `against` is matched against the store's branches as on the PR page,
-and the store is fetched at most once a minute; an unknown branch is reported
-above the overview.
+When the commit an environment runs is not on the line, GitHub is asked
+which pull requests contain it. When one was merged and the environment's
+branch adds nothing to it, the environment runs that pull request's head
+from before the merge: the page says so, with the merge commit, instead of
+calling the branch diverged, and leaves that merge out of what is waiting.
+An open pull request is named as not merged yet. Without an answer from
+GitHub the page reads as before.
+
+Times are shown relative to now (`20h ago`, `yesterday 13:38`, a weekday
+within a week, the date beyond), the exact time on hover; store commits are
+shown small, the project commits they were built from in full.
+
+`--repo owner/name` names the project's GitHub repository: commits and pull
+requests link to it, the page links the GitHub compare of the two commits,
+and ancestry that the store's own order cannot settle, and the pull requests
+holding a commit, are asked of GitHub through `gh`. `against` is matched
+against the store's branches as on the PR page, and the store is fetched at
+most once a minute; an unknown branch is reported above the overview.
 
 A view over a pull request of the atlas repo itself, with the registry
 decoration of an entity the view names:

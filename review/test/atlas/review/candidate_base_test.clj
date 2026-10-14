@@ -35,7 +35,8 @@
   (let [root (io/file dir "registries" "app")]
     (doseq [f (reverse (file-seq root))] (io/delete-file f true))
     (doseq [[p content] (canon/registry->files reg)]
-      (let [f (io/file root p)] (io/make-parents f) (spit f content))))
+      (let [f (io/file root p)] (io/make-parents f) (spit f content)))
+    (spit (io/file root "source") src))
   (git! dir nil "add" "-A")
   (git! dir date "commit" "-q" "-m" (or subject (str "registry: " (subs src 0 7))) "-m" (str "Source-Sha: " src)))
 
@@ -81,8 +82,10 @@
 (defn- fake-gh
   "Answers the `gh` calls the review makes from the fixture: one successful
   run started at `created-at` whose artifact holds `pr-head` and, with
-  `meta`, the sidecar; compare and commit lookups from the project's git."
-  [{:keys [created-at meta compare-fails?]}]
+  `meta`, the sidecar; compare and commit lookups from the project's git; the
+  pull requests holding a commit from `pulls`, `{sha [pr]}`, failing for a
+  commit it does not name."
+  [{:keys [created-at meta compare-fails? pulls]}]
   (fn [& [a b :as args]]
     (cond
       (= ["run" "list"] [a b])
@@ -101,6 +104,10 @@
         (let [[_ x y] (re-find #"/compare/(\w+)\.\.\.(\w+)" b)
               ancestor? (zero? (:exit (sh "git" "merge-base" "--is-ancestor" x y :dir (str *project*))))]
           (cond (= x y) "identical\n" ancestor? "ahead\n" :else "diverged\n")))
+
+      (and (= "api" a) (str/ends-with? b "/pulls"))
+      (let [sha (second (re-find #"/commits/(\w+)/pulls" b))]
+        (if (contains? pulls sha) (json/generate-string (pulls sha)) (throw (ex-info "HTTP 422" {}))))
 
       (and (= "api" a) (str/includes? b "/commits/"))
       (git! *project* nil "show" "-s" "--format=%cI" (last (str/split b #"/")))
@@ -248,19 +255,26 @@
     (is (not (str/includes? h "merged since dev's deploy")))
     (is (re-find #"context :fn/w — differs between dev and this PR's base, not this PR" h))))
 
-(defn- env-hiccup [against]
-  (reset! @#'candidate/known {})
-  (swap! reg/config assoc :repo "owner/repo")
-  (with-redefs [candidate/gh (fake-gh {})]
-    (env/page {:params (if against {"against" against} {})})))
+(def ^:private now (java.time.ZonedDateTime/parse "2026-10-14T09:00:00Z"))
 
-(defn- env-page [against] (d/hiccup->text (env-hiccup against)))
+(defn- env-hiccup
+  ([against] (env-hiccup against {}))
+  ([against gh-opts]
+   (reset! @#'candidate/known {})
+   (swap! reg/config assoc :repo "owner/repo")
+   (with-redefs [candidate/gh (fake-gh gh-opts)]
+     (binding [env/*now* (constantly now)]
+       (env/page {:params (if against {"against" against} {})})))))
+
+(defn- env-page
+  ([against] (env-page against {}))
+  ([against gh-opts] (d/hiccup->text (env-hiccup against gh-opts))))
 
 (defn- links [h] (set (keep #(when (map? %) (:href %)) (tree-seq coll? seq h))))
 
 (def side-registry (registry :fn/x :fn/gone :fn/w))
 
-(defn- row [text env] (some #(when (str/starts-with? % (str env " ")) %) (str/split-lines text)))
+(defn- row [text env] (some #(when (str/starts-with? % (str "- " env " ")) (subs % 2)) (str/split-lines text)))
 
 (deftest the-environment-overview-lists-recorded-and-expected-environments
   (deploy-to! "dev" "main" :p1 before-merge)
@@ -270,10 +284,10 @@
     (try
       (let [h (env-page nil)]
         (is (= ["dev" "staging"] (keys (env/recorded))))
-        (is (str/includes? (row h "dev") (str (s7 :p1) " main ")))
-        (is (str/includes? (row h "dev") "behind the line 2 on main, not deployed · 0 only on dev's branch"))
-        (is (str/includes? (row h "staging") (str (subs side 0 7) " side ")))
-        (is (str/includes? (row h "staging") "diverged 2 on main, not deployed · 1 only on staging's branch"))
+        (is (= (str "dev runs main at " (s7 :p1) " · 1 merge with registry changes waiting: " (s7 :p3) " · deployed 19h ago") (row h "dev")))
+        (is (= (str "staging runs side at " (subs side 0 7) ", diverged from main · 1 merge with registry changes waiting: " (s7 :p3)
+                    " · 1 entity only on its branch · deployed 19h ago")
+               (row h "staging")))
         (is (= "production not recorded yet" (row h "production")))
         (is (not (str/includes? h "origin/")))
         (is (contains? (links (env-hiccup nil)) "/env?against=deployed%2Fstaging")))
@@ -299,7 +313,7 @@
     (is (str/starts-with? only-env "staging's branch · 1 new, 0 changed, 0 deleted"))
     (is (re-find #"new :fn/w" only-env))
     (is (not (re-find #":fn/(y|gone)" only-env)))
-    (is (str/includes? h "risk"))))
+    (is (not (str/includes? h "#")) "GitHub names no pull request for the side commit")))
 
 (deftest an-environment-at-an-older-line-commit-only-lacks-what-the-line-merged
   (deploy-to! "dev" "main" :p1 before-merge)
@@ -320,7 +334,7 @@
   (deploy-to! "dev" "main" :p1 before-merge)
   (let [h (env-page "--upload-pack=touch /tmp/x")]
     (is (str/includes? h "against=--upload-pack=touch /tmp/x: the registry store has no such branch"))
-    (is (str/includes? (row h "dev") "behind the line") "the overview is shown under the problem"))
+    (is (str/starts-with? (row h "dev") "dev runs main at") "the overview is shown under the problem"))
   (is (str/includes? (env-page "deployed/production") "against=deployed/production: the registry store has no such branch"))
   (is (str/includes? (env-page "main") "against=main: that is main itself")))
 
@@ -332,3 +346,97 @@
     (is (nil? on-line))
     (is (str/starts-with? only-env "dev's branch · 1 new, 0 changed, 0 deleted"))
     (is (re-find #"new :fn/w" only-env))))
+
+(defn- data-key [id] [#{:atlas/data-key (keyword "dk" (name id))} {:atlas/dev-id id :atlas/type :atlas/data-key}])
+
+(defn- merge-on-main!
+  "Commits `subject` on the project's main and records `reg` on the store's
+  main as that merge, the way the store's subjects carry it."
+  [subject reg]
+  (git! *project* nil "checkout" "-q" "main")
+  (let [c (commit! *project* "2026-10-14T07:00:00Z" subject)]
+    (record! *store* "2026-10-14T07:10:00Z" reg c (str "registry: " (subs c 0 7) " " subject))
+    c))
+
+(def keys-added (into after-merge (map data-key [:k.app/a :k.app/b :k.app/c :k.app/d :k.app/e])))
+
+(defn- before? [text a b] (< (str/index-of text a) (str/index-of text b)))
+
+(deftest the-line-s-undeployed-entities-are-listed-under-the-merge-that-changed-them
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (let [m14 (merge-on-main! "Add the app keys (#14)" keys-added)
+        m15 (merge-on-main! "Tidy the docs (#15)" keys-added)
+        h (env-page "deployed/dev")
+        {:keys [on-line]} (sections h)
+        lines (str/split-lines on-line)]
+    (is (str/starts-with? on-line " · 6 new, 0 changed, 1 deleted · 3 merges since dev's commit"))
+    (is (some #{(str "Tidy the docs (#15) · " (subs m15 0 7) " · no registry changes")} lines) "a merge without registry changes is still listed")
+    (is (some #{(str "Add the app keys (#14) · " (subs m14 0 7) " · 5 entities · 1h ago")} lines))
+    (is (some #{"new 5 data keys in :k.app/: a, b, c, d, e"} lines) "a long group of alike rows is one line")
+    (is (some #{(str (s7 :p3) " · 2 entities · 20h ago")} lines))
+    (is (before? on-line "(#15)" "(#14)") "newest first")
+    (is (before? on-line "(#14)" (str (s7 :p3) " · 2 entities")))
+    (is (before? on-line (s7 :p3) ":fn/y") ":fn/y under the merge that added it")
+    (is (not (str/includes? (subs on-line 0 (str/index-of on-line (s7 :p3))) ":fn/")))
+    (is (some #{"2 exec-fns"} lines))
+    (let [ls (links (env-hiccup "deployed/dev"))]
+      (is (contains? ls "https://github.com/owner/repo/pull/14"))
+      (is (contains? ls (str "https://github.com/owner/repo/commit/" m15))))
+    (is (not (str/includes? h "contract changed")) "a new entity has no contract to have changed")
+    (is (= 1 (count (re-seq #"test case" h))) "a reason every row shares is said once")
+    (is (str/includes? h "None of these has a test case covering it or what depends on it."))
+    (is (some #{"- new :fn/y"} lines) "a row keeps only the reasons that tell it apart")
+    (is (= (str "dev runs main at " (s7 :p1) " · 2 merges with registry changes waiting: #14, " (s7 :p3) " · deployed 19h ago")
+           (row (env-page nil) "dev")))))
+
+(defn- deploy-pr-head!
+  "Deploys to staging the head of a pull request branched off p3, then merges
+  it to main as a new commit, as a squash merge does; the head and the merge."
+  []
+  (let [head (deploy-to! "staging" "pr-12" :p3 deployed-ahead)
+        merged (merge-on-main! "Add w (#12)" deployed-ahead)]
+    [head merged]))
+
+(deftest an-environment-running-a-pull-request-before-its-merge-is-not-called-diverged
+  (let [[head merged] (deploy-pr-head!)
+        gh {:pulls {head [{:number 12 :state "closed" :merged_at "2026-10-14T07:00:00Z" :merge_commit_sha merged :title "Add w"}]}}
+        h (env-page "deployed/staging" gh)]
+    (is (str/includes? h (str "staging runs pr-12 — #12 before it was merged (as " (subs merged 0 7) "), registry-wise identical to #12 as merged; nothing else on main waits to be deployed.")))
+    (is (not (str/includes? h "diverged")))
+    (is (str/includes? h "On main, not deployed: nothing."))
+    (is (str/includes? h "Only on staging's branch: nothing."))
+    (is (= (str "staging runs pr-12 at " (subs head 0 7) " — #12 before it was merged · nothing waiting · deployed 19h ago")
+           (row (env-page nil gh) "staging")))))
+
+(deftest without-github-an-environment-running-a-pull-request-head-falls-back-to-diverged
+  (deploy-pr-head!)
+  (let [h (env-page "deployed/staging")]
+    (is (str/includes? h "staging was deployed from pr-12, which diverged from main after "))
+    (is (not (str/includes? h "#12 before")))))
+
+(deftest an-environment-running-an-open-pull-request-says-so
+  (let [f (deploy! "feature" :p3 deployed-ahead)
+        gh {:pulls {f [{:number 21 :state "open" :merged_at nil :title "Add w"}]}}
+        h (env-page "deployed/dev" gh)]
+    (is (str/includes? h "dev runs feature — #21, not merged yet. dev was deployed from feature, which already holds main's newest commit"))
+    (is (= (str "dev runs feature at " (subs f 0 7) " — #21, not merged yet · 1 entity only on its branch · deployed 19h ago")
+           (row (env-page nil gh) "dev")))))
+
+(deftest environments-on-one-commit-say-so
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (deploy-to! "production" "main" :p1 before-merge)
+  (let [h (env-page nil)]
+    (is (not (str/includes? (row h "dev") "same commit")))
+    (is (str/starts-with? (row h "production") (str "production runs main at " (s7 :p1) " (same commit as dev) · ")))))
+
+(deftest times-are-told-relative-to-now
+  (binding [env/*now* (constantly now)]
+    (is (= "just now" (env/ago "2026-10-14T08:59:30Z")))
+    (is (= "12 min ago" (env/ago "2026-10-14T08:48:00Z")))
+    (is (= "20h ago" (env/ago "2026-10-13T15:00:00+02:00")))
+    (is (= "yesterday 08:38" (env/ago "2026-10-13T08:38:00Z")))
+    (is (= "Sun 13:38" (env/ago "2026-10-11T13:38:00Z")))
+    (is (= "2026-10-01" (env/ago "2026-10-01T10:00:00Z"))))
+  (deploy-to! "dev" "main" :p1 before-merge)
+  (is (some #(and (map? %) (= "2026-10-13T13:05:00+00:00" (:title %))) (tree-seq coll? seq (env-hiccup "deployed/dev")))
+      "the exact time stays on hover"))

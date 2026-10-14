@@ -20,15 +20,18 @@
 
 (defn- parse-version [line]
   (let [[commit date subject trailer] (str/split line #"\u001f" -1)
-        [_ source env from] (re-matches #"registry: (\S+)(?: deployed to (\S+) from (\S+))?.*" (or subject ""))]
-    {:commit commit :date date :subject subject :source source :env env :from from
+        [_ source env from] (re-matches #"registry: (\S+)(?: deployed to (\S+) from (\S+))?.*" (or subject ""))
+        title (when-not env (some-> (re-matches #"registry: \S+ (.+)" (or subject "")) second str/trim not-empty))]
+    {:commit commit :date date :subject subject :source source :env env :from from :title title
      :source-sha (not-empty (str/trim (or trailer "")))}))
 
 (defn versions
   "Recorded versions on `branch` (the configured one by default), newest first:
-  `{:commit :date :subject :source :source-sha :env :from}`. Source is the
-  project sha from the subject, source-sha the `Source-Sha` trailer, env and
-  from the environment and git branch of a `deployed to <env> from <branch>` subject."
+  `{:commit :date :subject :source :source-sha :env :from :title}`. Source is
+  the project sha from the subject, source-sha the `Source-Sha` trailer, env
+  and from the environment and git branch of a `deployed to <env> from
+  <branch>` subject, title the subject of the project commit a line version
+  records, when the store's subject carries it."
   ([] (versions (:branch @config)))
   ([branch]
    (for [l (str/split (git "log" "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Source-Sha,valueonly,separator=%x20)%x1e" branch "--" (:prefix @config)) #"\u001e")
