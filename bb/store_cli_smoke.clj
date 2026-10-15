@@ -87,6 +87,23 @@
           (check "timeline skips and lists the unreadable commit" (= 1 (count (:unreadable t))))
           (check "timeline has one step per readable version" (= 1 (count (:timeline t))))
           (check "entity timeline covers both versions" (= 2 (count (:timeline e)))))
+        (let [grown (run dir "provenance" ":fn/check-user-availability")
+              renamed (run dir "provenance" ":fn/list-calendar-events")
+              dropped (run dir "provenance" ":endpoint/admin-delete-user")
+              later (run dir "provenance" ":fn/check-user-availability" "--from" b)]
+          (check "provenance starts at the store's first commit by default"
+                 (and (= a (:commit (:from grown))) (= a (:commit (:first-seen grown))) (:origin-before-range grown)))
+          (check "provenance lists the aspect change and skips the unreadable commit"
+                 (and (= [:first-seen :changed] (mapv :event (:events grown)))
+                      (= [:tier/cached] (:added (second (:events grown))))
+                      (= 1 (count (:unreadable grown)))))
+          (check "provenance follows a rename back to the old dev-id"
+                 (and (= [:first-seen :renamed] (mapv :event (:events renamed)))
+                      (= :fn/list-user-calendar-events (:dev-id (:first-seen renamed)))
+                      (= :fn/list-user-calendar-events (:from (second (:events renamed))))))
+          (check "provenance of a deleted entity ends with its deletion"
+                 (and (= [:first-seen :deleted] (mapv :event (:events dropped))) (not (:present dropped))))
+          (check "--from narrows the range" (= b (:commit (:first-seen later)))))
         (let [deps (run dir "dependencies" b ":endpoint/query-availability")
               dents (run dir "dependents" b (str (first deps)))
               blast (run dir "blast-radius" b (str (first deps)))
