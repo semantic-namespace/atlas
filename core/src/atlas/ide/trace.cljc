@@ -7,8 +7,7 @@
             [atlas.invariant :as ax]
             [atlas.ontology :as ot]
             [atlas.query :as query]
-            [atlas.cljc.platform :as platform]
-            [clojure.set :as set]))
+            [atlas.datalog.graph :as dlg]))
 
 ;; =============================================================================
 ;; HELPERS
@@ -25,79 +24,17 @@
   (->> (or coll []) sort vec))
 
 ;; =============================================================================
-;; CACHES
+;; GRAPH
 ;; =============================================================================
 
-(def ^:private data-key-cache (atom {:time 0 :registry nil :entity/produces {} :entity/consumes {}}))
-(def ^:private reverse-deps-cache (atom {:time 0 :registry nil :data {}}))
-(def ^:private cache-ttl-ms 5000)
+(defn- current-graph []
+  (dlg/for-registry (cid/current-registry)))
 
-(defn- build-data-key-cache [reg]
-  (reduce (fn [acc [_ props]]
-            (let [id (:atlas/dev-id props)
-                  context (ot/context-for id)
-                  response (ot/response-for id)
-                  produces (:entity/produces acc)
-                  consumes (:entity/consumes acc)
-                  producer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) produces response)
-                  consumer-updated (reduce (fn [m k] (update m k (fnil conj #{}) id)) consumes context)]
-              (assoc acc :entity/produces producer-updated :entity/consumes consumer-updated)))
-          {:entity/produces {} :entity/consumes {}}
-          reg))
+(defn- effective-dependencies-for [dev-id]
+  (dlg/effective-dependencies (current-graph) dev-id))
 
-(defn- get-data-key-cache []
-  (let [reg (cid/current-registry)
-        now (platform/now-ms)
-        {:keys [time registry] :entity/keys [produces consumes]} @data-key-cache]
-    (if (and (pos? time)
-             (identical? reg registry)
-             (< (- now time) cache-ttl-ms))
-      {:entity/produces produces :entity/consumes consumes}
-      (let [new-cache (build-data-key-cache reg)]
-        (swap! data-key-cache assoc
-               :time now
-               :registry reg
-               :entity/produces (:entity/produces new-cache)
-               :entity/consumes (:entity/consumes new-cache))
-        new-cache))))
-
-(defn- dataflow-dependencies-for
-  [dev-id]
-  (let [context-keys (ot/context-for dev-id)
-        cache (get-data-key-cache)
-        produces-map (:entity/produces cache)]
-    (set (mapcat (fn [ctx-key]
-                   (get produces-map ctx-key #{}))
-                 context-keys))))
-
-(defn- effective-dependencies-for
-  [dev-id]
-  (let [explicit-deps (ot/deps-for dev-id)
-        dataflow-deps (dataflow-dependencies-for dev-id)]
-    (set/union explicit-deps dataflow-deps)))
-
-(defn- build-reverse-deps []
-  (let [all-ids (ax/all-dev-ids)]
-    (reduce (fn [acc dev-id]
-              (let [deps (effective-dependencies-for dev-id)]
-                (reduce (fn [inner dep]
-                          (update inner dep (fnil conj #{}) dev-id))
-                        acc
-                        deps)))
-            {}
-            all-ids)))
-
-(defn- get-reverse-deps []
-  (let [reg (cid/current-registry)
-        now (platform/now-ms)
-        {:keys [time registry data]} @reverse-deps-cache]
-    (if (and (pos? time)
-             (identical? reg registry)
-             (< (- now time) cache-ttl-ms))
-      data
-      (let [new-data (build-reverse-deps)]
-        (swap! reverse-deps-cache assoc :time now :registry reg :data new-data)
-        new-data))))
+(defn- effective-dependents-for [dev-id]
+  (dlg/effective-dependents (current-graph) dev-id))
 
 (defn- dep-entity?
   [kw]
@@ -134,10 +71,7 @@
 (defn dependents-of
   "Find what depends on this entity (reverse dependency lookup)."
   [dev-id]
-  (let [dev-id-kw (ensure-keyword dev-id)
-        reverse-deps (get-reverse-deps)
-        dependents (get reverse-deps dev-id-kw #{})]
-    (vec (sort dependents))))
+  (vec (sort (effective-dependents-for (ensure-keyword dev-id)))))
 
 (defn dependencies-of
   "Find what this entity depends on (explicit deps + dataflow-derived deps)."
@@ -210,12 +144,11 @@
    Returns flat vector in BFS order, excluding the root entity itself."
   [dev-id]
   (let [dev-id-kw (ensure-keyword dev-id)
-        reverse-deps (get-reverse-deps)
         entity-type-for (fn [id]
                           (when-let [identity (rt/identity-for id)]
                             (some #(when (= "atlas" (namespace %)) %) identity)))]
     (loop [queue (mapv #(vector % 1 dev-id-kw)
-                       (sort (get reverse-deps dev-id-kw #{})))
+                       (sort (effective-dependents-for dev-id-kw)))
            visited #{dev-id-kw}
            result []]
       (if (empty? queue)
@@ -230,7 +163,7 @@
                                  :dep/depth depth
                                  :dep/via via
                                  :dep/already-seen? true}))
-            (let [dependents (sort (get reverse-deps current #{}))
+            (let [dependents (sort (effective-dependents-for current))
                   new-dependents (remove visited dependents)]
               (recur
                (into rest-queue (map #(vector % (inc depth) current) new-dependents))
@@ -261,18 +194,12 @@
 (defn producers-of
   "Find functions that produce a data key."
   [data-key]
-  (let [data-key-kw (ensure-keyword data-key)
-        cache (get-data-key-cache)
-        produces (:entity/produces cache)]
-    (sorted-vec (get produces data-key-kw #{}))))
+  (sorted-vec (dlg/producers-of (current-graph) (ensure-keyword data-key))))
 
 (defn consumers-of
   "Find functions that consume a data key."
   [data-key]
-  (let [data-key-kw (ensure-keyword data-key)
-        cache (get-data-key-cache)
-        consumes (:entity/consumes cache)]
-    (sorted-vec (get consumes data-key-kw #{}))))
+  (sorted-vec (dlg/consumers-of (current-graph) (ensure-keyword data-key))))
 
 (defn trace-data-flow
   "Trace how a data key flows through the system: who produces it, who consumes it."

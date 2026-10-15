@@ -3,6 +3,7 @@
             [atlas.registry :as registry]
             [atlas.datalog :as datalog]
             [atlas.datalog.graph :as graph]
+            [atlas.ide.trace :as trace]
             [app.pet-shop :as pet-shop]
             [app.cart :as cart]
             [app.calendar-availability :as calendar]
@@ -54,20 +55,38 @@
     (is (= (datalog/query-structural-gaps db) (graph/structural-gaps g)))
     ids))
 
-(deftest graph-matches-datalog-on-snapshot-facts
+(defn- without-extractor-fns [reg]
+  (update-vals reg #(dissoc % :datalog-extractor/fn)))
+
+(deftest graph-matches-datalog-on-live-registry
   (doseq [[app init-fn] apps]
     (testing app
       (let [reg (load-app! init-fn)
-            db (datalog/create-db reg)
-            g (graph/from-registry reg)
-            ids (assert-equivalent db g)]
+            ids (assert-equivalent (datalog/create-db) (graph/for-registry reg))]
         (is (seq ids))
-        (is (some #(seq (graph/upstream-closure g % nil)) ids)
+        (is (some #(seq (graph/upstream-closure (graph/for-registry reg) % nil)) ids)
             "registry has edges to traverse")))))
 
-(deftest graph-matches-datalog-on-live-facts
+(deftest graph-matches-datalog-on-snapshot
+  (doseq [[app init-fn] apps]
+    (testing app
+      (let [reg (without-extractor-fns (load-app! init-fn))]
+        (assert-equivalent (datalog/create-db reg) (graph/from-registry reg))))))
+
+(defn- unique-ids [tree]
+  (set (map :dep/dev-id (remove :dep/already-seen? tree))))
+
+(deftest trace-matches-datalog
   (doseq [[app init-fn] apps]
     (testing app
       (load-app! init-fn)
-      (assert-equivalent (datalog/create-db)
-                         (graph/from-facts (datalog/build-schema) (datalog/registry-facts))))))
+      (let [db (datalog/create-db)]
+        (doseq [id (datalog/query-all-entities db)]
+          (is (= (datalog/query-effective-dependencies db id) (set (trace/dependencies-of id))) (str id " deps"))
+          (is (= (datalog/query-effective-dependents db id) (set (trace/dependents-of id))) (str id " dependents"))
+          (is (not (contains? (set (trace/dependencies-of id)) id)) (str id " self-loop"))
+          (is (not (contains? (set (trace/dependents-of id)) id)) (str id " self-loop"))
+          (is (= (set (map :entity (datalog/query-upstream-closure db id nil))) (unique-ids (trace/recursive-dependencies-of id)))
+              (str id " recursive deps"))
+          (is (= (set (map :entity (datalog/query-downstream-closure db id nil))) (unique-ids (trace/recursive-dependents-of id)))
+              (str id " recursive dependents")))))))

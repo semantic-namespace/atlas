@@ -30,7 +30,18 @@
 
 (defn from-registry
   [reg]
-  (from-facts (df/derive-schema reg) (df/snapshot-facts reg)))
+  (from-facts (df/schema reg) (df/all-facts reg)))
+
+(defonce ^:private cache (atom {:registry nil :graph nil}))
+
+(defn for-registry
+  [reg]
+  (let [{cached-reg :registry cached :graph} @cache]
+    (if (and cached (identical? reg cached-reg))
+      cached
+      (let [g (from-registry reg)]
+        (reset! cache {:registry reg :graph g})
+        g))))
 
 (defn entity-ids [g]
   (keys (:entities g)))

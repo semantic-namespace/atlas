@@ -28,21 +28,13 @@
     (d/transact! conn tx-data)))
 
 (defn create-db
-  "Create Datascript database with extensible schema and facts.
-   0-arity: uses live registry atom with extractor functions.
-   1-arity: uses any registry map with generic metadata-driven extraction.
-            Works on cloud snapshots without extractor functions."
-  ([]
-   (let [schema (build-schema)
-         conn (d/create-conn schema)
-         facts (registry-facts)]
-     (transact-facts! conn facts)
-     @conn))
+  "Create Datascript database from a registry (default: the current one):
+   core facts, extractor-fn facts when the registry carries extractor fns,
+   and metadata-derived facts, under the schema all of them declare."
+  ([] (create-db (registry/current-registry)))
   ([reg]
-   (let [schema (derive-schema reg)
-         conn (d/create-conn schema)
-         facts (df/snapshot-facts reg)]
-     (transact-facts! conn facts)
+   (let [conn (d/create-conn (df/schema reg))]
+     (transact-facts! conn (df/all-facts reg))
      @conn)))
 
 ;; =============================================================================
@@ -76,12 +68,7 @@
         {cached-reg :registry cached-db :db} @db-cache]
     (if (and cached-db (identical? reg cached-reg))
       cached-db
-      (let [new-db (if registry/*registry-override*
-                     ;; Override snapshots have no extractor fns — use
-                     ;; generic metadata-driven extraction.
-                     (create-db reg)
-                     ;; Live registry — use extractor fns (0-arity).
-                     (create-db))]
+      (let [new-db (create-db reg)]
         (swap! db-cache assoc :registry reg :db new-db)
         new-db))))
 

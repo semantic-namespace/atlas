@@ -25,15 +25,11 @@
     (require 'atlas.ontology.structure-component :reload)
     (require 'atlas.ontology.interface-endpoint :reload)
     (ot/register-entity-types!)
-    (reset! @#'ide.trace/reverse-deps-cache {:time 0 :data {}})
-    (reset! @#'ide.trace/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})
     ;; Validate registry before running tests
     (assert (cid/validate-ontology-specs)
             "Registry validation failed: ontology entities missing required keys")
     (f)
-    (cid/reset-all!)
-    (reset! @#'ide.trace/reverse-deps-cache {:time 0 :data {}})
-    (reset! @#'ide.trace/data-key-cache {:time 0 :entity/produces {} :entity/consumes {}})))
+    (cid/reset-all!)))
 
 (defn- seed-registry! []
   ;; Components
