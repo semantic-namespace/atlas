@@ -1,0 +1,7 @@
+{:paths ["bb" "core/src" "store/src" "review/src"]
+ :deps {org.clojure/data.json {:mvn/version "2.4.0"}
+        io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
+                                           :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}}
+ :tasks {bb-compat {:doc "Every namespace under core, store and review loads in bb, except those in bb/jvm-only.edn"
+                    :requires ([bb-compat])
+                    :task (bb-compat/-main)}}}
