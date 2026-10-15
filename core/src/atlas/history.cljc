@@ -29,6 +29,7 @@
      (edge-diff @conn \"v1\" \"v2-serial\")"
   (:require [datascript.core :as d]
             [clojure.set :as set]
+            [atlas.history.facts :as facts]
             [atlas.ontology.type-ref :as type-ref]
             [atlas.registry.lookup :as entity]))
 
@@ -75,86 +76,6 @@
   (d/create-conn schema))
 
 ;; =============================================================================
-;; Helpers
-;; =============================================================================
-
-(defn- extract-targets
-  "Extract keyword targets from a property value.
-   Handles: keyword, vector, list, set — flattens nested structures."
-  [value]
-  (cond
-    (keyword? value) [value]
-    (set? value)     (vec value)
-    :else            (->> (flatten (seq value))
-                          (filter keyword?))))
-
-(defn- type-ref-index
-  "Build a {source-entity-type -> [type-ref-props ...]} index from the registry.
-   Reads type-ref declarations directly from the registry map — no live registry needed."
-  [registry]
-  (->> (vals registry)
-       (filter #(= :atlas/type-ref (:atlas/type %)))
-       (group-by :type-ref/source)))
-
-(defn- dataflow-index
-  "Build a {source-entity-type -> [{:property key :verb verb} ...]} index from the registry.
-   Reads dataflow declarations from ontology entities — no live registry needed."
-  [registry]
-  (->> (vals registry)
-       (filter #(= :atlas/ontology (:atlas/type %)))
-       (keep (fn [ont]
-               (let [ctx-key  (:dataflow/context-key ont)
-                     ctx-verb (:dataflow/context-verb ont)
-                     resp-key (:dataflow/response-key ont)
-                     resp-verb (:dataflow/response-verb ont)
-                     etype    (:ontology/for ont)]
-                 (when (or ctx-key resp-key)
-                   {:source etype
-                    :flows (cond-> []
-                             (and ctx-key ctx-verb)   (conj {:property ctx-key  :verb ctx-verb})
-                             (and resp-key resp-verb) (conj {:property resp-key :verb resp-verb}))}))))
-       (group-by :source)
-       (map (fn [[k vs]] [k (mapcat :flows vs)]))
-       (into {})))
-
-(defn- extract-prop-facts
-  "Extract property facts for a single entity using type-ref and dataflow indexes."
-  [dev-id version etype props type-refs-by-source dataflow-by-source]
-  (let [;; Type-ref edges (entity → entity)
-        ref-facts
-        (mapcat
-         (fn [type-ref-props]
-           (let [property (:type-ref/property type-ref-props)
-                 verb     (:type-ref/datalog-verb type-ref-props)
-                 value    (get props property)]
-             (when value
-               (keep (fn [target]
-                       (when (keyword? target)
-                         {:prop/dev-id  dev-id
-                          :prop/version version
-                          :prop/key     property
-                          :prop/verb    verb
-                          :prop/target  target}))
-                     (extract-targets value)))))
-         (get type-refs-by-source etype))
-        ;; Dataflow edges (entity → data concept)
-        flow-facts
-        (mapcat
-         (fn [{:keys [property verb]}]
-           (let [value (get props property)]
-             (when value
-               (keep (fn [target]
-                       (when (keyword? target)
-                         {:prop/dev-id  dev-id
-                          :prop/version version
-                          :prop/key     property
-                          :prop/verb    verb
-                          :prop/target  target}))
-                     (extract-targets value)))))
-         (get dataflow-by-source etype))]
-    (concat ref-facts flow-facts)))
-
-;; =============================================================================
 ;; Snapshot ingestion
 ;; =============================================================================
 
@@ -164,83 +85,18 @@
    registry:        the registry map at this version
    version:         version string, e.g. \"v2-serial\"
    prev-registry:   the registry map at the previous version (nil for first)
-   rename-dev-ids:  map of {old-dev-id new-dev-id} from the transform spec (nil if none)"
-  [conn registry version prev-registry rename-dev-ids]
-  (let [inv-renames (set/map-invert (or rename-dev-ids {}))
-        ;; Build index of prev-registry by dev-id for fast lookup. A dev-id can
-        ;; legitimately map to several compound-ids (e.g. an ontology descriptor
-        ;; and its :atlas/type registration share the type keyword as dev-id),
-        ;; so keep them all and prefer an exact compound-id match at lookup —
-        ;; last-wins pairing here produced phantom type-changed diffs.
-        prev-by-dev-id (when prev-registry
-                         (reduce (fn [m [k v]]
-                                   (update m (:atlas/dev-id v) (fnil conj #{}) k))
-                                 {} prev-registry))
-        ;; Snap txdata for entities present in this version
-        snap-txdata
-        (mapcat
-         (fn [[compound-id props]]
-           (let [dev-id      (:atlas/dev-id props)
-                 etype       (:atlas/type props)
-                 aspects     (disj compound-id etype)
-                 prev-dev-id (get inv-renames dev-id)
-                 lookup-id   (or prev-dev-id dev-id)
-                 prev-cid    (when-let [cids (get prev-by-dev-id lookup-id)]
-                               (if (contains? cids compound-id)
-                                 compound-id
-                                 (first cids)))
-                 prev-props  (when prev-cid (get prev-registry prev-cid))
-                 prev-etype  (when prev-props (:atlas/type prev-props))
-                 prev-asp    (when prev-cid (disj prev-cid (or prev-etype etype)))
-                 type-changed? (and prev-etype (not= prev-etype etype))
-                 ;; For new entities in a subsequent snapshot, all aspects are "added".
-                 ;; For the first snapshot (no prev-by-dev-id), nothing is "added" yet.
-                 added       (cond
-                               prev-asp       (set/difference aspects prev-asp)
-                               prev-by-dev-id aspects
-                               :else          #{})
-                 removed     (if prev-asp (set/difference prev-asp aspects) #{})
+   rename-dev-ids:  map of {old-dev-id new-dev-id} from the transform spec (nil if none)
 
-                 snap-tx (cond-> {:snap/dev-id  dev-id
-                                  :snap/version version
-                                  :snap/type    etype
-                                  :snap/aspect  aspects}
-                           (seq added)    (assoc :snap/added added)
-                           (seq removed)  (assoc :snap/removed removed)
-                           prev-dev-id    (assoc :snap/prev-dev-id prev-dev-id)
-                           type-changed?  (assoc :snap/prev-type prev-etype))]
-             [snap-tx]))
-         registry)
-        ;; Deleted entities: present in prev-registry but absent in this version
-        current-dev-ids (set (map (fn [[_ v]] (:atlas/dev-id v)) registry))
-        deleted-txdata
-        (when prev-registry
-          (keep (fn [[_ prev-props]]
-                  (let [dev-id (:atlas/dev-id prev-props)]
-                    (when-not (current-dev-ids dev-id)
-                      {:snap/dev-id  dev-id
-                       :snap/version version
-                       :snap/type    (:atlas/type prev-props)
-                       :snap/deleted true})))
-                prev-registry))
-        ;; Property facts from type-ref and dataflow declarations
-        type-refs-by-source (type-ref-index registry)
-        dataflow-by-source  (dataflow-index registry)
-        prop-txdata
-        (mapcat
-         (fn [[_ props]]
-           (let [dev-id (:atlas/dev-id props)
-                 etype  (:atlas/type props)]
-             (extract-prop-facts dev-id version etype props
-                                 type-refs-by-source dataflow-by-source)))
-         registry)
-        txdata (concat snap-txdata deleted-txdata prop-txdata)]
+   The facts come from atlas.history.facts/version-facts."
+  [conn registry version prev-registry rename-dev-ids]
+  (let [{:keys [snaps props]} (facts/version-facts registry version prev-registry rename-dev-ids)
+        txdata (concat snaps props)]
     (d/transact! conn txdata)
     {:version version
      :entities (count registry)
      :changed (count (filter :snap/added txdata))
      :deleted (count (filter :snap/deleted txdata))
-     :properties (count prop-txdata)}))
+     :properties (count props)}))
 
 ;; =============================================================================
 ;; Version queries
@@ -545,7 +401,7 @@
                                :edge/verb     datalog-verb
                                :edge/property property
                                :edge/version  version}))
-                          (extract-targets value)))))
+                          (facts/extract-targets value)))))
               refs)))
          registry)]
     (d/transact! conn txdata)
