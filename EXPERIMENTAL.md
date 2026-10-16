@@ -34,6 +34,7 @@ become **separate modules** so `core` carries no optional dependencies:
 | `atlas.adapter.port-workflow` | `port.workflow/producer` multimethods |
 | `atlas.adapter.spec-qualifier` | clojure.spec → qualified map keys |
 | `atlas.adapter.overarch` | Overarch C4/UML/GraphViz export (see [docs](docs/adapter-overarch.md)) |
+| `atlas.adapter.allium` | JUXT Allium `.allium` specs, scaffold or projected from `:atlas/allium-rule` (see [docs](docs/adapter-allium-emit.md)) |
 
 Note: several adapters use `requiring-resolve` and are JVM-only despite the
 `.cljc` extension — they will not load under ClojureScript.
@@ -44,6 +45,7 @@ Higher-level vocabularies beyond the built-in entity types:
 - `atlas.ontology.deployment` — deployment snapshots linked to `:atlas/system`
 - `atlas.ontology.shapeup` — Shape Up process artifacts
 - `atlas.ontology.system` — product/application root of the business-value graph
+- `atlas.ontology.allium-rule` — Allium rules carried in the registry, linked to the code that implements them
 
 ### LLM / IDE tooling
 - `atlas.llm-ide` + `atlas.llm-ide.view` — LLM-facing tools (MCP)

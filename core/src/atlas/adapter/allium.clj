@@ -17,18 +17,22 @@
      :scaffold  — structure + data-flow-inferred rule stubs + holes. One-time
                   bootstrap; a `-- @atlas scaffold` header warns against
                   regenerating over a file that /tend has since owned.
-     :project   — (future) full regeneration from :atlas/allium-rule entities
-                  carrying opaque allium-syntax strings. Not needed until such
-                  entities exist; the banking registry has none, so this file
-                  implements :scaffold.
+     :project   — full regeneration from :atlas/allium-rule entities (see
+                  atlas.ontology.allium-rule) carrying opaque allium-syntax
+                  strings, plus data-schemas and endpoints carrying
+                  :allium/entity-body / :allium/surface-body. Chosen
+                  automatically when the slice holds any :atlas/allium-rule.
 
    Mapping (scaffold):
-     :atlas/data-schema        -> entity <Name> { field: Unknown … }
+     :atlas/data-schema        -> entity <Name> { field: String … }  (placeholder types)
      :atlas/structure-component-> external entity <Name> {}   (placeholder)
-     :atlas/execution-function -> rule <Name> { when:/requires:(hole)/ensures:/traces: }
-     :atlas/interface-endpoint -> surface <Name> { facing/provides:/traces: }
-     data-flow  context -> when(params) ; response -> ensures(produced)
+     :atlas/execution-function -> rule <Name> { when: / requires:(hole) / ensures:(hole) }
+     :atlas/interface-endpoint -> surface <Name> { facing / provides: }
+     data-flow  context -> when(params) ; response -> ensures hint (a comment)
      endpoint deps EF   -> surface provides: matches that rule's when: (the join)
+
+   Every block ends in a `-- atlas: <dev-id>` comment: allium v3 has no
+   traces: clause, so the source map back to the registry is a comment.
 
    Usage:
      (require '[atlas.adapter.allium :as al]
