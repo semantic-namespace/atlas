@@ -51,6 +51,11 @@ Higher-level vocabularies beyond the built-in entity types:
 
 `atlas.ide` and `atlas.llm-ide` overlap and are a consolidation candidate.
 
+### Upgrade check — `bb upgrade-check`
+Builds a project's registry with two atlas versions and diffs the registries
+and the `atlas.llm-ide` tools' answers. Options and report format may change.
+See [docs/upgrade-check.md](docs/upgrade-check.md).
+
 ### Tooling surfaces
 - **UI** (`ui/`) — three client generations exist; **v3** (SSE browser) is the
   current direction and is experimental. v1/v2 are older PoCs.

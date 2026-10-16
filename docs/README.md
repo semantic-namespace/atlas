@@ -26,6 +26,7 @@ single queryable graph.
 | [Semantic Aggregation](semantic-aggregation.md) | Rolling aspects up the dependency graph |
 | [Declared Dispatch](declared-dispatch.md) | The Atlas execution pattern |
 | [Source Tracker](source-tracker-design.md) | Correlating registry entities with git history |
+| [Upgrade Check](upgrade-check.md) | What a new atlas version changes for your project: registry and tool answers, before and after (experimental) |
 
 ## Semantic-Driven Development
 
