@@ -122,6 +122,19 @@ Data-schema and surface carry their allium bodies as opaque `:allium/entity-body
 / `:allium/surface-body` strings plus `:allium/name`. Atlas owns identity, kind,
 the joins, and the *version history* of these strings; it never interprets them.
 
+`(require '[atlas.ontology.allium-rule])` registers the type. It requires
+`:rule/name`, `:rule/when` and `:rule/ensures`, and adds:
+
+- **`:rule/implemented-by` as an `:entity/depends` edge.** `consumers-of`,
+  `blast-radius` and `change-risk` on the implementing entity list the rules
+  it implements, so a change to the code points at the rules to re-read.
+- **`:invariant/allium-rule-implemented-by-exists`** (error): the implementor
+  must be in the registry, so a spec cannot point at code that no longer
+  exists. A rule with no `:rule/implemented-by` is allowed — it may state
+  intent the code does not yet carry out.
+- **`:invariant/allium-rule-names-unique`** (error): two rules with one
+  `:rule/name` would collide in an emitted module.
+
 ## Worked example A — scaffold (C4 Internet Banking)
 
 The canonical [Internet Banking System](https://c4model.com), coded as an Atlas
