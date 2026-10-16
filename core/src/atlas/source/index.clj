@@ -14,7 +14,8 @@
 
    Runs under babashka (clj-kondo as a pod) and on the JVM (clj-kondo on the
    classpath)."
-  (:require [atlas.source :as source]
+  (:require [atlas.registry :as registry]
+            [atlas.source :as source]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str])
@@ -23,7 +24,7 @@
 
 (def ^:private bb? (some? (System/getProperty "babashka.version")))
 
-(def cache-version 2)
+(def cache-version 3)
 
 ;; =============================================================================
 ;; Files
@@ -31,10 +32,22 @@
 
 (defn- canonical [f] (.getCanonicalPath (io/file f)))
 
+(defn- under [root d]
+  (let [f (io/file d)] (if (.isAbsolute f) f (io/file root d))))
+
+(defn- hidden?
+  "Dotfiles and dot-directories (.lsp, .clj-kondo, Emacs lock files .#x) and
+   Emacs auto-save files (#x#): never sources."
+  [^File f]
+  (let [n (.getName f)] (or (str/starts-with? n ".") (str/starts-with? n "#"))))
+
 (defn- files-under [root dirs exts]
   (sort (for [d dirs
-              ^File f (file-seq (io/file root d))
-              :when (and (.isFile f) (some #(str/ends-with? (.getName f) %) exts))]
+              :let [top (under root d)]
+              ^File f (tree-seq #(and (.isDirectory ^File %) (or (= % top) (not (hidden? %))))
+                                #(seq (.listFiles ^File %))
+                                top)
+              :when (and (.isFile f) (not (hidden? f)) (some #(str/ends-with? (.getName f) %) exts))]
           (canonical f))))
 
 (defn- relative [root path]
@@ -80,6 +93,76 @@
                [id {:entry entry :file path :line line}]))))
 
 ;; =============================================================================
+;; register! calls
+;; =============================================================================
+
+(defn- literal?
+  "True when x is plain data: no symbols or lists (var references, calls,
+   fns), no regexes or other host objects."
+  [x]
+  (cond
+    (or (symbol? x) (seq? x)) false
+    (map? x) (every? (fn [[k v]] (and (literal? k) (literal? v))) x)
+    (coll? x) (every? literal? x)
+    :else (or (nil? x) (keyword? x) (string? x) (number? x) (boolean? x) (char? x))))
+
+(defn- resolve-keywords
+  "`text` with auto-resolved keywords written out: ::alias/name with the
+   namespace the file aliases, ::name with the file's own namespace."
+  [text own-ns aliases]
+  (str/replace text #"::([^\s/\[\](){}\"@^`~,;]+)(/)?"
+               (fn [[_ a slash]]
+                 (if slash
+                   (str ":" (get aliases a a) "/")
+                   (str ":" own-ns "/" a)))))
+
+(defn- call-at
+  "The form that starts with the `(` just before the symbol at `row`/`col`
+   (1-based), :unreadable when it can't be read as data, nil when the symbol
+   isn't at the head of a call. Auto-resolved keywords are resolved with the
+   file's namespace and aliases first."
+  [lines row col own-ns aliases]
+  (let [line (nth lines (dec row) nil)]
+    (when (and line (>= col 2) (= \( (nth line (- col 2) nil)))
+      (try (binding [*read-eval* false]
+             (read-string (resolve-keywords (str/join "\n" (cons (subs line (- col 2)) (drop row lines)))
+                                            own-ns aliases)))
+           (catch Exception _ :unreadable)))))
+
+(defn- registration
+  "What a register! call says, when its dev-id, type and aspects are written
+   as data: {:row :dev-id :entry :dropped}, :dropped being the props whose
+   values aren't data (an inline fn, a var reference). Otherwise {:row
+   :skipped reason}. A 3-argument call gets the dev-id register! would
+   generate."
+  [form row]
+  (let [args (when (seq? form) (rest form))
+        [id type aspects props] (case (count args) 4 args 3 (cons ::generated args) nil)]
+    (cond
+      (= form :unreadable) {:row row :skipped "not readable as data"}
+      (nil? type) {:row row :skipped "not a 3- or 4-argument call"}
+      (not (and (literal? type) (literal? aspects) (or (= id ::generated) (literal? id))))
+      {:row row :skipped "dev-id, type or aspects not written as data"}
+      (not (and (qualified-keyword? type) (set? aspects) (every? qualified-keyword? aspects)
+                (or (= id ::generated) (qualified-keyword? id))))
+      {:row row :skipped "type, aspects or dev-id of the wrong shape"}
+      (not (map? props)) {:row row :skipped "props not written as a map"}
+      :else (let [kept (into {} (filter (fn [[k v]] (and (keyword? k) (literal? v)))) props)]
+              {:row row
+               :dev-id (if (= id ::generated) (registry/generate-dev-id (conj aspects type)) id)
+               :entry (assoc (dissoc kept :atlas/dev-id) :atlas/type type :atlas/aspects aspects)
+               :dropped (vec (sort (remove (set (keys kept)) (keys props))))}))))
+
+(defn- registrations
+  "Every call to atlas.registry/register! in `file`, from clj-kondo's usages,
+   with the file's namespace and {alias ns} to resolve ::keywords."
+  [file usages own-ns aliases]
+  (let [lines (delay (str/split-lines (slurp file)))]
+    ;; :row/:col is the call's opening paren; :name-row/:name-col the symbol
+    (vec (for [{:keys [row name-row name-col]} (sort-by (juxt :row :col) usages)]
+           (registration (call-at @lines name-row name-col own-ns aliases) row)))))
+
+;; =============================================================================
 ;; Code (clj-kondo)
 ;; =============================================================================
 
@@ -92,8 +175,8 @@
           (throw (ex-info "atlas.source.index needs clj-kondo on the classpath" {}))))))
 
 (defn- analyse-code
-  "{file {:vars [..] :calls [..] :keywords [..]}} for `files`, the parts of
-   clj-kondo's analysis the index uses."
+  "{file {:vars [..] :calls [..] :keywords [..] :registrations [..]}} for
+   `files`, the parts of clj-kondo's analysis the index uses."
   [files]
   (if (empty? files)
     {}
@@ -110,11 +193,17 @@
           calls (by-file :var-usages
                          (comp (filter :from-var)
                                (map #(select-keys % [:filename :from :from-var :to :name :row]))))
+          own-ns (into {} (for [{:keys [filename name]} (:namespace-definitions analysis)] [filename (str name)]))
+          aliases (update-vals (group-by :filename (filter :alias (:namespace-usages analysis)))
+                               #(into {} (for [{:keys [alias to]} %] [(str alias) (str to)])))
+          regs (by-file :var-usages
+                        (filter #(and (= 'atlas.registry (:to %)) (= 'register! (:name %)))))
           kws (by-file :keywords
                        (comp (filter #(and (:from-var %) (:ns %)))
                              (map #(select-keys % [:filename :from :from-var :ns :name :row]))))]
       (into {} (for [f files :let [f (canonical f)]]
-                 [f {:vars (vec (get vars f)) :calls (vec (get calls f)) :keywords (vec (get kws f))}])))))
+                 [f {:vars (vec (get vars f)) :calls (vec (get calls f)) :keywords (vec (get kws f))
+                     :registrations (registrations f (get regs f) (get own-ns f "user") (get aliases f {}))}])))))
 
 ;; =============================================================================
 ;; Building
@@ -152,9 +241,10 @@
    cache rewritten. With `:previous`, an index this fn returned, that index
    is the cache instead: a long-lived process refreshes in memory, and the
    registry files are re-read only when one of them changed."
-  [{:keys [root registry src cache previous] :or {root "."}}]
-  (let [config {:root (canonical root) :registry (vec registry) :src (vec src)}
-        edn-files (files-under root registry [".edn"])
+  [{:keys [root registry src cache previous runtime] :or {root "." runtime ".atlas/runtime.edn"}}]
+  (let [config {:root (canonical root) :registry (vec registry) :src (vec src) :runtime runtime}
+        runtime-file (let [f (under root runtime)] (when (.isFile f) (canonical f)))
+        edn-files (cond-> (vec (files-under root registry [".edn"])) runtime-file (conj runtime-file))
         src-files (files-under root src [".clj" ".cljc"])
         cached (cond
                  (and previous (= config (:config previous))) previous
@@ -163,42 +253,71 @@
         edn-stamps (into {} (map (juxt identity mtime)) edn-files)]
     (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous)))
       (assoc previous :analysed 0)
-      (build* config root cache cached stamps edn-stamps edn-files src-files))))
+      (build* config root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file))))
 
-(defn- build* [config root cache cached stamps edn-stamps edn-files src-files]
-  (let [
-        fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
+(defn- read-runtime
+  "The REPL snapshot `atlas.source/watch!` writes: {:written :entities
+   {dev-id entry} :registered-by {dev-id ns}}, or nil."
+  [path]
+  (when path
+    (try (edn/read-string (slurp path)) (catch Exception _ nil))))
+
+(defn- build* [config root cache cached stamps edn-stamps edn-files src-files runtime-file]
+  (let [fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
                     (analyse-code stale))
-        same-edn? (and (:entities cached) (= edn-stamps (:edn-stamps cached)))
-        reads (for [f (when-not same-edn? edn-files)]
-                (try {:file f :located (read-registry-file f)}
-                     (catch Exception ex
-                       {:problem {:problem :unreadable-registry-file :file (relative root f) :message (ex-message ex)}})))
-        located (filter :located reads)
-        line-of (into {} (for [{:keys [file located]} located [id {:keys [line]}] located] [[file id] line]))
-        merged (source/merge-sources (for [{:keys [file located]} located]
-                                       {:source file :entities (update-vals located :entry)}))
-        definition (fn [id file]
-                     {:file file :line (line-of [file id])
-                      :keys (vec (sort (for [[k fs] (get-in merged [:provenance id]) :when (contains? fs file)] k)))})
-        entities (into {} (for [[id entry] (:entities merged)
-                                :let [defs (mapv #(definition id %) (source/sources-of (:provenance merged) id))
-                                      primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs)) (first defs))]]
-                            [id (assoc primary :entry entry :definitions defs)]))]
+        ;; registry files: re-read only the ones that changed
+        edn (into {} (for [f edn-files]
+                       [f (if (= (edn-stamps f) (get-in cached [:edn-stamps f]))
+                            (get-in cached [:edn f])
+                            (try {:located (read-registry-file f)}
+                                 (catch Exception ex
+                                   {:problem {:problem :unreadable-registry-file :file (relative root f) :message (ex-message ex)}})))]))
+        ;; sources: each registry file, and each register! call written as data
+        sources (concat
+                 (for [[f {:keys [located]}] edn :when located]
+                   {:label f :file f :kind :edn
+                    :lines (update-vals located :line) :entities (update-vals located :entry)})
+                 (for [[f {:keys [registrations]}] code
+                       {:keys [row dev-id entry dropped]} registrations :when dev-id]
+                   {:label (str f ":" row) :file f :kind :register :dropped dropped
+                    :lines {dev-id row} :entities {dev-id entry}}))
+        by-label (into {} (map (juxt :label identity)) sources)
+        merged (source/merge-sources (for [{:keys [label entities]} sources] {:source label :entities entities}))
+        definition (fn [id label]
+                     (let [{:keys [file kind lines dropped]} (by-label label)]
+                       (cond-> {:file file :line (get lines id) :kind kind
+                                :keys (vec (sort (for [[k ls] (get-in merged [:provenance id]) :when (contains? ls label)] k)))}
+                         (seq dropped) (assoc :dropped dropped))))
+        static (into {} (for [[id entry] (:entities merged)
+                              :let [defs (mapv #(definition id %) (source/sources-of (:provenance merged) id))
+                                    primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs)) (first defs))]]
+                          [id (assoc primary :entry entry :definitions defs)]))
+        ;; the REPL snapshot fills gaps: only dev-ids no file defines
+        snapshot (read-runtime runtime-file)
+        ns-file (into {} (for [[f {:keys [vars]}] code v vars] [(str (:ns v)) f]))
+        runtime (into {} (for [[id entry] (:entities snapshot)
+                               :when (not (contains? static id))
+                               :let [n (get-in snapshot [:registered-by id])
+                                     d {:file (ns-file n) :line 1 :kind :runtime :ns n :as-of (:written snapshot)
+                                        :keys (vec (sort (keys entry)))}]]
+                           [id (assoc d :entry entry :definitions [d])]))]
     (when (and cache (or (seq stale) (not= (:stamps cached) stamps)))
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
      :config config
      :stamps stamps
      :edn-stamps edn-stamps
-     :entities (if same-edn? (:entities cached) entities)
+     :edn edn
+     :entities (merge runtime static)
      :code code
      :analysed (count stale)
-     :read-problems (if same-edn? (:read-problems cached) (concat (keep :problem reads)
+     :runtime (when snapshot {:file runtime-file :written (:written snapshot) :filled (count runtime)})
+     :read-problems (concat (keep :problem (vals edn))
                             (for [c (:conflicts merged)]
-                              (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [f] {:file (relative root f) :line (line-of [f (:dev-id c)])}) %))) vs))))))}))
+                              (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [l] (let [{:keys [file lines]} (by-label l)]
+                                                                                                          {:file (relative root file) :line (get lines (:dev-id c))})) %))) vs)))))}))
 
 ;; =============================================================================
 ;; Views
@@ -213,9 +332,13 @@
 
 (defn- impl-of [idx id] (first (get (linked-vars idx) id)))
 
-(defn- loc [idx {:keys [file line filename row end-row ns name]}]
+(defn- loc [idx {:keys [file line filename row end-row ns name kind as-of] :as m}]
   (cond
-    file {:file (relative (:root idx) file) :line line}
+    (= kind :runtime) (cond-> {:runtime-ns ns :as-of as-of}
+                        file (assoc :file (relative (:root idx) file) :line line))
+    file (cond-> {:file (relative (:root idx) file) :line line}
+           (= kind :register) (assoc :register! true))
+    (contains? m :file) nil
     filename {:file (relative (:root idx) filename) :line row :end-line end-row :var (symbol (str ns) (str name))}))
 
 (defn- references
@@ -241,25 +364,32 @@
 ;; =============================================================================
 
 (defn where
-  "Where `id` is defined and implemented (its var), with its merged type,
-   aspects and entry. :definition is the file giving its :atlas/type;
-   :sources lists every file that gave it something, and which keys."
+  "Where `id` is defined and implemented, with its merged type, aspects and
+   entry. :definition is the source giving its :atlas/type; :sources lists
+   every source that gave it something (a registry file, a register! call,
+   or the REPL snapshot) and which keys, with the props a register! call
+   gave as code rather than data under :dropped. :impl is the annotated var,
+   or the register! call when it gives :atlas/impl inline."
   [idx id]
   (when-let [e (get-in idx [:entities id])]
-    (let [entry (:entry e)]
+    (let [entry (:entry e)
+          inline (first (filter #(some #{:atlas/impl :execution-function/impl} (:dropped %)) (:definitions e)))]
       {:dev-id id
        :type (:atlas/type entry)
        :aspects (:atlas/aspects entry)
        :definition (loc idx e)
-       :impl (some->> (impl-of idx id) (loc idx))
-       :sources (mapv (fn [d] (assoc (loc idx d) :keys (:keys d))) (:definitions e))
+       :impl (or (some->> (impl-of idx id) (loc idx))
+                 (when inline (assoc (loc idx inline) :inline true)))
+       :sources (mapv (fn [d] (cond-> (assoc (loc idx d) :keys (:keys d))
+                                (:dropped d) (assoc :dropped (:dropped d))))
+                      (:definitions e))
        :entry (dissoc entry :atlas/type :atlas/aspects)})))
 
 (defn- coverage-note [idx]
   (let [linked (count (filter :dev-id (all-vars idx)))
         fns (count (filter #(and (not (:private %)) (= 'clojure.core/defn (:defined-by %))) (all-vars idx)))]
     {:linked-vars linked :public-fns fns
-     :note (when (< linked fns) "only linked vars are seen as entities; calls from unlinked code are listed but not their entities")}))
+     :note (when (< 0 linked fns) "only linked vars are seen as entities; calls from unlinked code are listed but not their entities")}))
 
 (defn uses
   "What refers to `id`: entries naming it in their props, and code calling
@@ -347,15 +477,28 @@
           (for [p (:read-problems idx)] (assoc p :severity :error))
           (for [[id vs] linked :when (> (count vs) 1)]
             {:severity :error :problem :dev-id-on-several-vars :dev-id id :vars (mapv #(loc idx %) vs)})
-          (for [p (source/linkage-problems (into {} (for [[id e] (:entities idx)] [id (:entry e)])) by-id)]
+          (for [p (source/linkage-problems (into {} (for [[id e] (:entities idx)] [id (:entry e)])) by-id)
+                ;; a var is how an entity from a registry file gets its code; an
+                ;; entity from register! or the REPL has it inline or at runtime
+                :when (or (not= :entity-without-impl (:problem p))
+                          (every? #(= :edn (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))]
             (cond-> (assoc (dissoc p :var) :severity :error)
               (:var p) (assoc :impl (loc idx (:var p)))
               (get-in idx [:entities (:dev-id p)]) (assoc :definition (loc idx (get-in idx [:entities (:dev-id p)])))))
           (undeclared-calls idx)
-          (keys-outside-contract idx)))))
+          (keys-outside-contract idx)
+          (for [[f {:keys [registrations]}] (sort-by key (:code idx))
+                {:keys [row skipped]} registrations :when skipped]
+            {:severity :info :problem :register-call-not-read :reason skipped
+             :file (relative (:root idx) f) :line row})))))
 
 (defn summary [idx]
-  {:entities (count (:entities idx))
-   :source-files (count (:code idx))
-   :analysed-now (:analysed idx)
-   :coverage (dissoc (coverage-note idx) :note)})
+  (let [regs (mapcat :registrations (vals (:code idx)))
+        kinds (frequencies (for [[_ e] (:entities idx)] (:kind e)))]
+    {:entities (count (:entities idx))
+     :entities-by-source (into (sorted-map) kinds)
+     :register-calls {:read (count (filter :dev-id regs)) :not-read (count (filter :skipped regs))}
+     :runtime-snapshot (:runtime idx)
+     :source-files (count (:code idx))
+     :analysed-now (:analysed idx)
+     :coverage (dissoc (coverage-note idx) :note)}))

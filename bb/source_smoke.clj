@@ -25,13 +25,16 @@
         reg (fs/path dir "registry")
         src (fs/path dir "src" "app")
         opts {:root (str dir) :registry ["registry"] :src ["src"] :cache (str (fs/path dir ".atlas" "source-index.transit"))}]
-    (fs/copy-tree "test/app/cart_registry" reg)
+    (fs/create-dirs reg)
+    (doseq [f (fs/glob "test/app/cart_registry" "[a-z]*.edn")] (fs/copy f (fs/path reg (fs/file-name f))))
+    (spit (str (fs/path reg ".#lock.edn")) "an editor lock file: never a source")
     (fs/create-dirs src)
     (fs/copy "test/app/cart_impl.clj" (fs/path src "cart_impl.clj"))
     (spit (str (fs/path src "cart_extra.clj")) "(ns app.cart-extra)\n(defn helper [x] x)\n")
     (try
       (let [idx (index/build opts)]
         (check "cold build analyses both source files" (= 2 (:analysed idx)))
+        (check "editor lock and auto-save files are not sources" (empty? (:read-problems idx)))
         (check "no problems beyond contract notes" (every? #(= :info (:severity %)) (index/check idx)))
         (check "where gives the EDN line and the var"
                (= {:file "registry/functions.edn" :line 34} (:definition (index/where idx :fn/add-to-cart))))

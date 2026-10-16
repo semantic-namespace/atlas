@@ -12,6 +12,8 @@
    [atlas.invariant :as inv]
    [atlas.ontology :as o]
    [atlas.source :as source]
+   [clojure.edn]
+   [clojure.string]
    [app.cart :as cart]
    [app.cart-impl]))
 
@@ -251,3 +253,45 @@
   (is (= #{:fn/elsewhere} (registry/unregister-ns! 'app.cart-source-test.other)))
   (is (nil? (rt/props-for :fn/elsewhere)))
   (is (some? (rt/props-for :fn/get-cart))))
+
+;; =============================================================================
+;; REPL snapshot
+;; =============================================================================
+
+(defn- eventually [pred]
+  (let [deadline (+ (System/currentTimeMillis) 3000)]
+    (loop [] (or (pred) (when (< (System/currentTimeMillis) deadline) (Thread/sleep 50) (recur))))))
+
+(deftest watch-keeps-a-snapshot-the-index-uses-to-fill-gaps
+  (let [root (doto (java.io.File/createTempFile "atlas-snapshot" "") .delete .mkdirs)
+        reg (doto (io/file root "registry") .mkdirs)
+        path (str (io/file root ".atlas" "runtime.edn"))
+        index-build (requiring-resolve 'atlas.source.index/build)
+        where (requiring-resolve 'atlas.source.index/where)
+        read-snap #(clojure.edn/read-string (slurp path))]
+    (spit (io/file reg "functions.edn") (slurp (io/resource "app/cart_registry/functions.edn")))
+    (try
+      (source/watch! path)
+      (testing "written at once, with the registry as this process has it"
+        (is (= ["app/cart_registry/functions.edn"] (get-in (read-snap) [:entities :fn/get-cart :atlas/source])))
+        (is (not-any? :atlas/impl (vals (:entities (read-snap))))))
+      (testing "rewritten after a runtime registration, naming the namespace that made it"
+        (binding [*ns* (create-ns 'app.tools)]
+          (registry/register! :tool/generated :atlas/execution-function #{:tier/service} {:execution-function/context [:x/y]}))
+        (is (eventually #(= "app.tools" (get-in (read-snap) [:registered-by :tool/generated])))))
+      (testing "the index fills in what no file says, and only that"
+        (let [idx (index-build {:root (str root) :registry ["registry"] :src ["no-such-dir"]})
+              g (where idx :tool/generated)]
+          (is (= {:runtime-ns "app.tools" :as-of (:written (read-snap))} (:definition g)))
+          (is (= [:x/y] (get-in g [:entry :execution-function/context])))
+          (is (= {:file "registry/functions.edn" :line 27} (:definition (where idx :fn/get-cart)))
+              "an entity a file defines comes from the file")))
+      (testing "a file edit beats a stale snapshot: no conflict, the file wins"
+        (spit (io/file reg "functions.edn")
+              (clojure.string/replace (slurp (io/file reg "functions.edn"))
+                                      ":execution-function/context [:session/data]\n  :execution-function/response [:cart/id"
+                                      ":execution-function/context [:session/data :cart/locale]\n  :execution-function/response [:cart/id"))
+        (let [idx (index-build {:root (str root) :registry ["registry"] :src ["no-such-dir"]})]
+          (is (= [:session/data :cart/locale] (get-in (where idx :fn/get-cart) [:entry :execution-function/context])))
+          (is (empty? (:read-problems idx)))))
+      (finally (source/unwatch!)))))

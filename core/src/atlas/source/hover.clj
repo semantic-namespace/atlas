@@ -21,7 +21,19 @@
 (defn- abs-path [idx file] (str (io/file (:root idx) file)))
 
 (defn- at [{:keys [file line end-line]}]
-  (str file ":" line (when (and end-line (not= end-line line)) (str "-" end-line))))
+  (if file
+    (str file ":" line (when (and end-line (not= end-line line)) (str "-" end-line)))
+    "(no file)"))
+
+(defn- source-line
+  "One line saying where a source is and what it gave."
+  [s]
+  (str (at s) "    "
+       (cond
+         (:runtime-ns s) (str "REPL: registered by " (:runtime-ns s) ", snapshot " (:as-of s) "    ")
+         (:register! s) "register!    ")
+       (str/join " " (map name (:keys s)))
+       (when (seq (:dropped s)) (str "    (as code: " (str/join " " (map name (:dropped s))) ")"))))
 
 (defn- few
   "The first n items printed, and how many more there are."
@@ -55,7 +67,9 @@
         line2 (str/join "  ·  " (remove nil? [contract
                                                (when (seq deps) (str "deps " (few deps 3)))
                                                (str "used by " n-used)
-                                               (when (seq problems) (str "⚠ " (count problems)))]))
+                                               (when (seq problems) (str "⚠ " (count problems)))
+                                               (when-let [r (first (filter :runtime-ns (:sources w)))]
+                                                 (str "REPL only (" (:runtime-ns r) ")"))]))
         others (sort-by key (remove (fn [[k _]] (#{"context" "response" "deps" "fields"} (name k))) entry))]
     {:kind "entity"
      :eldoc (str (pr-str id) "  " (short-type (:type w)) "  " (few (sort (:aspects w)) 6) "\n" line2)
@@ -73,10 +87,12 @@
        (for [[k v] others] (str (pr-str k) "  " (pr-str v)))
        [""]
        (for [[i s] (map-indexed vector (:sources w))]
-         (str (if (zero? i) "defined    " "           ") (at s) "    " (str/join " " (map name (:keys s)))))
-       [(if-let [impl (:impl w)]
-          (str "impl       " (:var impl) "    " (at impl))
-          "impl       none")]
+         (str (if (zero? i) "defined    " "           ") (source-line s)))
+       [(let [impl (:impl w)]
+          (cond
+            (:var impl) (str "impl       " (:var impl) "    " (at impl))
+            (:inline impl) (str "impl       inline in the register! call    " (at impl))
+            :else "impl       none"))]
        [""]
        (if (seq (:referenced-by u))
          (cons "used by" (for [r (:referenced-by u)] (str "  " (pr-str (:dev-id r)) "  via " (pr-str (:via r)) "    " (at (:definition r)))))
@@ -91,8 +107,12 @@
                              (when (:keys p) (str " " (few (:keys p) 6)))
                              (when (:calls p) (str " calls " (pr-str (:calls p))))
                              (when-let [l (or (:impl p) (:definition p) (when (:file p) p))] (str "    " (at l)))))))))
-     :definitions (vec (concat (for [s (:sources w)] {:file (abs-path idx (:file s)) :line (:line s) :summary (str "defined: " (str/join " " (map name (:keys s))))})
-                               (when-let [impl (:impl w)] [{:file (abs-path idx (:file impl)) :line (:line impl) :summary (str "impl: " (:var impl))}])))
+     :definitions (vec (concat (for [s (:sources w) :when (:file s)]
+                                 {:file (abs-path idx (:file s)) :line (:line s)
+                                  :summary (str (cond (:runtime-ns s) "registered at runtime by " (:register! s) "register!: " :else "defined: ")
+                                                (if (:runtime-ns s) (:runtime-ns s) (str/join " " (map name (:keys s)))))})
+                               (when-let [impl (when (:var (:impl w)) (:impl w))]
+                                 [{:file (abs-path idx (:file impl)) :line (:line impl) :summary (str "impl: " (:var impl))}])))
      :references (vec (concat (for [r (:referenced-by u)]
                                 {:file (abs-path idx (get-in r [:definition :file])) :line (get-in r [:definition :line])
                                  :summary (str (pr-str (:dev-id r)) " via " (pr-str (:via r)))})

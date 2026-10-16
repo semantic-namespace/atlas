@@ -29,6 +29,7 @@
    (the var, so redefining at the REPL is seen) and the sources that gave it
    as :atlas/source."
   (:require [atlas.registry :as registry]
+            #?(:clj [atlas.registry.serialise :as serialise])
             #?(:clj [clojure.java.io :as io])
             #?(:clj [clojure.edn :as edn]
                :cljs [cljs.reader :as edn])))
@@ -227,3 +228,55 @@
        {:added (ids (remove before (keys after)))
         :removed (ids (remove after (keys before)))
         :changed (ids (for [[id e] after :when (and (before id) (not= e (before id)))] id))})))
+
+;; =============================================================================
+;; REPL snapshot
+;; =============================================================================
+
+#?(:clj
+   (defn snapshot
+     "The registry as this process has it, as data: {:written :entities
+      {dev-id entry} :registered-by {dev-id ns}}. Each entry is the last
+      registration of its dev-id: type, declared aspects and the props that
+      are data (fns and vars are left out)."
+     []
+     (let [last-of (vals (reduce (fn [acc e] (assoc acc (:dev-id e) e)) {} @registry/registrations))]
+       {:written (str (java.time.Instant/now))
+        :entities (into (sorted-map)
+                        (for [{:keys [dev-id type aspects value]} last-of :when dev-id]
+                          [dev-id (assoc (serialise/sanitize-props (dissoc value :atlas/dev-id :atlas/type :atlas/impl))
+                                         :atlas/type type :atlas/aspects (set aspects))]))
+        :registered-by (into (sorted-map) (for [{:keys [dev-id ns]} last-of :when dev-id] [dev-id ns]))})))
+
+#?(:clj
+   (defn- write-snapshot! [path]
+     (let [f (io/file path)
+           tmp (io/file (str path ".tmp"))]
+       (io/make-parents f)
+       (binding [*print-namespace-maps* false]
+         (spit tmp (pr-str (snapshot))))
+       (.renameTo tmp f))))
+
+#?(:clj
+   (defn watch!
+     "Keeps `path` holding this process's `snapshot`: written now, and again
+      a moment after each change to the registry. atlas.source.index reads it
+      to fill what no file says: entities a generator, a loop or a computed
+      register! call made at runtime. Returns `path`."
+     [path]
+     (let [pending (atom false)]
+       (write-snapshot! path)
+       (add-watch registry/registry ::snapshot
+                  (fn [_ _ old new]
+                    (when (and (not= old new) (compare-and-set! pending false true))
+                      (future
+                        (Thread/sleep 300)
+                        (reset! pending false)
+                        (try (write-snapshot! path) (catch Throwable _ nil))))))
+       path)))
+
+#?(:clj
+   (defn unwatch!
+     "Stops `watch!`."
+     []
+     (remove-watch registry/registry ::snapshot)))

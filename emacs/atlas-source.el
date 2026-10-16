@@ -12,6 +12,11 @@
 ;;   M-?       lists what uses it
 ;;   C-c .     opens a describe buffer with clickable file:line links
 ;;
+;; Entities come from the project's registry files, from register! calls
+;; written as data, and — when a REPL is connected through CIDER — from a
+;; snapshot the REPL keeps in .atlas/runtime.edn, which fills in what no
+;; file says (generated entities, register! calls in loops).
+;;
 ;; Answers come from `bb source serve', one long-lived babashka process per
 ;; project that reads the registry files and the code (clj-kondo) without
 ;; loading anything, keeps the index in memory and refreshes it from disk
@@ -43,6 +48,11 @@
   (expand-file-name "../bb.edn" (file-name-directory (or load-file-name buffer-file-name)))
   "The atlas checkout's bb.edn, which defines the `source' task."
   :type 'file)
+
+(defcustom atlas-source-watch-repl t
+  "When non-nil, a CIDER connection in an atlas project starts
+`atlas.source/watch!', so the REPL keeps .atlas/runtime.edn current."
+  :type 'boolean)
 
 (defcustom atlas-source-timeout 3
   "Seconds to wait for a synchronous answer (M-., M-?, describe)."
@@ -227,6 +237,29 @@
       (display-buffer (current-buffer)))))
 
 ;; =============================================================================
+;; REPL snapshot (CIDER)
+;; =============================================================================
+
+(declare-function cider-nrepl-request:eval "cider-client")
+(declare-function nrepl-dict-get "nrepl-dict")
+
+(defun atlas-source-watch-repl ()
+  "Make the connected REPL keep <project>/.atlas/runtime.edn current, so
+hover sees entities only the running code knows about."
+  (interactive)
+  (when-let* ((root (atlas-source--root)))
+    (let ((path (expand-file-name ".atlas/runtime.edn" root)))
+      (cider-nrepl-request:eval
+       (format "(do (require 'atlas.source) (atlas.source/watch! %S))" path)
+       (lambda (response)
+         (when-let* ((err (nrepl-dict-get response "err")))
+           (message "atlas-source: REPL snapshot not started: %s" (string-trim err))))))))
+
+(defun atlas-source--on-cider-connected ()
+  (when (and atlas-source-watch-repl (atlas-source--root))
+    (atlas-source-watch-repl)))
+
+;; =============================================================================
 ;; Mode
 ;; =============================================================================
 
@@ -263,6 +296,7 @@
   (dolist (h '(clojure-mode-hook clojurec-mode-hook clojurescript-mode-hook
                clojure-ts-mode-hook clojure-ts-clojurec-mode-hook))
     (add-hook h #'atlas-source-maybe-enable))
+  (add-hook 'cider-connected-hook #'atlas-source--on-cider-connected)
   (dolist (b (buffer-list))
     (with-current-buffer b
       (when (derived-mode-p 'clojure-mode 'clojure-ts-mode)
