@@ -1,5 +1,6 @@
 (ns atlas.source
-  "The registry as the merge of its sources.
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — the registry as the merge of its
+   sources.
 
    A source is anything that says something about entities: an EDN file
    written by a person or an LLM, a generator run at startup, an adapter

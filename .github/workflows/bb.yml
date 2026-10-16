@@ -18,6 +18,7 @@ jobs:
           bb: 1.12.212
       - run: bb bb-compat
       - run: bb store-cli-smoke
+      - run: bb source-smoke
 
   upgrade-check:
     runs-on: ubuntu-latest

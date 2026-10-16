@@ -1,10 +1,10 @@
 (ns atlas.source.index
-  "The static view of a project's sources: what atlas.source would load,
-   read from the files without loading any code. The registry entries in
-   its EDN files, with the line each key is written on, merged by
-   atlas.source's rules, and the vars that implement them
-   (`^{:atlas.source/id ...}`), with what each var calls and which
-   qualified keywords it mentions, as clj-kondo reads them.
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — the static view of a project's
+   sources: what atlas.source would load, read from the files without
+   loading any code. The registry entries in its EDN files, with the line
+   each key is written on, merged by atlas.source's rules, and the vars
+   that implement them (`^{:atlas.source/id ...}`), with what each var
+   calls and which qualified keywords it mentions, as clj-kondo reads them.
 
    It answers where an entity is defined and implemented, what refers to it,
    who produces and consumes a data key, and where the code and the sources

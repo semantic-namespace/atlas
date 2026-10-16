@@ -1,7 +1,8 @@
 (ns atlas.source.hover
-  "What an editor shows for a keyword at point, from atlas.source.index: a
-   short line for eldoc, a longer text for a describe buffer, and the
-   locations for jump-to-definition and find-references.
+  "EXPERIMENTAL (see EXPERIMENTAL.md) — what an editor shows for a keyword
+   at point, from atlas.source.index: a short line for eldoc, a longer text
+   for a describe buffer, and the locations for jump-to-definition and
+   find-references.
 
    A keyword is one of
    - an entity (a dev-id the sources define): its type, aspects, contract,
