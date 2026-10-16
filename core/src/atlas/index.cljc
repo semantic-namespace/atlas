@@ -13,7 +13,7 @@
 
    Runs under babashka (clj-kondo as a pod) and on the JVM (clj-kondo on the
    classpath)."
-  (:require [atlas.sidecar :as sidecar]
+  (:require [atlas.source :as source]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -173,21 +173,29 @@
         code (merge (select-keys (:code cached) (filter fresh? src-files))
                     (analyse-code stale))
         reads (for [f edn-files]
-                (try {:entities (read-registry-file f)}
+                (try {:file f :located (read-registry-file f)}
                      (catch Exception ex
-                       {:problem {:problem :unreadable-registry-file :file f :message (ex-message ex)}})))
-        entities (apply merge (map :entities reads))
-        dup-ids (for [[id n] (frequencies (mapcat (comp keys :entities) reads)) :when (> n 1)] id)]
+                       {:problem {:problem :unreadable-registry-file :file (relative root f) :message (ex-message ex)}})))
+        located (filter :located reads)
+        line-of (into {} (for [{:keys [file located]} located [id {:keys [line]}] located] [[file id] line]))
+        merged (source/merge-sources (for [{:keys [file located]} located]
+                                       {:source file :entities (update-vals located :entry)}))
+        definition (fn [id file]
+                     {:file file :line (line-of [file id])
+                      :keys (vec (sort (for [[k fs] (get-in merged [:provenance id]) :when (contains? fs file)] k)))})
+        entities (into {} (for [[id entry] (:entities merged)
+                                :let [defs (mapv #(definition id %) (source/sources-of (:provenance merged) id))
+                                      primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs)) (first defs))]]
+                            [id (assoc primary :entry entry :definitions defs)]))]
     (when (and cache (or (seq stale) (not= (:stamps cached) stamps)))
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
-     :entities (or entities {})
+     :entities entities
      :code code
      :analysed (count stale)
      :read-problems (concat (keep :problem reads)
-                            (for [id dup-ids]
-                              {:problem :dev-id-in-several-files :dev-id id
-                               :files (vec (for [r reads :when (get-in r [:entities id])] (relative root (get-in r [:entities id :file]))))}))}))
+                            (for [c (:conflicts merged)]
+                              (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [f] {:file (relative root f) :line (line-of [f (:dev-id c)])}) %))) vs)))))}))
 
 ;; =============================================================================
 ;; Views
@@ -230,8 +238,9 @@
 ;; =============================================================================
 
 (defn where
-  "Where `id` is defined (its EDN entry) and implemented (its var), with its
-   type, aspects and the rest of its entry."
+  "Where `id` is defined and implemented (its var), with its merged type,
+   aspects and entry. :definition is the file giving its :atlas/type;
+   :sources lists every file that gave it something, and which keys."
   [idx id]
   (when-let [e (get-in idx [:entities id])]
     (let [entry (:entry e)]
@@ -240,6 +249,7 @@
        :aspects (:atlas/aspects entry)
        :definition (loc idx e)
        :impl (some->> (impl-of idx id) (loc idx))
+       :sources (mapv (fn [d] (assoc (loc idx d) :keys (:keys d))) (:definitions e))
        :entry (dissoc entry :atlas/type :atlas/aspects)})))
 
 (defn- coverage-note [idx]
@@ -334,7 +344,7 @@
           (for [p (:read-problems idx)] (assoc p :severity :error))
           (for [[id vs] linked :when (> (count vs) 1)]
             {:severity :error :problem :dev-id-on-several-vars :dev-id id :vars (mapv #(loc idx %) vs)})
-          (for [p (sidecar/linkage-problems (into {} (for [[id e] (:entities idx)] [id (:entry e)])) by-id)]
+          (for [p (source/linkage-problems (into {} (for [[id e] (:entities idx)] [id (:entry e)])) by-id)]
             (cond-> (assoc (dissoc p :var) :severity :error)
               (:var p) (assoc :impl (loc idx (:var p)))
               (get-in idx [:entities (:dev-id p)]) (assoc :definition (loc idx (get-in idx [:entities (:dev-id p)])))))

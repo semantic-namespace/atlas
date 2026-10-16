@@ -58,13 +58,33 @@
                (and (some #(and (= :var-without-entity (:problem %)) (= :fn/clear-cart (:dev-id %))) problems)
                     (some #(and (= :entity-without-impl (:problem %)) (= :fn/clear-all (:dev-id %))) problems))))
 
-      (spit (str (fs/path reg "dup.edn")) "{:fn/get-cart {:atlas/type :atlas/execution-function :atlas/aspects #{}}}")
+      (spit (str (fs/path reg "business.edn"))
+            "{:fn/get-cart {:atlas/aspects #{:value/retention}\n               :atlas/business-pattern :cart-recovery}}")
+      (let [idx (index/build opts)
+            w (index/where idx :fn/get-cart)]
+        (check "a second file adding keys to an entity is merged, not an error"
+               (not-any? #(= :error (:severity %)) (remove #(#{:var-without-entity :entity-without-impl} (:problem %)) (index/check idx))))
+        (check "aspects from both files are unioned"
+               (contains? (:aspects w) :value/retention))
+        (check "where lists each file and the keys it gave"
+               (= [{:file "registry/business.edn" :line 1 :keys [:atlas/aspects :atlas/business-pattern]}
+                   {:file "registry/functions.edn" :line 27
+                    :keys [:atlas/aspects :atlas/type :execution-function/context :execution-function/deps :execution-function/response]}]
+                  (:sources w)))
+        (check "the definition is the file that gives the type"
+               (= "registry/functions.edn" (get-in w [:definition :file]))))
+
+      (spit (str (fs/path reg "other.edn")) "{:fn/get-cart {:atlas/type :atlas/interface-endpoint}}")
       (spit (str (fs/path src "cart_dup.clj")) "(ns app.cart-dup)\n(defn ^{:atlas/dev-id :fn/get-cart} get-cart-2 [_ _])\n")
       (let [idx (index/build opts)
-            problems (index/check idx)]
+            problems (index/check idx)
+            conflict (first (filter #(= :conflicting-values (:problem %)) problems))]
         (check "a new file is analysed on its own" (= 1 (:analysed idx)))
-        (check "a dev-id in two EDN files is an error"
-               (some #(= :dev-id-in-several-files (:problem %)) problems))
+        (check "a key with two values is a conflict naming both files and lines"
+               (= {:dev-id :fn/get-cart :key :atlas/type
+                   :values [{:value :atlas/execution-function :sources [{:file "registry/functions.edn" :line 27}]}
+                            {:value :atlas/interface-endpoint :sources [{:file "registry/other.edn" :line 1}]}]}
+                  (select-keys conflict [:dev-id :key :values])))
         (check "a dev-id on two vars is an error"
                (some #(= :dev-id-on-several-vars (:problem %)) problems)))
       (finally (fs/delete-tree dir)))
