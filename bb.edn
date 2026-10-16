@@ -2,7 +2,13 @@
  :deps {org.clojure/data.json {:mvn/version "2.4.0"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
                                            :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}}
- :tasks {upgrade-check {:doc "Whether another atlas version changes what atlas does for a project: builds its registry with each version and diffs the registries and the atlas.llm-ide tools' answers. bb upgrade-check --build <qualified-fn|file.clj> [--project dir] [--from v] [--to v] [--paths p,...] [--probes file] [--out dir]; versions: current | mvn:<v> | local:<core path> | git:<sha>. From another repo: bb --config <atlas-checkout>/bb.edn upgrade-check ..."
+ :tasks {index {:doc "The project's registry and code read from its files, no JVM and no code loaded. bb index <where|uses|deps|data|check|summary> [arg] [--root dir] [--registry dir]... [--src dir]... [--json]. From another repo: bb --config <atlas-checkout>/bb.edn index ..."
+                :requires ([index-cli])
+                :task (apply index-cli/-main *command-line-args*)}
+         index-smoke {:doc "Edits a copy of the cart example and checks atlas.index sees each edit"
+                      :requires ([index-smoke])
+                      :task (index-smoke/-main)}
+         upgrade-check {:doc "Whether another atlas version changes what atlas does for a project: builds its registry with each version and diffs the registries and the atlas.llm-ide tools' answers. bb upgrade-check --build <qualified-fn|file.clj> [--project dir] [--from v] [--to v] [--paths p,...] [--probes file] [--out dir]; versions: current | mvn:<v> | local:<core path> | git:<sha>. From another repo: bb --config <atlas-checkout>/bb.edn upgrade-check ..."
                        :requires ([upgrade-check])
                        :task (apply upgrade-check/-main *command-line-args*)}
          upgrade-check-smoke {:doc "Runs upgrade-check on the cart example: same atlas identical, a patched atlas caught, a --probes file used. Needs the clojure CLI."

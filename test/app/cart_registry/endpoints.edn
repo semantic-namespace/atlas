@@ -1,0 +1,13 @@
+;; Shopping cart — endpoint (api tier)
+{:endpoint/cart-graph-api
+ {:atlas/type :atlas/interface-endpoint
+  :atlas/aspects #{:tier/api :domain/cart
+                   :protocol/graphql :authorization/required :compliance/pii :compliance/audited}
+  :interface-endpoint/context [:session/id :user/id]
+  :interface-endpoint/response [:cart/id :cart/items :cart/subtotal :cart/tax :cart/total
+                                :cart/shipping-address :cart/user-id :cart/guest?
+                                :product/name :product/price :product/sizes :product/colors]
+  :interface-endpoint/deps #{:fn/get-session :fn/save-session :fn/get-product :fn/get-cart
+                             :fn/add-to-cart :fn/remove-from-cart :fn/update-quantity :fn/clear-cart
+                             :fn/merge-carts :fn/update-shipping-address
+                             :fn/calculate-cart-subtotal :fn/calculate-cart-tax :fn/calculate-cart-total}}}
