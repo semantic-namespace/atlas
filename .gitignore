@@ -88,3 +88,6 @@ ui/resources/public-v2/atlas-ui/js/
 # Personal writing, not library material
 /posts/
 /on-the-clojure-move/
+
+# atlas.index cache (bb index)
+/.atlas/

@@ -1,0 +1,99 @@
+;; Shopping cart — functions (service tier). Implementations: app.cart-impl,
+;; each var naming its entry with ^{:atlas/dev-id ...}.
+{;; Session management
+ :fn/get-session
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/session :operation/read}
+  :execution-function/context [:session/id]
+  :execution-function/response [:session/data]
+  :execution-function/deps #{:component/session-store}}
+
+ :fn/save-session
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/session :operation/update}
+  :execution-function/context [:session/id :session/data]
+  :execution-function/response [:session/id]
+  :execution-function/deps #{:component/session-store}}
+
+ ;; Product lookup
+ :fn/get-product
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/product :operation/read}
+  :execution-function/context [:product/id]
+  :execution-function/response [:product/id :product/name :product/price :product/sizes :product/colors]
+  :execution-function/deps #{:component/db}}
+
+ ;; Cart operations
+ :fn/get-cart
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/read}
+  :execution-function/context [:session/data]
+  :execution-function/response [:cart/id :cart/items :cart/user-id :cart/shipping-address :cart/guest?]
+  :execution-function/deps #{}}
+
+ :fn/add-to-cart
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/create}
+  :execution-function/context [:session/data :item/product-id :item/quantity :item/size :item/color]
+  :execution-function/response [:cart/items :item/price]
+  :execution-function/deps #{:fn/get-product}
+  :atlas/business-pattern :price-lookup}
+
+ :fn/remove-from-cart
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/delete :operation/remove-item}
+  :execution-function/context [:session/data :item/product-id :item/size :item/color]
+  :execution-function/response [:cart/items]
+  :execution-function/deps #{}}
+
+ :fn/update-quantity
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/update :operation/modify-item}
+  :execution-function/context [:session/data :item/product-id :item/size :item/color :item/quantity]
+  :execution-function/response [:cart/items]
+  :execution-function/deps #{}}
+
+ :fn/clear-cart
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/delete :operation/clear-all}
+  :execution-function/context [:session/data]
+  :execution-function/response [:cart/items]
+  :execution-function/deps #{}}
+
+ :fn/merge-carts
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/update :operation/merge :compliance/pii :compliance/audited}
+  :execution-function/context [:merge/source-session-id :merge/target-user-id]
+  :execution-function/response [:cart/items :cart/user-id]
+  :execution-function/deps #{:component/session-store}
+  :semantic-namespace/merge-strategy :sum-quantities
+  :semantic-namespace/description "Merge source cart into target user's cart. Duplicate items (same product/size/color) have quantities summed."}
+
+ :fn/update-shipping-address
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/update :operation/set-address :compliance/pii :compliance/audited}
+  :execution-function/context [:session/data :address/line1 :address/line2 :address/city :address/postal-code :address/country]
+  :execution-function/response [:cart/shipping-address]
+  :execution-function/deps #{}}
+
+ ;; Totals (server-side)
+ :fn/calculate-cart-subtotal
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/calculate :operation/calculate-subtotal :effect/pure}
+  :execution-function/context [:cart/items]
+  :execution-function/response [:cart/subtotal]
+  :execution-function/deps #{}}
+
+ :fn/calculate-cart-tax
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/calculate :operation/calculate-tax :effect/pure}
+  :execution-function/context [:cart/subtotal :address/country]
+  :execution-function/response [:cart/tax]
+  :execution-function/deps #{}}
+
+ :fn/calculate-cart-total
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:tier/service :domain/cart :operation/calculate :operation/calculate-total :effect/pure}
+  :execution-function/context [:cart/subtotal :cart/tax]
+  :execution-function/response [:cart/total]
+  :execution-function/deps #{}}}

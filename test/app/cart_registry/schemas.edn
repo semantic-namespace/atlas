@@ -1,0 +1,20 @@
+;; Shopping cart — data schemas
+{:schema/cart
+ {:atlas/type :atlas/data-schema
+  :atlas/aspects #{:domain/cart :entity/aggregate}
+  :data-schema/fields [:cart/id :cart/items :cart/user-id :cart/shipping-address :cart/guest?]}
+
+ :schema/cart-item
+ {:atlas/type :atlas/data-schema
+  :atlas/aspects #{:domain/cart :entity/nested}
+  :data-schema/fields [:item/product-id :item/quantity :item/price :item/size :item/color]}
+
+ :schema/product
+ {:atlas/type :atlas/data-schema
+  :atlas/aspects #{:domain/catalog}
+  :data-schema/fields [:product/id :product/name :product/price :product/sizes :product/colors]}
+
+ :schema/shipping-address
+ {:atlas/type :atlas/data-schema
+  :atlas/aspects #{:domain/cart :entity/nested :compliance/pii}
+  :data-schema/fields [:address/line1 :address/line2 :address/city :address/postal-code :address/country]}}

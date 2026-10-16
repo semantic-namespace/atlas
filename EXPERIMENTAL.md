@@ -53,6 +53,12 @@ Higher-level vocabularies beyond the built-in entity types:
 
 `atlas.ide` and `atlas.llm-ide` overlap and are a consolidation candidate.
 
+### Sources — `atlas.source`, `atlas.source.index`, `atlas.source.hover`
+The registry as the merge of EDN files and generators, with plain `defn`s
+linked by `^{:atlas.source/id …}`; `bb source` answers from the files with no
+JVM; `emacs/atlas-source.el` gives hover, `M-.` and `M-?` from it. The file
+format, the merge rules and the CLI may change. See [docs/source.md](docs/source.md).
+
 ### Upgrade check — `bb upgrade-check`
 Builds a project's registry with two atlas versions and diffs the registries
 and the `atlas.llm-ide` tools' answers. Options and report format may change.

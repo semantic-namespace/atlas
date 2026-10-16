@@ -21,6 +21,7 @@ single queryable graph.
 | Doc | What |
 |---|---|
 | [Authoring Guide](authoring-guide.md) | Building entity definitions interactively |
+| [Sources](source.md) | Registry in EDN files, plain `defn`s with `^{:atlas.source/id …}`, `bb source`, Emacs hover (experimental) |
 | [Compound-ID Refactoring](compound-id-refactor.md) | Reviewing/improving compound-ids to avoid drift |
 | [Dependency Traversal](dependency-traversal.md) | Forward/reverse recursive dependency analysis |
 | [Semantic Aggregation](semantic-aggregation.md) | Rolling aspects up the dependency graph |

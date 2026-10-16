@@ -1,0 +1,10 @@
+;; Shopping cart — components (foundation tier)
+{:component/db
+ {:atlas/type :atlas/structure-component
+  :atlas/aspects #{:tier/foundation :integration/internal}
+  :structure-component/deps #{}}
+
+ :component/session-store
+ {:atlas/type :atlas/structure-component
+  :atlas/aspects #{:tier/foundation :integration/internal :domain/session}
+  :structure-component/deps #{:component/db}}}
