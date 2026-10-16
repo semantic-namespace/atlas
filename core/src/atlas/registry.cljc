@@ -566,9 +566,12 @@
 (defn aspects
   "Extract all aspects (non-entity-type members) from identity.
 
+  The type is the entity's own :atlas/type in the current registry, so this
+  works against a bound snapshot, where no :atlas/type registrations exist.
   Returns a set of aspect keywords."
   [identity]
-  (let [type (entity-type identity)]
+  (let [type (or (:atlas/type (get (current-registry) identity))
+                 (entity-type identity))]
     (when type
       (disj identity type))))
 
