@@ -296,7 +296,8 @@
                           [id (assoc primary :entry entry :definitions defs)]))
         ;; the REPL snapshot fills gaps: only dev-ids no file defines
         snapshot (read-runtime runtime-file)
-        ns-file (into {} (for [[f {:keys [vars]}] code v vars] [(str (:ns v)) f]))
+        ns-file (merge (:ns-files snapshot)
+                       (into {} (for [[f {:keys [vars]}] code v vars] [(str (:ns v)) f])))
         runtime (into {} (for [[id entry] (:entities snapshot)
                                :when (not (contains? static id))
                                :let [n (get-in snapshot [:registered-by id])

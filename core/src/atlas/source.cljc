@@ -236,17 +236,29 @@
 #?(:clj
    (defn snapshot
      "The registry as this process has it, as data: {:written :entities
-      {dev-id entry} :registered-by {dev-id ns}}. Each entry is the last
-      registration of its dev-id: type, declared aspects and the props that
-      are data (fns and vars are left out)."
+      {dev-id entry} :registered-by {dev-id ns} :ns-files {ns path}}. Each
+      entry is the last registration of its dev-id: type, declared aspects and
+      the props that are data (fns and vars are left out). :ns-files is where
+      each registering namespace was loaded from, when that is a file."
      []
-     (let [last-of (vals (reduce (fn [acc e] (assoc acc (:dev-id e) e)) {} @registry/registrations))]
+     (let [last-of (vals (reduce (fn [acc e] (assoc acc (:dev-id e) e)) {} @registry/registrations))
+           ns-file (fn [n]
+                     (when-let [found (some-> n symbol find-ns)]
+                       (some (fn [v]
+                               (let [f (:file (meta v))
+                                     url (when (string? f) (or (io/resource f) (let [x (io/file f)] (when (.isFile x) (io/as-url x)))))]
+                                 (when (and url (= "file" (.getProtocol url)))
+                                   (.getPath (io/file (.toURI url))))))
+                             (vals (ns-interns found)))))]
        {:written (str (java.time.Instant/now))
         :entities (into (sorted-map)
                         (for [{:keys [dev-id type aspects value]} last-of :when dev-id]
                           [dev-id (assoc (serialise/sanitize-props (dissoc value :atlas/dev-id :atlas/type :atlas/impl))
                                          :atlas/type type :atlas/aspects (set aspects))]))
-        :registered-by (into (sorted-map) (for [{:keys [dev-id ns]} last-of :when dev-id] [dev-id ns]))})))
+        :registered-by (into (sorted-map) (for [{:keys [dev-id ns]} last-of :when dev-id] [dev-id ns]))
+        :ns-files (into (sorted-map) (for [n (distinct (keep :ns last-of))
+                                           :let [f (ns-file n)] :when f]
+                                       [n f]))})))
 
 #?(:clj
    (defn- write-snapshot! [path]
