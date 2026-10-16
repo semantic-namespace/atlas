@@ -1,0 +1,3 @@
+;; Where `bb source` (and the Emacs hover) find this project's sources.
+{:registry ["test/app/cart_registry"]
+ :src ["test/app/cart_impl.clj"]}

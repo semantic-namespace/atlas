@@ -2,7 +2,8 @@
   "Copies the cart example (test/app/cart_registry, test/app/cart_impl.clj)
    into a throwaway project, edits it the way an LLM would, and checks that
    atlas.source.index sees each edit, re-analysing only the files that changed."
-  (:require [atlas.source.index :as index]
+  (:require [atlas.source.hover :as hover]
+            [atlas.source.index :as index]
             [babashka.fs :as fs]
             [clojure.string :as str]))
 
@@ -39,6 +40,16 @@
 
       (let [idx (index/build opts)]
         (check "warm build analyses nothing" (zero? (:analysed idx))))
+
+      (let [live (index/build (dissoc opts :cache))
+            same (index/build (assoc (dissoc opts :cache) :previous live))]
+        (check "in memory, nothing changed: the same index back" (= (dissoc live :analysed) (dissoc same :analysed)))
+        (edit! (str (fs/path reg "functions.edn")) ":execution-function/context [:session/data]\n  :execution-function/response [:cart/id"
+               ":execution-function/context [:session/data :cart/locale]\n  :execution-function/response [:cart/id")
+        (let [after (index/build (assoc (dissoc opts :cache) :previous same))]
+          (check "in memory, a saved EDN edit is in the next hover"
+                 (re-find #":cart/locale" (:describe (hover/lookup after :fn/get-cart))))
+          (check "in memory, an EDN edit re-analyses no code" (zero? (:analysed after)))))
 
       (edit! (str (fs/path src "cart_impl.clj"))
              "(defn ^{:atlas.source/id :fn/clear-cart} clear-cart\n  [_ _]\n  {:cart/items []})"

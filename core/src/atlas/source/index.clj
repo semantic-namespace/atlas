@@ -143,22 +143,36 @@
       (when (and (= cache-version (:version c)) (= config (:config c))) c))
     (catch Exception _ nil)))
 
+(declare build*)
+
 (defn build
   "The index of the project at `root`. `:registry` and `:src` are directories
    under root holding the EDN registry files and the source. With `:cache`, a
    file path, the code analysis is reused for unchanged source files and the
-   cache rewritten."
-  [{:keys [root registry src cache] :or {root "."}}]
+   cache rewritten. With `:previous`, an index this fn returned, that index
+   is the cache instead: a long-lived process refreshes in memory, and the
+   registry files are re-read only when one of them changed."
+  [{:keys [root registry src cache previous] :or {root "."}}]
   (let [config {:root (canonical root) :registry (vec registry) :src (vec src)}
         edn-files (files-under root registry [".edn"])
         src-files (files-under root src [".clj" ".cljc"])
-        cached (when cache (read-cache cache config))
+        cached (cond
+                 (and previous (= config (:config previous))) previous
+                 cache (read-cache cache config))
         stamps (into {} (map (juxt identity mtime)) src-files)
+        edn-stamps (into {} (map (juxt identity mtime)) edn-files)]
+    (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous)))
+      (assoc previous :analysed 0)
+      (build* config root cache cached stamps edn-stamps edn-files src-files))))
+
+(defn- build* [config root cache cached stamps edn-stamps edn-files src-files]
+  (let [
         fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
                     (analyse-code stale))
-        reads (for [f edn-files]
+        same-edn? (and (:entities cached) (= edn-stamps (:edn-stamps cached)))
+        reads (for [f (when-not same-edn? edn-files)]
                 (try {:file f :located (read-registry-file f)}
                      (catch Exception ex
                        {:problem {:problem :unreadable-registry-file :file (relative root f) :message (ex-message ex)}})))
@@ -176,12 +190,15 @@
     (when (and cache (or (seq stale) (not= (:stamps cached) stamps)))
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
-     :entities entities
+     :config config
+     :stamps stamps
+     :edn-stamps edn-stamps
+     :entities (if same-edn? (:entities cached) entities)
      :code code
      :analysed (count stale)
-     :read-problems (concat (keep :problem reads)
+     :read-problems (if same-edn? (:read-problems cached) (concat (keep :problem reads)
                             (for [c (:conflicts merged)]
-                              (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [f] {:file (relative root f) :line (line-of [f (:dev-id c)])}) %))) vs)))))}))
+                              (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [f] {:file (relative root f) :line (line-of [f (:dev-id c)])}) %))) vs))))))}))
 
 ;; =============================================================================
 ;; Views

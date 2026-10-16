@@ -3,10 +3,11 @@
 
    Answers from the project's files: the EDN registry and the source, read by
    clj-kondo. Nothing is loaded or run. Directories come from the flags, or
-   from <root>/atlas-index.edn ({:registry [...] :src [...]}). The code
+   from <root>/atlas-source.edn ({:registry [...] :src [...]}). The code
    analysis is cached in <root>/.atlas/source-index.transit and refreshed for the
    files that changed since the last call."
-  (:require [atlas.source.index :as index]
+  (:require [atlas.source.hover :as hover]
+            [atlas.source.index :as index]
             [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -20,7 +21,11 @@
   deps <dev-id>       entities its entry names
   data <data-key>     entities producing and consuming the key
   check               where code and registry files disagree
-  summary             counts, coverage, files re-analysed by this call")
+  summary             counts, coverage, files re-analysed by this call
+  hover <keyword>     what an editor shows for a keyword: eldoc line, describe text, locations
+  serve               long-lived: one JSON request per line on stdin, one JSON reply per line
+                      {\"id\":1,\"op\":\"hover\",\"keyword\":\":fn/x\"} -> {\"id\":1,\"result\":{...}}
+                      the index stays in memory and is refreshed from disk before each reply")
 
 (defn- parse [args]
   (loop [[a & more :as args] args opts {:registry [] :src [] :positional []}]
@@ -35,7 +40,7 @@
 
 (defn- config [{:keys [root registry src no-cache]}]
   (let [root (or root ".")
-        f (io/file root "atlas-index.edn")
+        f (io/file root "atlas-source.edn")
         from-file (when (.exists f) (edn/read-string (slurp f)))]
     {:root root
      :registry (if (seq registry) registry (:registry from-file ["registry"]))
@@ -43,6 +48,27 @@
      :cache (when-not no-cache (str (io/file root ".atlas" "source-index.transit")))}))
 
 (defn- kw [s] (keyword (str/replace s #"^:" "")))
+
+(defn- serve
+  "Answers one JSON request per line until stdin closes. Before each reply
+   the index is refreshed from what changed on disk, in memory."
+  [cfg]
+  (let [idx (atom (index/build (dissoc cfg :cache)))]
+    (loop []
+      (when-let [line (read-line)]
+        (let [{:keys [id op keyword]} (try (json/parse-string line true) (catch Exception _ nil))
+              reply (try
+                      (swap! idx #(index/build (assoc (dissoc cfg :cache) :previous %)))
+                      {:id id
+                       :result (case op
+                                 "hover" (hover/lookup @idx (kw keyword))
+                                 "check" (index/check @idx)
+                                 "summary" (index/summary @idx)
+                                 {:error (str "unknown op " op)})}
+                      (catch Exception e {:id id :error (ex-message e)}))]
+          (println (json/generate-string reply))
+          (flush)
+          (recur))))))
 
 (defn -main [& args]
   (let [{[cmd arg] :positional :as opts} (parse args)
@@ -54,6 +80,8 @@
               "data" (index/data-key @idx (kw arg))
               "check" (index/check @idx)
               "summary" (index/summary @idx)
+              "hover" (hover/lookup @idx (kw arg))
+              "serve" (do (serve (config opts)) (System/exit 0))
               (do (println usage) (System/exit (if cmd 1 0))))]
     (if (:json opts)
       (println (json/generate-string out {:pretty true}))
