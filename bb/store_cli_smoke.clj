@@ -123,6 +123,38 @@
         (let [gaps (run dir "gaps" b "--min-similarity" "0.6" "--max" "3")]
           (check "gaps honours --max and --min-similarity"
                  (and (<= 1 (count gaps) 3) (every? #(> (:similarity %) 0.6) gaps))))
+        (let [grown ":fn/check-user-availability"
+              detail (run dir "entity-detail" b grown)
+              near (run dir "near-intent" b ":tier/cached" ":domain/calendar" "--k" "3")
+              lifecycle (run dir "aspect-lifecycle" a b ":tier/cached")]
+          (check "overview counts the version's entities" (= (count v2) (:entity-count (run dir "overview" b))))
+          (check "by-aspect finds the one carrier of the added aspect"
+                 (= [:fn/check-user-availability] (:entities (run dir "by-aspect" b ":tier/cached"))))
+          (check "entity-detail reads the snapshot, not the entity the process registered"
+                 (some #{:tier/cached} (:entity/aspects detail)))
+          (check "entities-by-type lists execution functions"
+                 (some #{:fn/check-user-availability}
+                       (:entities (run dir "entities-by-type" b ":atlas/execution-function"))))
+          (check "entity-position gives degrees"
+                 (nat-int? (:position/in-degree (run dir "entity-position" b grown))))
+          (check "consumer-pattern gives a verdict"
+                 (#{:isolated :outlier-low :matches-peers :outlier-high :no-peers}
+                  (:pattern/verdict (run dir "consumer-pattern" b grown))))
+          (check "near-intent ranks the carrier of the rare aspect first"
+                 (= :fn/check-user-availability (:dev-id (first (:query/similarity near)))))
+          (check "suggest-placement finds overlapping entities"
+                 (seq (:similar (run dir "suggest-placement" b ":tier/cached"))))
+          (check "aspect-anomalies counts the once-used aspect"
+                 (some #{:tier/cached} (:sparse (run dir "aspect-anomalies" b))))
+          (check "aspect-signature counts the aspect's carriers"
+                 (= 1 (:signature/usage-count (run dir "aspect-signature" b ":tier/cached"))))
+          (check "aspect-lifecycle sees the aspect appear in the second version"
+                 (and (= [0 1] (mapv :count (:lifecycle/timeline lifecycle)))
+                      (= :growing (:lifecycle/persistence-class lifecycle))))
+          (check "bottlenecks, islands and orphans answer"
+                 (and (vector? (:bottlenecks (run dir "bottlenecks" b)))
+                      (pos? (:count (run dir "islands" b)))
+                      (pos? (:count (run dir "orphans" b))))))
         (let [ok (bb-registry dir "diff" "." (subs a 0 7) (subs b 0 7))
               broken (bb-registry dir "diff" "." b "HEAD")
               misuse (bb-registry dir "nonsense" ".")]

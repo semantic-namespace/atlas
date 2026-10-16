@@ -1,10 +1,11 @@
 (ns atlas.review.cli
   "Registry questions answered from a git store checkout: version diffs and
   timelines from `atlas.history.facts`, closures, dataflow and gaps from
-  `atlas.datalog.graph`. Runs under babashka; see the `registry` task in the
+  `atlas.datalog.graph`, and the review analyses from `atlas.ide.analysis`. Runs under babashka; see the `registry` task in the
   root bb.edn."
   (:require [atlas.datalog.graph :as graph]
             [atlas.history.facts :as hf]
+            [atlas.ide.analysis :as analysis]
             [atlas.review.registry :as store]
             [clojure.java.shell :refer [sh]]
             [clojure.pprint :as pp]
@@ -22,7 +23,21 @@
   consumers-of <ref> <data-key>
   dependents <ref> <dev-id>
   dependencies <ref> <dev-id>
-  gaps <ref> [--min-similarity x] [--max n]")
+  gaps <ref> [--min-similarity x] [--max n]
+  overview <ref>
+  by-aspect <ref> <aspect>
+  entities-by-type <ref> <type>
+  entity-detail <ref> <dev-id>
+  entity-position <ref> <dev-id>
+  consumer-pattern <ref> <dev-id> [--k n] [--min-cosine x]
+  near-intent <ref> <aspect>... [--k n]
+  suggest-placement <ref> <aspect>... [--consumes k,k] [--produces k,k]
+  aspect-anomalies <ref>
+  aspect-signature <ref> <aspect>
+  aspect-lifecycle <from-ref> <to-ref> <aspect>
+  bottlenecks <ref>
+  islands <ref>
+  orphans <ref> [--exclude aspect]")
 
 (defn- fail [msg & [data]] (throw (ex-info msg (or data {}))))
 
@@ -31,7 +46,8 @@
 (defn- kw [s]
   (if (keyword? s) s (keyword (cond-> s (str/starts-with? s ":") (subs 1)))))
 
-(def ^:private flags #{"--prefix" "--hops" "--min-similarity" "--max" "--from" "--to"})
+(def ^:private flags #{"--prefix" "--hops" "--min-similarity" "--max" "--from" "--to"
+                        "--k" "--min-cosine" "--consumes" "--produces" "--exclude"})
 
 (defn parse-args [args]
   (loop [[a & more :as args] args, pos [], opts {}]
@@ -222,6 +238,20 @@
 
 (defn- ids [xs] (vec (sort xs)))
 
+(defn- at
+  "Calls `f` with the registry recorded at `ref` bound as the current registry."
+  [dir ref f]
+  (store/with-version (registry-at (commit-of dir ref)) (f)))
+
+(defn- kws [s] (when s (mapv kw (remove str/blank? (str/split s #",")))))
+
+(defn aspect-lifecycle [dir from to aspect]
+  (let [commits (range-commits dir from to)]
+    (assoc (analysis/aspect-lifecycle {:query/aspect (kw aspect)}
+                                      (map-indexed (fn [i c] [(label i c) (registry-at c)]) commits))
+           :from (ref-info dir from (first commits))
+           :to (ref-info dir to (peek commits)))))
+
 (defn run [cmd dir args opts]
   (case cmd
     "diff" (let [[a b] args] (diff dir a b))
@@ -236,11 +266,35 @@
     "gaps" (graph/structural-gaps (graph-at dir (first args))
                                   (or (some-> (:min-similarity opts) parse-double) 0.5)
                                   (or (some-> (:max opts) parse-long) 20))
+    "overview" (at dir (first args) #(analysis/overview {:version (first args)}))
+    "by-aspect" (at dir (first args) #(analysis/by-aspect {:query/aspect (kw (second args))}))
+    "entities-by-type" (at dir (first args) #(analysis/entities-by-type {:entity/type (kw (second args))}))
+    "entity-detail" (at dir (first args) #(analysis/entity-detail {:entity/dev-id (kw (second args))}))
+    "entity-position" (at dir (first args) #(analysis/entity-position {:entity/dev-id (kw (second args))}))
+    "consumer-pattern" (at dir (first args) #(analysis/consumer-pattern
+                                               {:entity/dev-id (kw (second args))
+                                                :query/k (some-> (:k opts) parse-long)
+                                                :query/min-cosine (some-> (:min-cosine opts) parse-double)}))
+    "near-intent" (at dir (first args) #(analysis/near-intent {:entity/intended-aspects (mapv kw (rest args))
+                                                               :query/k (some-> (:k opts) parse-long)}))
+    "suggest-placement" (at dir (first args) #(analysis/suggest-placement
+                                                {:entity/intended-aspects (mapv kw (rest args))
+                                                 :dataflow/consumes (kws (:consumes opts))
+                                                 :dataflow/produces (kws (:produces opts))}))
+    "aspect-anomalies" (at dir (first args) #(analysis/aspect-anomalies {}))
+    "aspect-signature" (at dir (first args) #(analysis/aspect-signature {:query/aspect (kw (second args))}))
+    "aspect-lifecycle" (let [[a b aspect] args] (aspect-lifecycle dir a b aspect))
+    "bottlenecks" (at dir (first args) #(analysis/bottlenecks {}))
+    "islands" (at dir (first args) #(analysis/islands {}))
+    "orphans" (at dir (first args) #(analysis/orphans {:aspect/exclude-from-orphan-check (some-> (:exclude opts) kw)}))
     (misuse (str "unknown command " cmd))))
 
 (def ^:private arity
   {"diff" 2 "timeline" 2 "provenance" 1 "blast-radius" 2 "trace-causes" 2 "producers-of" 2
-   "consumers-of" 2 "dependents" 2 "dependencies" 2 "gaps" 1})
+   "consumers-of" 2 "dependents" 2 "dependencies" 2 "gaps" 1
+   "overview" 1 "by-aspect" 2 "entities-by-type" 2 "entity-detail" 2 "entity-position" 2
+   "consumer-pattern" 2 "near-intent" 2 "suggest-placement" 2 "aspect-anomalies" 1
+   "aspect-signature" 2 "aspect-lifecycle" 3 "bottlenecks" 1 "islands" 1 "orphans" 1})
 
 (defn- jsonable [x]
   (walk/postwalk #(cond (keyword? %) (subs (str %) 1)
