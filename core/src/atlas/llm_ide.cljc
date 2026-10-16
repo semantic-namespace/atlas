@@ -65,6 +65,7 @@
             [atlas.query :as q]
             [atlas.ontology :as ontology]
             [atlas.ide :as ide]
+            [atlas.ide.analysis :as analysis]
             [atlas.invariant :as inv]
             [atlas.datalog :as datalog]
             [atlas.history :as history]
@@ -388,34 +389,7 @@
  {:execution-function/context [:entity/intended-aspects :dataflow/consumes :dataflow/produces]
   :execution-function/response [:suggestion/similar :suggestion/deps :suggestion/patterns]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:entity/intended-aspects :dataflow/consumes :dataflow/produces]}]
-                (let [aspect-set (if (set? intended-aspects) intended-aspects (set intended-aspects))
-                      similar (->> (registry/current-registry)
-                                   (map (fn [[id props]]
-                                          (let [entity-aspects (registry/aspects id)
-                                                shared (set/intersection aspect-set entity-aspects)
-                                                missing (set/difference aspect-set entity-aspects)]
-                                            {:entity (:atlas/dev-id props)
-                                             :overlap (if (seq aspect-set)
-                                                        (/ (count shared) (count aspect-set))
-                                                        0)
-                                             :shared (vec (sort shared))
-                                             :missing (vec (sort missing))})))
-                                   (filter #(> (:overlap %) 0))
-                                   (sort-by :overlap >)
-                                   (take 10)
-                                   vec)
-                      suggested-deps (when (seq consumes)
-                                       (->> consumes
-                                            (mapcat ide/producers-of)
-                                            distinct
-                                            vec))]
-                  {:similar similar
-                   :suggested-deps (or suggested-deps [])
-                   :patterns (->> similar
-                                  (take 3)
-                                  (map :entity)
-                                  vec)}))})
+  :atlas/impl analysis/suggest-placement})
 
     ;; Intent: diagnose
 (registry/register!
@@ -425,18 +399,7 @@
  {:execution-function/context [:aspect/exclude-from-orphan-check :aspect/type-namespace]
   :execution-function/response [:diagnose/orphans :diagnose/count]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:aspect/exclude-from-orphan-check :aspect/type-namespace]}]
-                (let [exclude-from-orphan-check (or exclude-from-orphan-check :tier/api)
-                      type-namespace (or type-namespace "atlas")
-                      all-ids (inv/all-dev-ids)
-                      orphaned (->> all-ids
-                                    (remove #(lookup/has-aspect? % exclude-from-orphan-check))
-                                    (filter #(zero? (in-degree %)))
-                                    (map (fn [e] {:entity e
-                                                  :type (first (extract-aspects e type-namespace))}))
-                                    vec)]
-                  {:orphans orphaned
-                   :count (count orphaned)}))})
+  :atlas/impl analysis/orphans})
 
 (registry/register!
  :atlas.llm-ide/islands
@@ -445,40 +408,7 @@
  {:execution-function/context []
   :execution-function/response [:diagnose/islands :diagnose/count]
   :execution-function/deps #{}
-  :atlas/impl (fn [_]
-                (let [all-ids (inv/all-dev-ids)
-                      adjacency (reduce (fn [adj id]
-                                          (let [deps (set (ide/dependencies-of id))
-                                                dependents (set (ide/dependents-of id))]
-                                            (assoc adj id (set/union deps dependents))))
-                                        {}
-                                        all-ids)
-                      find-component (fn [start visited]
-                                       (loop [queue [start]
-                                              component #{}
-                                              seen visited]
-                                         (if (empty? queue)
-                                           [component seen]
-                                           (let [node (first queue)
-                                                 neighbors (get adjacency node #{})
-                                                 new-neighbors (set/difference neighbors seen)]
-                                             (recur (into (rest queue) new-neighbors)
-                                                    (conj component node)
-                                                    (conj seen node))))))
-                      components (loop [remaining all-ids
-                                        visited #{}
-                                        result []]
-                                   (if (empty? remaining)
-                                     result
-                                     (let [start (first remaining)]
-                                       (if (visited start)
-                                         (recur (rest remaining) visited result)
-                                         (let [[component new-visited] (find-component start visited)]
-                                           (recur (rest remaining)
-                                                  new-visited
-                                                  (conj result (vec component))))))))]
-                  {:islands (vec (sort-by (comp - count) components))
-                   :count (count components)}))})
+  :atlas/impl analysis/islands})
 
 (registry/register!
  :atlas.llm-ide/bottlenecks
@@ -487,21 +417,7 @@
  {:execution-function/context []
   :execution-function/response [:diagnose/bottlenecks]
   :execution-function/deps #{}
-  :atlas/impl (fn [_]
-                (let [all-ids (inv/all-dev-ids)
-                      scores (->> all-ids
-                                  (map (fn [e]
-                                         (let [in (in-degree e)
-                                               out (out-degree e)]
-                                           {:entity e
-                                            :in-degree in
-                                            :out-degree out
-                                            :score (* in out)})))
-                                  (filter #(> (:score %) 0))
-                                  (sort-by :score >)
-                                  (take 20)
-                                  vec)]
-                  {:bottlenecks scores}))})
+  :atlas/impl analysis/bottlenecks})
 
 (registry/register!
  :atlas.llm-ide/aspect-anomalies
@@ -510,29 +426,7 @@
  {:execution-function/context []
   :execution-function/response [:diagnose/sparse :diagnose/similar-names]
   :execution-function/deps #{}
-  :atlas/impl (fn [_]
-                (let [aspects (ide/list-aspects)
-                      freq-map (into {} (map (fn [{:keys [aspect/aspect aspect/count]}]
-                                               [aspect count])
-                                             aspects))
-                      all-sparse (->> freq-map
-                                      (filter #(= 1 (val %)))
-                                      (map key)
-                                      vec)
-                      aspect-names (keys freq-map)
-                      all-similar (->> (for [a aspect-names
-                                             b aspect-names
-                                             :when (and (not= a b)
-                                                        (= (namespace a) (namespace b))
-                                                        (< (Math/abs (- (count (name a)) (count (name b)))) 2))]
-                                         #{a b})
-                                       distinct
-                                       (map vec)
-                                       vec)]
-                  {:sparse (vec (take 50 all-sparse))
-                   :sparse-count (count all-sparse)
-                   :similar-names (vec (take 50 all-similar))
-                   :similar-names-count (count all-similar)}))})
+  :atlas/impl analysis/aspect-anomalies})
 
 (registry/register!
  :atlas.llm-ide/structural-gaps
@@ -580,8 +474,7 @@
  {:execution-function/context [:query/aspect]
   :execution-function/response [:query/entities]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:query/aspect]}]
-                {:entities (vec (ide/entities-with-aspect aspect))})})
+  :atlas/impl analysis/by-aspect})
 
 (registry/register!
  :atlas.llm-ide/entity-detail
@@ -590,8 +483,7 @@
  {:execution-function/context [:entity/dev-id]
   :execution-function/response [:entity/info]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:entity/dev-id]}]
-                (ide/entity-info dev-id))})
+  :atlas/impl analysis/entity-detail})
 
 (registry/register!
  :atlas.llm-ide/data-flow
@@ -670,12 +562,7 @@
  {:execution-function/context [:entity/type]
   :execution-function/response [:entities/list :entities/count]
   :execution-function/deps #{}
-  :atlas/impl (fn [{:keys [:entity/type]}]
-                (let [entity-type (if (keyword? type) type (keyword type))
-                      entities (vec (ide/entities-with-aspect entity-type))]
-                  {:entity-type entity-type
-                   :entities entities
-                   :count (count entities)}))})
+  :atlas/impl analysis/entities-by-type})
 
 (registry/register!
  :atlas.llm-ide/ontology-info
