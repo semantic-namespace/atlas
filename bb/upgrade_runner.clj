@@ -25,12 +25,24 @@
 
 (defn- by-print [a b] (compare (pr-str a) (pr-str b)))
 
+(defn- data?
+  "True for values EDN can hold."
+  [v]
+  (or (nil? v) (boolean? v) (number? v) (string? v) (keyword? v) (symbol? v)
+      (char? v) (uuid? v) (inst? v) (coll? v)))
+
 (defn canon
-  "x with every map and set sorted by how its members print, so equal values
-   print equally whatever their hash order."
+  "x as data that prints the same whenever it is equal: every map and set
+   sorted by how its members print, and values that aren't data named
+   instead of printed. A fn prints with a class name and hash code made fresh
+   on every run (fn__57048@4b426ae9), so it becomes `fn`; a var becomes its
+   name; any other object `object:<class>`."
   [x]
   (walk/postwalk (fn [v]
                    (cond
+                     (fn? v) 'fn
+                     (var? v) (symbol (subs (str v) 2))
+                     (not (data? v)) (symbol (str "object:" (.getName (class v))))
                      (record? v) v
                      (map? v) (into (sorted-map-by by-print) v)
                      (set? v) (into (sorted-set-by by-print) v)
