@@ -242,8 +242,11 @@
   :keymap atlas-source-mode-map
   (if atlas-source-mode
       (progn
-        (add-hook 'eldoc-documentation-functions #'atlas-source-eldoc -90 t)
-        (add-hook 'xref-backend-functions #'atlas-source--xref-backend -90 t)
+        ;; Ahead of CIDER (`cider-xref-fn-depth' -90) and lsp-mode: the
+        ;; atlas backends answer only for keywords atlas knows, so the rest
+        ;; still reaches them.
+        (add-hook 'eldoc-documentation-functions #'atlas-source-eldoc -95 t)
+        (add-hook 'xref-backend-functions #'atlas-source--xref-backend -95 t)
         (setq-local eldoc-echo-area-use-multiline-p t)
         (eldoc-mode 1))
     (remove-hook 'eldoc-documentation-functions #'atlas-source-eldoc t)
