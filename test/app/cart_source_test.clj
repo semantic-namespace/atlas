@@ -251,16 +251,3 @@
   (is (= #{:fn/elsewhere} (registry/unregister-ns! 'app.cart-source-test.other)))
   (is (nil? (rt/props-for :fn/elsewhere)))
   (is (some? (rt/props-for :fn/get-cart))))
-
-;; =============================================================================
-;; Static view: form <-> entity without loading code (what review needs)
-;; =============================================================================
-
-(deftest static-links-find-each-annotated-form
-  (if-not (try (requiring-resolve 'clj-kondo.core/run!) (catch Exception _ nil))
-    (is true "clj-kondo not on classpath; static-links not checked")
-    (let [links (source/static-links ["test/app/cart_impl.clj"])]
-      (is (= (set (keys (source/annotated-vars '[app.cart-impl]))) (set (keys links))))
-      (is (= {:ns 'app.cart-impl :name 'merge-carts}
-             (select-keys (links :fn/merge-carts) [:ns :name])))
-      (is (pos-int? (:row (links :fn/merge-carts)))))))

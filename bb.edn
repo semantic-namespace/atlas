@@ -2,12 +2,12 @@
  :deps {org.clojure/data.json {:mvn/version "2.4.0"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
                                            :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}}
- :tasks {index {:doc "The project's registry and code read from its files, no JVM and no code loaded. bb index <where|uses|deps|data|check|summary> [arg] [--root dir] [--registry dir]... [--src dir]... [--json]. From another repo: bb --config <atlas-checkout>/bb.edn index ..."
-                :requires ([index-cli])
-                :task (apply index-cli/-main *command-line-args*)}
-         index-smoke {:doc "Edits a copy of the cart example and checks atlas.index sees each edit"
-                      :requires ([index-smoke])
-                      :task (index-smoke/-main)}
+ :tasks {source {:doc "The project's sources read from its files (EDN registry + annotated vars), no JVM and no code loaded; bb registry answers from the recorded store instead. bb source <where|uses|deps|data|check|summary> [arg] [--root dir] [--registry dir]... [--src dir]... [--json]. From another repo: bb --config <atlas-checkout>/bb.edn source ..."
+                 :requires ([source-cli])
+                 :task (apply source-cli/-main *command-line-args*)}
+         source-smoke {:doc "Edits a copy of the cart example and checks atlas.source.index sees each edit"
+                       :requires ([source-smoke])
+                       :task (source-smoke/-main)}
          upgrade-check {:doc "Whether another atlas version changes what atlas does for a project: builds its registry with each version and diffs the registries and the atlas.llm-ide tools' answers. bb upgrade-check --build <qualified-fn|file.clj> [--project dir] [--from v] [--to v] [--paths p,...] [--probes file] [--out dir]; versions: current | mvn:<v> | local:<core path> | git:<sha>. From another repo: bb --config <atlas-checkout>/bb.edn upgrade-check ..."
                        :requires ([upgrade-check])
                        :task (apply upgrade-check/-main *command-line-args*)}

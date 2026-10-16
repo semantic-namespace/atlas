@@ -1,8 +1,8 @@
-(ns index-smoke
+(ns source-smoke
   "Copies the cart example (test/app/cart_registry, test/app/cart_impl.clj)
    into a throwaway project, edits it the way an LLM would, and checks that
-   atlas.index sees each edit, re-analysing only the files that changed."
-  (:require [atlas.index :as index]
+   atlas.source.index sees each edit, re-analysing only the files that changed."
+  (:require [atlas.source.index :as index]
             [babashka.fs :as fs]
             [clojure.string :as str]))
 
@@ -20,10 +20,10 @@
     (.setLastModified (fs/file f) (+ 2000 (System/currentTimeMillis)))))
 
 (defn -main [& _]
-  (let [dir (fs/create-temp-dir {:prefix "atlas-index-smoke"})
+  (let [dir (fs/create-temp-dir {:prefix "atlas-source-smoke"})
         reg (fs/path dir "registry")
         src (fs/path dir "src" "app")
-        opts {:root (str dir) :registry ["registry"] :src ["src"] :cache (str (fs/path dir ".atlas" "index-cache.transit"))}]
+        opts {:root (str dir) :registry ["registry"] :src ["src"] :cache (str (fs/path dir ".atlas" "source-index.transit"))}]
     (fs/copy-tree "test/app/cart_registry" reg)
     (fs/create-dirs src)
     (fs/copy "test/app/cart_impl.clj" (fs/path src "cart_impl.clj"))

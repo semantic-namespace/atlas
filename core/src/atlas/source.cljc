@@ -226,23 +226,3 @@
        {:added (ids (remove before (keys after)))
         :removed (ids (remove after (keys before)))
         :changed (ids (for [[id e] after :when (and (before id) (not= e (before id)))] id))})))
-
-;; =============================================================================
-;; Static view (no code loaded)
-;; =============================================================================
-
-#?(:clj
-   (defn static-links
-     "{dev-id {:ns :name :filename :row :end-row}} for the vars under `paths`
-      whose metadata names a dev-id, read by clj-kondo without loading any
-      code. Needs clj-kondo on the classpath."
-     [paths]
-     (let [kondo-run! (requiring-resolve 'clj-kondo.core/run!)
-           {:keys [analysis]} (kondo-run! {:lint (vec paths)
-                                           :config {:output {:canonical-paths true}
-                                                    :analysis {:var-definitions {:meta [:atlas.source/id]}}}})]
-       (into {}
-             (for [{:keys [meta] :as d} (:var-definitions analysis)
-                   :let [id (:atlas.source/id meta)]
-                   :when id]
-               [id (select-keys d [:ns :name :filename :row :end-row])])))))

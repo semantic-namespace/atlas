@@ -1,12 +1,12 @@
-(ns index-cli
-  "bb index <command> [args] [--root dir] [--registry dir]... [--src dir]... [--json] [--no-cache]
+(ns source-cli
+  "bb source <command> [args] [--root dir] [--registry dir]... [--src dir]... [--json] [--no-cache]
 
    Answers from the project's files: the EDN registry and the source, read by
    clj-kondo. Nothing is loaded or run. Directories come from the flags, or
    from <root>/atlas-index.edn ({:registry [...] :src [...]}). The code
-   analysis is cached in <root>/.atlas/index-cache.transit and refreshed for the
+   analysis is cached in <root>/.atlas/source-index.transit and refreshed for the
    files that changed since the last call."
-  (:require [atlas.index :as index]
+  (:require [atlas.source.index :as index]
             [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -40,7 +40,7 @@
     {:root root
      :registry (if (seq registry) registry (:registry from-file ["registry"]))
      :src (if (seq src) src (:src from-file ["src"]))
-     :cache (when-not no-cache (str (io/file root ".atlas" "index-cache.transit")))}))
+     :cache (when-not no-cache (str (io/file root ".atlas" "source-index.transit")))}))
 
 (defn- kw [s] (keyword (str/replace s #"^:" "")))
 

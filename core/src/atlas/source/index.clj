@@ -1,12 +1,13 @@
-(ns atlas.index
-  "An index of an atlas project read from its files, without loading any of
-   its code: the registry entries in its EDN files, with the line each starts
-   on, and the vars that implement them (`^{:atlas.source/id ...}`), with what
-   each var calls and which qualified keywords it mentions, as clj-kondo
-   reads them.
+(ns atlas.source.index
+  "The static view of a project's sources: what atlas.source would load,
+   read from the files without loading any code. The registry entries in
+   its EDN files, with the line each key is written on, merged by
+   atlas.source's rules, and the vars that implement them
+   (`^{:atlas.source/id ...}`), with what each var calls and which
+   qualified keywords it mentions, as clj-kondo reads them.
 
    It answers where an entity is defined and implemented, what refers to it,
-   who produces and consumes a data key, and where the code and the registry
+   who produces and consumes a data key, and where the code and the sources
    disagree. `build` reuses a cache of the code analysis and re-analyses only
    the source files whose modification time changed, so every call sees the
    working tree as it is, edits included.
@@ -16,11 +17,11 @@
   (:require [atlas.source :as source]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
-            #?(:bb [edamame.core :as e]))
-  #?(:bb (:import (java.io File))
-     :clj (:import (java.io File StringReader)
-                   (clojure.lang LineNumberingPushbackReader))))
+            [clojure.string :as str])
+  (:import (java.io File StringReader)
+           (clojure.lang LineNumberingPushbackReader)))
+
+(def ^:private bb? (some? (System/getProperty "babashka.version")))
 
 (def cache-version 2)
 
@@ -44,46 +45,30 @@
 ;; Registry files
 ;; =============================================================================
 
-#?(:bb
-   (defn- read-keyed-lines
-     "[[k v line] ...] for the top-level map in `text`, `line` being where k
-      is written. edamame puts :line on each value; the key is on that line
-      or the last line before it that has the key as a whole token."
-     [text]
-     (let [m (e/parse-string text {:row-key :line :col-key :column})
-           lines (str/split-lines text)
-           key-line (fn [k value-line]
-                      (let [token (re-pattern (str (java.util.regex.Pattern/quote (str k)) "(?=[\\s{}\\[\\]()]|$)"))]
-                        (or (some #(when (re-find token (nth lines (dec %))) %) (range value-line 0 -1))
-                            value-line)))]
-       (when (map? m)
-         (for [[k v] m] [k v (key-line k (or (:line (meta v)) 1))]))))
-
-   :clj
-   (defn- read-keyed-lines
-     "[[k v line] ...] for the top-level map in `text`, `line` being where k
-      is written. Clojure's reader keeps no lines on maps, so the map is read
-      one key and value at a time, noting the line before each key."
-     [text]
-     (let [r (LineNumberingPushbackReader. (StringReader. text))
-           skip (fn [] (loop []
-                         (let [c (.read r)]
-                           (cond
-                             (= c -1) c
-                             (or (Character/isWhitespace c) (= c (int \,))) (recur)
-                             (= c (int \;)) (do (while (not (#{-1 (int \newline)} (.read r)))) (recur))
-                             :else c))))]
-       (binding [*read-eval* false]
-         (when (= (int \{) (skip))
-           (loop [acc []]
-             (let [c (skip)]
-               (if (or (= c -1) (= c (int \})))
-                 acc
-                 (do (.unread r c)
-                     (let [line (.getLineNumber r)
-                           k (read r)
-                           v (read r)]
-                       (recur (conj acc [k v line]))))))))))))
+(defn- read-keyed-lines
+  "[[k v line] ...] for the top-level map in `text`, `line` being where k is
+   written. The reader keeps no lines on maps, so the map is read one key and
+   value at a time, noting the line before each key."
+  [text]
+  (let [r (LineNumberingPushbackReader. (StringReader. text))
+        skip (fn [] (loop []
+                      (let [c (.read r)]
+                        (cond
+                          (= c -1) c
+                          (or (Character/isWhitespace c) (= c (int \,))) (recur)
+                          (= c (int \;)) (do (while (not (#{-1 (int \newline)} (.read r)))) (recur))
+                          :else c))))]
+    (binding [*read-eval* false]
+      (when (= (int \{) (skip))
+        (loop [acc []]
+          (let [c (skip)]
+            (if (or (= c -1) (= c (int \})))
+              acc
+              (do (.unread r c)
+                  (let [line (.getLineNumber r)
+                        k (read r)
+                        v (read r)]
+                    (recur (conj acc [k v line])))))))))))
 
 (defn read-registry-file
   "{dev-id {:entry entry :file path :line n}} for one EDN registry file."
@@ -100,10 +85,11 @@
 
 (def ^:private kondo
   (delay
-    #?(:bb (do ((requiring-resolve 'babashka.pods/load-pod) 'clj-kondo/clj-kondo "2026.01.19")
-               (requiring-resolve 'pod.borkdude.clj-kondo/run!))
-       :clj (or (try (requiring-resolve 'clj-kondo.core/run!) (catch Exception _ nil))
-                (throw (ex-info "atlas.index needs clj-kondo on the classpath" {}))))))
+    (if bb?
+      (do ((requiring-resolve 'babashka.pods/load-pod) 'clj-kondo/clj-kondo "2026.01.19")
+          (requiring-resolve 'pod.borkdude.clj-kondo/run!))
+      (or (try (requiring-resolve 'clj-kondo.core/run!) (catch Exception _ nil))
+          (throw (ex-info "atlas.source.index needs clj-kondo on the classpath" {}))))))
 
 (defn- analyse-code
   "{file {:vars [..] :calls [..] :keywords [..]}} for `files`, the parts of
