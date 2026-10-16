@@ -156,30 +156,76 @@
 
 #?(:clj
    (defn- ->source
-     "A source map from a file path or classpath resource (labelled by the
-      string given, so the label is the same on every machine), or a source
-      map as given."
+     "A source map from:
+      - a file path or classpath resource, read now and labelled by the
+        string given, so the label is the same on every machine;
+      - a fn or var of no args (a generator), called now;
+      - a source map, as given."
      [s]
-     (if (map? s)
-       s
-       (let [f (io/file s)
-             in (if (.exists f) f (or (io/resource s) (throw (ex-info "registry file not found" {:source s}))))]
-         {:source s :entities (read-entities (slurp in))}))))
+     (cond
+       (map? s) s
+       (or (fn? s) (var? s)) (s)
+       :else (let [f (io/file s)
+                   in (if (.exists f) f (or (io/resource s) (throw (ex-info "registry file not found" {:source s}))))]
+               {:source s :entities (read-entities (slurp in))}))))
 
 #?(:clj
-   (defn load!
-     "Merges `sources` (registry file paths or resources, or source maps
-      {:source label :entities {...}} from a generator), finds the annotated
-      vars in `nss`, and registers the merged entities. Throws when sources
-      conflict or code and sources disagree."
-     [sources nss]
+   (defn- prepare
+     "Reads, merges and checks one load: the merged sources and the vars, or
+      a throw. Registers nothing."
+     [{:keys [sources nss]}]
      (let [merged (merge-sources (map ->source sources))
            vars (annotated-vars nss)]
        (when-let [conflicts (seq (:conflicts merged))]
          (throw (ex-info "Registry sources conflict" {:conflicts (vec conflicts)})))
        (when-let [problems (seq (linkage-problems (:entities merged) vars))]
          (throw (ex-info "Registry sources and code disagree" {:problems (vec problems)})))
+       {:merged merged :vars vars})))
+
+(defonce ^{:doc "Every distinct `load!` call, in order, so `reload!` can replay them."}
+  loads
+  (atom []))
+
+#?(:clj
+   (defn load!
+     "Merges `sources` (registry file paths or resources, generator fns or
+      vars of no args, or source maps {:source label :entities {...}}),
+      finds the annotated vars in `nss`, and registers the merged entities.
+      Throws, registering nothing, when sources conflict or code and sources
+      disagree. Remembered for `reload!`."
+     [sources nss]
+     (let [spec {:sources (vec sources) :nss (vec nss)}
+           {:keys [merged vars]} (prepare spec)]
+       (swap! loads #(if (some #{spec} %) % (conj % spec)))
        (register-entities! merged vars))))
+
+(defn forget-loads!
+  "Forgets the remembered `load!` calls; use beside `atlas.registry/reset-all!`."
+  []
+  (reset! loads []))
+
+#?(:clj
+   (defn- registered-by-source? [entry] (contains? (:value entry) :atlas/source)))
+
+#?(:clj
+   (defn reload!
+     "Re-reads every source given to `load!` and re-registers what they now
+      say: edited entries change, removed ones go, new ones and new annotated
+      vars appear. Every load is read and checked before anything is
+      replaced, so a reload that throws leaves the registry as it was.
+      Returns {:added [...] :removed [...] :changed [...]} by dev-id."
+     []
+     (let [prepared (mapv prepare @loads)
+           before (into {} (for [e @registry/registrations :when (registered-by-source? e)]
+                             [(:dev-id e) (dissoc e :ns)]))
+           _ (registry/unregister! registered-by-source?)
+           _ (doseq [{:keys [merged vars]} prepared] (register-entities! merged vars))
+           after (into {} (for [e @registry/registrations :when (registered-by-source? e)]
+                            [(:dev-id e) (dissoc e :ns)]))
+           ids #(vec (sort %))]
+       {:added (ids (remove before (keys after)))
+        :removed (ids (remove after (keys before)))
+        :changed (ids (for [[id e] after :when (and (before id) (not= e (before id)))] id))})))
 
 ;; =============================================================================
 ;; Static view (no code loaded)

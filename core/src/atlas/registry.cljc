@@ -502,16 +502,24 @@
   (reset! registry {})
   (reset! dev-id-index {}))
 
+(defn unregister!
+  "Remove the registrations for which (pred entry) is true from the log, and
+   their dev-ids from the registry and dev-id index. Returns the removed
+   dev-ids."
+  [pred]
+  (let [removed-ids (into #{} (comp (filter pred) (map :dev-id)) @registrations)]
+    (swap! registrations #(vec (clojure.core/remove pred %)))
+    (swap! registry      #(apply dissoc % (map @dev-id-index removed-ids)))
+    (swap! dev-id-index  #(apply dissoc % removed-ids))
+    removed-ids))
+
 (defn unregister-ns!
   "Remove all registrations contributed by ns-sym from the log and registry.
    Called from before-ns-unload hooks so incremental reloads keep @registrations
    accurate without needing a full reset-all!."
   [ns-sym]
-  (let [ns-str     (str ns-sym)
-        removed-ids (into #{} (comp (filter #(= ns-str (:ns %))) (map :dev-id)) @registrations)]
-    (swap! registrations #(vec (clojure.core/remove (comp #{ns-str} :ns) %)))
-    (swap! registry      #(apply dissoc % (map @dev-id-index removed-ids)))
-    (swap! dev-id-index  #(apply dissoc % removed-ids))))
+  (let [ns-str (str ns-sym)]
+    (unregister! #(= ns-str (:ns %)))))
 
 #?(:clj
    (defn load!

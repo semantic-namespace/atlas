@@ -21,6 +21,7 @@
 
 (defn- fresh! []
   (registry/reset-all!)
+  (source/forget-loads!)
   (datalog/reset-db-cache!)
   (doseq [n '[atlas.ontology atlas.ontology.execution-function atlas.ontology.structure-component
               atlas.ontology.interface-endpoint atlas.ontology.data-schema]]
@@ -28,7 +29,7 @@
 
 (defn- load-source! [] (source/load! files '[app.cart-impl]))
 
-(use-fixtures :each (fn [f] (fresh!) (load-source!) (f) (registry/reset-all!)))
+(use-fixtures :each (fn [f] (fresh!) (load-source!) (f) (registry/reset-all!) (source/forget-loads!)))
 
 ;; =============================================================================
 ;; Same registry either way
@@ -189,6 +190,67 @@
                 '[app.cart-impl])
   (is (= "get_cart" (:mcp-tool/name (rt/props-for :fn/get-cart))))
   (is (= ["app/cart_registry/functions.edn" 'app.tools/generate!] (:atlas/source (rt/props-for :fn/get-cart)))))
+
+;; =============================================================================
+;; Reloading after an edit
+;; =============================================================================
+
+(defn- temp-registry
+  "The cart registry files copied to a temp dir, as file paths."
+  []
+  (let [dir (doto (java.io.File/createTempFile "atlas-source" "") .delete .mkdirs)]
+    (vec (for [f files]
+           (let [out (io/file dir (.getName (io/file f)))]
+             (spit out (slurp (io/resource f)))
+             (str out))))))
+
+(defn- edit! [path from to]
+  (let [s (slurp path)]
+    (assert (clojure.string/includes? s from) (str "edit target not in " path))
+    (spit path (clojure.string/replace-first s from to))))
+
+(deftest reload-follows-edits-to-registry-files
+  (fresh!)
+  (let [[_ _ functions :as paths] (temp-registry)
+        extra (str (io/file (.getParentFile (io/file functions)) "extra.edn"))]
+    (spit extra "{}")
+    (source/load! (conj paths extra) '[app.cart-impl])
+    (edit! functions ":execution-function/context [:session/data]\n  :execution-function/response [:cart/id"
+           ":execution-function/context [:session/data :cart/locale]\n  :execution-function/response [:cart/id")
+    (spit extra "{:schema/locale {:atlas/type :atlas/data-schema :atlas/aspects #{:domain/cart} :data-schema/fields [:cart/locale]}}")
+    (testing "an edited entry changes, a new file's entity appears"
+      (let [r (source/reload!)]
+        (is (= [:schema/locale] (:added r)))
+        (is (= [:fn/get-cart] (:changed r)))
+        (is (= [:session/data :cart/locale] (:execution-function/context (rt/props-for :fn/get-cart))))
+        (is (identical? #'app.cart-impl/get-cart (:atlas/impl (rt/props-for :fn/get-cart))) "the var link survives")))
+    (testing "an entry removed from a file goes on reload"
+      (spit extra "{}")
+      (is (= {:added [] :removed [:schema/locale] :changed []} (source/reload!)))
+      (is (nil? (rt/props-for :schema/locale))))
+    (testing "a reload that fails changes nothing"
+      (let [before @registry/registry]
+        (edit! functions " :fn/clear-cart\n" " :fn/clear-all\n")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disagree" (source/reload!)))
+        (is (= before @registry/registry))))))
+
+(deftest reload-calls-generators-again
+  (fresh!)
+  (let [n (atom 0)
+        gen (fn [] {:source 'test/gen :entities {:fn/get-cart {:mcp-tool/name (str "get_cart_v" (swap! n inc))}}})]
+    (source/load! (conj files gen) '[app.cart-impl])
+    (is (= "get_cart_v1" (:mcp-tool/name (rt/props-for :fn/get-cart))))
+    (is (= [:fn/get-cart] (:changed (source/reload!))))
+    (is (= "get_cart_v2" (:mcp-tool/name (rt/props-for :fn/get-cart))))))
+
+(deftest unregister-ns-still-removes-what-a-namespace-registered
+  (fresh!)
+  (binding [*ns* (create-ns 'app.cart-source-test.other)]
+    (registry/register! :fn/elsewhere :atlas/execution-function #{:tier/service} {}))
+  (load-source!)
+  (is (= #{:fn/elsewhere} (registry/unregister-ns! 'app.cart-source-test.other)))
+  (is (nil? (rt/props-for :fn/elsewhere)))
+  (is (some? (rt/props-for :fn/get-cart))))
 
 ;; =============================================================================
 ;; Static view: form <-> entity without loading code (what review needs)
