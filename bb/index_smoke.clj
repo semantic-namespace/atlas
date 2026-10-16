@@ -41,8 +41,8 @@
         (check "warm build analyses nothing" (zero? (:analysed idx))))
 
       (edit! (str (fs/path src "cart_impl.clj"))
-             "(defn ^{:atlas/dev-id :fn/clear-cart} clear-cart\n  [_ _]\n  {:cart/items []})"
-             "(defn ^{:atlas/dev-id :fn/clear-cart} clear-cart\n  [_ _]\n  (calculate-cart-subtotal {:cart/items []} {})\n  {:cart/items []})")
+             "(defn ^{:atlas.source/id :fn/clear-cart} clear-cart\n  [_ _]\n  {:cart/items []})"
+             "(defn ^{:atlas.source/id :fn/clear-cart} clear-cart\n  [_ _]\n  (calculate-cart-subtotal {:cart/items []} {})\n  {:cart/items []})")
       (let [idx (index/build opts)
             problems (index/check idx)]
         (check "an edit re-analyses only that file" (= 1 (:analysed idx)))
@@ -75,7 +75,7 @@
                (= "registry/functions.edn" (get-in w [:definition :file]))))
 
       (spit (str (fs/path reg "other.edn")) "{:fn/get-cart {:atlas/type :atlas/interface-endpoint}}")
-      (spit (str (fs/path src "cart_dup.clj")) "(ns app.cart-dup)\n(defn ^{:atlas/dev-id :fn/get-cart} get-cart-2 [_ _])\n")
+      (spit (str (fs/path src "cart_dup.clj")) "(ns app.cart-dup)\n(defn ^{:atlas.source/id :fn/get-cart} get-cart-2 [_ _])\n")
       (let [idx (index/build opts)
             problems (index/check idx)
             conflict (first (filter #(= :conflicting-values (:problem %)) problems))]

@@ -1,7 +1,7 @@
 (ns atlas.index
   "An index of an atlas project read from its files, without loading any of
    its code: the registry entries in its EDN files, with the line each starts
-   on, and the vars that implement them (`^{:atlas/dev-id ...}`), with what
+   on, and the vars that implement them (`^{:atlas.source/id ...}`), with what
    each var calls and which qualified keywords it mentions, as clj-kondo
    reads them.
 
@@ -114,13 +114,13 @@
     (let [{:keys [analysis]} (@kondo {:lint (vec files)
                                       :config {:output {:canonical-paths true}
                                                :linters ^:replace {}
-                                               :analysis {:var-definitions {:meta [:atlas/dev-id]}
+                                               :analysis {:var-definitions {:meta [:atlas.source/id]}
                                                           :keywords true}}})
           by-file (fn [k xf] (group-by :filename (into [] xf (get analysis k))))
           vars (by-file :var-definitions
                         (map (fn [{:keys [meta] :as d}]
                                (cond-> (select-keys d [:filename :ns :name :row :end-row :private :defined-by])
-                                 (:atlas/dev-id meta) (assoc :dev-id (:atlas/dev-id meta))))))
+                                 (:atlas.source/id meta) (assoc :dev-id (:atlas.source/id meta))))))
           calls (by-file :var-usages
                          (comp (filter :from-var)
                                (map #(select-keys % [:filename :from :from-var :to :name :row]))))

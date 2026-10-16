@@ -22,7 +22,7 @@
 
    Code links to entities with metadata on a plain var,
 
-     (defn ^{:atlas/dev-id :fn/get-cart} get-cart [ctx deps] ...)
+     (defn ^{:atlas.source/id :fn/get-cart} get-cart [ctx deps] ...)
 
    and loading registers each merged entity with that var as :atlas/impl
    (the var, so redefining at the REPL is seen) and the sources that gave it
@@ -105,17 +105,17 @@
 #?(:clj
    (defn annotated-vars
      "{dev-id var} for every public var in `nss` whose metadata has
-      :atlas/dev-id. Two vars claiming one dev-id is an error."
+      :atlas.source/id. Two vars claiming one dev-id is an error."
      [nss]
      (reduce (fn [acc v]
-               (let [id (:atlas/dev-id (meta v))]
+               (let [id (:atlas.source/id (meta v))]
                  (when-let [other (get acc id)]
                    (throw (ex-info "dev-id claimed by more than one var" {:dev-id id :vars [other v]})))
                  (assoc acc id v)))
              {}
              (for [n nss
                    v (vals (ns-publics (the-ns n)))
-                   :when (:atlas/dev-id (meta v))]
+                   :when (:atlas.source/id (meta v))]
                v))))
 
 ;; =============================================================================
@@ -194,9 +194,9 @@
      (let [kondo-run! (requiring-resolve 'clj-kondo.core/run!)
            {:keys [analysis]} (kondo-run! {:lint (vec paths)
                                            :config {:output {:canonical-paths true}
-                                                    :analysis {:var-definitions {:meta [:atlas/dev-id]}}}})]
+                                                    :analysis {:var-definitions {:meta [:atlas.source/id]}}}})]
        (into {}
              (for [{:keys [meta] :as d} (:var-definitions analysis)
-                   :let [id (:atlas/dev-id meta)]
+                   :let [id (:atlas.source/id meta)]
                    :when id]
                [id (select-keys d [:ns :name :filename :row :end-row])])))))

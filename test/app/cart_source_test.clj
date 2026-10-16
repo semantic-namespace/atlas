@@ -48,7 +48,7 @@
 (deftest every-function-is-bound-to-its-var
   (doseq [[id v] (source/annotated-vars '[app.cart-impl])]
     (is (identical? v (:atlas/impl (rt/props-for id))) (str id))
-    (is (= id (:atlas/dev-id (meta v)))))
+    (is (= id (:atlas.source/id (meta v)))))
   (is (= 13 (count (source/annotated-vars '[app.cart-impl])))))
 
 (deftest exported-snapshot-drops-the-vars-keeps-the-sources
