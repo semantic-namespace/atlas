@@ -39,7 +39,9 @@ A **source** is anything that says something about entities:
 
 - an EDN file, written by a person or an LLM, holding a map of dev-id to entry;
 - a generator, as a fn or var of no args returning `{:source label :entities {...}}`, called on every load;
-- a source map given as data.
+- a source map given as data;
+- for the index and the editor (below): a `register!` call written as data, the
+  REPL's snapshot, and the registry store CI records.
 
 The registry is the **merge** of its sources. An entity may be described by
 several of them, each giving the keys it owns. Keys are qualified, so they
@@ -90,6 +92,56 @@ reads and checks everything before replacing anything, so a reload that
 throws leaves the registry as it was. It returns
 `{:added [...] :removed [...] :changed [...]}`. `forget-loads!` clears the
 remembered loads, beside `atlas.registry/reset-all!` in test fixtures.
+
+## Projects written with `register!`
+
+Nothing has to move to EDN to get the index and the editor support. A
+`register!` call is a source too when its dev-id, type and aspects are written
+as data. clj-kondo finds every call to `atlas.registry/register!`, and the
+index reads that one form. `::keywords` are resolved with the file's namespace
+and aliases.
+
+- **Props given as code** (an inline `:atlas/impl (fn …)`, a var reference) are
+  left out and named in `where` and the describe buffer. An inline `:atlas/impl`
+  counts as the implementation.
+- **Calls whose dev-id, type or aspects are computed** are not guessed. `check`
+  lists them as `:register-call-not-read`, and `summary` counts them.
+- **A 3-argument call** gets the dev-id `register!` would generate.
+- **Mixing styles:** a registry file and a `register!` call for the same entity
+  merge like any two sources.
+
+Coverage on real code:
+
+| | Calls read |
+|---|---|
+| the cart (`test/app/cart.clj`) | 20 of 20, identical to its EDN files |
+| the other example apps | 127 of 127 |
+| atlas `core/src` | 520 of 536 |
+| a 535-file production app | 336 of 344 |
+
+## What only the running code knows: REPL snapshot and store
+
+Some entities are made at runtime: by a generator, in a loop, or by a
+`register!` call with computed arguments. Two more sources fill them in. Both
+apply **only to dev-ids no file defines**, so an edit always wins over a stale
+copy, without a conflict.
+
+- **The REPL snapshot.** `(atlas.source/watch! ".atlas/runtime.edn")` keeps that
+  file holding what the running process registered: the last registration of
+  each dev-id, its data props, the namespace that made it and that namespace's
+  file. `atlas-source.el` starts it when CIDER connects (`cider-connected-hook`;
+  set `atlas-source-watch-repl` to nil to opt out). The hover marks these
+  "REPL only (ns)", and `M-.` opens the namespace's file.
+- **The store.** Point `bb source` at a checkout of the registry store CI
+  writes (`--store dir [--store-prefix p] [--store-ref ref]`, or
+  `:store {:dir :prefix :ref}` in `atlas-source.edn`; the ref defaults to
+  `origin/main`). The index reads the version recorded at that ref and is
+  re-read when the ref moves. The hover marks these "store only (commit)", and
+  `M-.` goes to the entity's `:atlas/source` file when it has one. No REPL is
+  needed.
+
+In order: registry files and `register!` calls, then the REPL snapshot, then
+the store.
 
 ## `bb source`: answers from the files, no JVM
 
@@ -189,8 +241,10 @@ generated entities. `:atlas/source` links the record back to the input.
   the built-in types; other ontologies would need a mapping.
 - **Nested data shows up as info notes.** `merge-carts` reads `:item/*` fields
   inside `:cart/items`, and its contract doesn't mention them.
-- **Generated entities need a fn source.** An entity a generator creates only
-  at runtime, and that no source returns, is invisible to `bb source`.
+- **Runtime entities are only as fresh as their copy.** An entity made at
+  runtime is seen through the REPL snapshot (current while a REPL runs) or the
+  store (as of the recorded ref). Neither gives a line number, only a
+  namespace or an `:atlas/source` file.
 - **Namespace refresh replaces vars.** With clj-reload or tools.namespace
   refresh, a reloaded namespace gets new vars; call `load!` again, as a
   system restart does. `require :reload` and CIDER evaluation keep the vars.

@@ -31,6 +31,7 @@
   (str (at s) "    "
        (cond
          (:runtime-ns s) (str "REPL: registered by " (:runtime-ns s) ", snapshot " (:as-of s) "    ")
+         (:store-commit s) (str "store: recorded at " (subs (:store-commit s) 0 7) ", " (:as-of s) "    ")
          (:register! s) "register!    ")
        (str/join " " (map name (:keys s)))
        (when (seq (:dropped s)) (str "    (as code: " (str/join " " (map name (:dropped s))) ")"))))
@@ -69,7 +70,9 @@
                                                (str "used by " n-used)
                                                (when (seq problems) (str "⚠ " (count problems)))
                                                (when-let [r (first (filter :runtime-ns (:sources w)))]
-                                                 (str "REPL only (" (:runtime-ns r) ")"))]))
+                                                 (str "REPL only (" (:runtime-ns r) ")"))
+                                               (when-let [r (first (filter :store-commit (:sources w)))]
+                                                 (str "store only (" (subs (:store-commit r) 0 7) ")"))]))
         others (sort-by key (remove (fn [[k _]] (#{"context" "response" "deps" "fields"} (name k))) entry))]
     {:kind "entity"
      :eldoc (str (pr-str id) "  " (short-type (:type w)) "  " (few (sort (:aspects w)) 6) "\n" line2)
@@ -109,7 +112,7 @@
                              (when-let [l (or (:impl p) (:definition p) (when (:file p) p))] (str "    " (at l)))))))))
      :definitions (vec (concat (for [s (:sources w) :when (:file s)]
                                  {:file (abs-path idx (:file s)) :line (:line s)
-                                  :summary (str (cond (:runtime-ns s) "registered at runtime by " (:register! s) "register!: " :else "defined: ")
+                                  :summary (str (cond (:runtime-ns s) "registered at runtime by " (:store-commit s) "recorded in the store from " (:register! s) "register!: " :else "defined: ")
                                                 (if (:runtime-ns s) (:runtime-ns s) (str/join " " (map name (:keys s)))))})
                                (when-let [impl (when (:var (:impl w)) (:impl w))]
                                  [{:file (abs-path idx (:file impl)) :line (:line impl) :summary (str "impl: " (:var impl))}])))

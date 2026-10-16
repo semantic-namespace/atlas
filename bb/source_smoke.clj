@@ -3,6 +3,8 @@
    into a throwaway project, edits it the way an LLM would, and checks that
    atlas.source.index sees each edit, re-analysing only the files that changed."
   (:require [atlas.source.hover :as hover]
+            [atlas.store.canonical :as canon]
+            [babashka.process :as p]
             [atlas.source.index :as index]
             [babashka.fs :as fs]
             [clojure.string :as str]))
@@ -101,6 +103,42 @@
                   (select-keys conflict [:dev-id :key :values])))
         (check "a dev-id on two vars is an error"
                (some #(= :dev-id-on-several-vars (:problem %)) problems)))
+      ;; the store CI keeps: last in line, for what neither files nor the REPL say
+      (let [store (fs/path dir "store")
+            git (fn [& args] (apply p/shell {:dir (str store) :out :string :err :string} "git" "-c" "user.name=smoke" "-c" "user.email=smoke@example.com" args))
+            record! (fn [reg msg]
+                      (doseq [[path content] (canon/registry->files reg)]
+                        (let [f (fs/path store "demo" path)] (fs/create-dirs (fs/parent f)) (spit (str f) content)))
+                      (git "add" "-A") (git "commit" "-q" "-m" msg)
+                      (str/trim (:out (git "rev-parse" "HEAD"))))
+            entity (fn [id type aspects props] [(conj aspects type) (assoc props :atlas/dev-id id :atlas/type type)])
+            sopts (assoc (dissoc opts :cache) :store {:dir (str store) :prefix "demo" :ref "main"})]
+        (fs/create-dirs store)
+        (git "init" "-q")
+        (git "symbolic-ref" "HEAD" "refs/heads/main")
+        (let [c1 (record! (into {} [(entity :fn/only-in-store :atlas/execution-function #{:tier/service :domain/generated}
+                                            {:execution-function/context [:x/y] :atlas/source ["registry/functions.edn"]})
+                                    (entity :fn/get-cart :atlas/execution-function #{:tier/service}
+                                            {:execution-function/context [:stale/value]})])
+                          "registry: abc1234")
+              idx (index/build sopts)
+              w (index/where idx :fn/only-in-store)]
+          (check "the store fills an entity no file or REPL defines, at the recorded commit"
+                 (= c1 (get-in w [:definition :store-commit])))
+          (check "a stored :atlas/source points M-. at the file"
+                 (= "registry/functions.edn" (get-in w [:definition :file])))
+          (check "an entity a file defines comes from the file, not the store"
+                 (and (= "registry/functions.edn" (get-in (index/where idx :fn/get-cart) [:definition :file]))
+                      (not= [:stale/value] (get-in (index/where idx :fn/get-cart) [:entry :execution-function/context]))))
+          (check "the hover says it's from the store"
+                 (re-find #"store only" (:eldoc (hover/lookup idx :fn/only-in-store))))
+          (let [c2 (record! (into {} [(entity :fn/only-in-store :atlas/execution-function #{:tier/service :domain/generated}
+                                              {:execution-function/context [:x/z]})])
+                            "registry: def5678")
+                idx2 (index/build (assoc sopts :previous idx))]
+            (check "a new store commit is read on the next build"
+                   (and (= c2 (get-in (index/where idx2 :fn/only-in-store) [:definition :store-commit]))
+                        (= [:x/z] (get-in (index/where idx2 :fn/only-in-store) [:entry :execution-function/context])))))))
       (finally (fs/delete-tree dir)))
     (if (pos? @failures)
       (do (println @failures "failed") (System/exit 1))

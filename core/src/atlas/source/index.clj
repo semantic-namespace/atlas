@@ -18,6 +18,7 @@
             [atlas.source :as source]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.java.shell :as shell]
             [clojure.string :as str])
   (:import (java.io File StringReader)
            (clojure.lang LineNumberingPushbackReader)))
@@ -206,6 +207,38 @@
                      :registrations (registrations f (get regs f) (get own-ns f "user") (get aliases f {}))}])))))
 
 ;; =============================================================================
+;; Store (the record CI keeps of the evaluated registry)
+;; =============================================================================
+
+(defn- git [dir & args]
+  (let [{:keys [exit out]} (apply shell/sh "git" "-C" dir args)]
+    (when (zero? exit) out)))
+
+(defn- store-commit
+  "The commit `ref` names in the store checkout `dir`, or nil."
+  [{:keys [dir ref] :or {ref "origin/main"}}]
+  (some-> (git dir "rev-parse" "--verify" "--quiet" (str ref "^{commit}")) str/trim not-empty))
+
+(defn- read-store
+  "{:commit :date :entities {dev-id entry}} for the registry the store
+   recorded at `commit`: the entities/*.edn files under `prefix`, each a run
+   of [compound-id props] forms."
+  [{:keys [dir prefix] :or {prefix ""}} commit]
+  (let [prefix (if (or (str/blank? prefix) (str/ends-with? prefix "/")) prefix (str prefix "/"))
+        paths (filter #(re-find #"(?:^|/)entities/[^/]+\.edn$" %)
+                      (str/split-lines (or (apply git dir "ls-tree" "-r" "--name-only" commit (when (seq prefix) ["--" prefix])) "")))
+        forms (for [p paths
+                    :let [r (java.io.PushbackReader. (StringReader. (or (git dir "show" (str commit ":" p)) "")))]
+                    form (take-while some? (repeatedly #(edn/read {:eof nil :default (fn [_ v] v)} r)))]
+                form)]
+    {:commit commit
+     :date (some-> (git dir "show" "-s" "--format=%cI" commit) str/trim)
+     :entities (into {} (for [[cid props] forms
+                              :let [cid (set cid) id (:atlas/dev-id props) type (:atlas/type props)]
+                              :when id]
+                          [id (assoc (dissoc props :atlas/dev-id) :atlas/type type :atlas/aspects (disj cid type))]))}))
+
+;; =============================================================================
 ;; Building
 ;; =============================================================================
 
@@ -241,8 +274,10 @@
    cache rewritten. With `:previous`, an index this fn returned, that index
    is the cache instead: a long-lived process refreshes in memory, and the
    registry files are re-read only when one of them changed."
-  [{:keys [root registry src cache previous runtime] :or {root "." runtime ".atlas/runtime.edn"}}]
-  (let [config {:root (canonical root) :registry (vec registry) :src (vec src) :runtime runtime}
+  [{:keys [root registry src cache previous runtime store] :or {root "." runtime ".atlas/runtime.edn"}}]
+  (let [store (when (:dir store) (update store :dir #(canonical (under root %))))
+        config {:root (canonical root) :registry (vec registry) :src (vec src) :runtime runtime :store store}
+        store-sha (when store (store-commit store))
         runtime-file (let [f (under root runtime)] (when (.isFile f) (canonical f)))
         edn-files (cond-> (vec (files-under root registry [".edn"])) runtime-file (conj runtime-file))
         src-files (files-under root src [".clj" ".cljc"])
@@ -251,9 +286,14 @@
                  cache (read-cache cache config))
         stamps (into {} (map (juxt identity mtime)) src-files)
         edn-stamps (into {} (map (juxt identity mtime)) edn-files)]
-    (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous)))
+    (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous))
+             (= store-sha (get-in previous [:store :commit])))
       (assoc previous :analysed 0)
-      (build* config root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file))))
+      (build* config root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
+              (when store-sha
+                (if (= store-sha (get-in cached [:store :commit]))
+                  (:store cached)
+                  (read-store store store-sha)))))))
 
 (defn- read-runtime
   "The REPL snapshot `atlas.source/watch!` writes: {:written :entities
@@ -262,7 +302,7 @@
   (when path
     (try (edn/read-string (slurp path)) (catch Exception _ nil))))
 
-(defn- build* [config root cache cached stamps edn-stamps edn-files src-files runtime-file]
+(defn- build* [config root cache cached stamps edn-stamps edn-files src-files runtime-file stored]
   (let [fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
@@ -303,7 +343,15 @@
                                :let [n (get-in snapshot [:registered-by id])
                                      d {:file (ns-file n) :line 1 :kind :runtime :ns n :as-of (:written snapshot)
                                         :keys (vec (sort (keys entry)))}]]
-                           [id (assoc d :entry entry :definitions [d])]))]
+                           [id (assoc d :entry entry :definitions [d])]))
+        ;; the store fills what neither the files nor the REPL say
+        recorded (into {} (for [[id entry] (:entities stored)
+                                :when (not (or (contains? static id) (contains? runtime id)))
+                                :let [f (some #(let [x (under root %)] (when (.isFile x) (canonical x))) (:atlas/source entry))
+                                      d (cond-> {:kind :store :store-commit (:commit stored) :as-of (:date stored)
+                                                 :keys (vec (sort (keys entry)))}
+                                          f (assoc :file f :line 1))]]
+                            [id (assoc d :entry entry :definitions [d])]))]
     (when (and cache (or (seq stale) (not= (:stamps cached) stamps)))
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
@@ -311,7 +359,8 @@
      :stamps stamps
      :edn-stamps edn-stamps
      :edn edn
-     :entities (merge runtime static)
+     :entities (merge recorded runtime static)
+     :store (when stored (assoc stored :filled (count recorded)))
      :code code
      :analysed (count stale)
      :runtime (when snapshot {:file runtime-file :written (:written snapshot) :filled (count runtime)})
@@ -337,6 +386,8 @@
   (cond
     (= kind :runtime) (cond-> {:runtime-ns ns :as-of as-of}
                         file (assoc :file (relative (:root idx) file) :line line))
+    (= kind :store) (cond-> {:store-commit (:store-commit m) :as-of as-of}
+                      file (assoc :file (relative (:root idx) file) :line line))
     file (cond-> {:file (relative (:root idx) file) :line line}
            (= kind :register) (assoc :register! true))
     (contains? m :file) nil
@@ -500,6 +551,7 @@
      :entities-by-source (into (sorted-map) kinds)
      :register-calls {:read (count (filter :dev-id regs)) :not-read (count (filter :skipped regs))}
      :runtime-snapshot (:runtime idx)
+     :store (some-> (:store idx) (select-keys [:commit :date :filled]))
      :source-files (count (:code idx))
      :analysed-now (:analysed idx)
      :coverage (dissoc (coverage-note idx) :note)}))

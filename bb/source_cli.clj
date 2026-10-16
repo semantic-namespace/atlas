@@ -1,11 +1,15 @@
 (ns source-cli
-  "bb source <command> [args] [--root dir] [--registry dir]... [--src dir]... [--json] [--no-cache]
+  "bb source <command> [args] [--root dir] [--registry dir]... [--src dir]...
+             [--store dir [--store-prefix p] [--store-ref ref]] [--json] [--no-cache]
 
-   Answers from the project's files: the EDN registry and the source, read by
-   clj-kondo. Nothing is loaded or run. Directories come from the flags, or
-   from <root>/atlas-source.edn ({:registry [...] :src [...]}). The code
-   analysis is cached in <root>/.atlas/source-index.transit and refreshed for the
-   files that changed since the last call."
+   Answers from the project's files, nothing loaded or run: the EDN registry
+   files and the register! calls written as data (clj-kondo reads the code);
+   then, for what no file says, the REPL's snapshot (.atlas/runtime.edn, kept
+   by atlas.source/watch!) and the registry store CI records (a git checkout,
+   at --store-ref, default origin/main). Settings come from the flags, or from
+   <root>/atlas-source.edn ({:registry [...] :src [...] :store {:dir :prefix
+   :ref}}). The code analysis is cached in <root>/.atlas/source-index.transit
+   and refreshed for the files that changed since the last call."
   (:require [atlas.source.hover :as hover]
             [atlas.source.index :as index]
             [cheshire.core :as json]
@@ -34,17 +38,21 @@
       (= a "--root") (recur (rest more) (assoc opts :root (first more)))
       (= a "--registry") (recur (rest more) (update opts :registry conj (first more)))
       (= a "--src") (recur (rest more) (update opts :src conj (first more)))
+      (= a "--store") (recur (rest more) (assoc-in opts [:store :dir] (first more)))
+      (= a "--store-prefix") (recur (rest more) (assoc-in opts [:store :prefix] (first more)))
+      (= a "--store-ref") (recur (rest more) (assoc-in opts [:store :ref] (first more)))
       (= a "--json") (recur more (assoc opts :json true))
       (= a "--no-cache") (recur more (assoc opts :no-cache true))
       :else (recur more (update opts :positional conj a)))))
 
-(defn- config [{:keys [root registry src no-cache]}]
+(defn- config [{:keys [root registry src no-cache store]}]
   (let [root (or root ".")
         f (io/file root "atlas-source.edn")
         from-file (when (.exists f) (edn/read-string (slurp f)))]
     {:root root
      :registry (if (seq registry) registry (:registry from-file ["registry"]))
      :src (if (seq src) src (:src from-file ["src"]))
+     :store (or store (:store from-file))
      :cache (when-not no-cache (str (io/file root ".atlas" "source-index.transit")))}))
 
 (defn- kw [s] (keyword (str/replace s #"^:" "")))
