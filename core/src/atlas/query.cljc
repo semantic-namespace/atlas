@@ -41,7 +41,7 @@
   [registry dev-id]
   (when dev-id
     ;; Fast path: use index when querying the live registry
-    (if-let [compound-id (and (identical? registry (atlas.registry/current-registry))
+    (if-let [compound-id (and (identical? registry @atlas.registry/registry)
                               (get @atlas.registry/dev-id-index dev-id))]
       (when-let [props (get registry compound-id)]
         [compound-id props])
