@@ -548,3 +548,21 @@
   (testing "History intent is discoverable in tools-by-category"
     (let [cats (llm-ide/tools-by-category)]
       (is (contains? (set (map str (keys (:by-intent cats)))) ":intent/history")))))
+
+(deftest test-compare-entities-returns-data-only
+  (testing "props holding code under a key no ontology declares are left out"
+    (setup-test-registry!)
+    (registry/register! :fn/with-inline-impl :atlas/execution-function #{:tier/service :domain/users :operation/inline}
+                        {:execution-function/context [:user/id]
+                         :execution-function/response [:user/name]
+                         :execution-function/deps #{:component/db}
+                         :execution-function/impl (fn [ctx] ctx)
+                         :undeclared/handler (fn [] :x)})
+    (let [{:keys [success? data]} (llm-ide/handle-tool {:tool/name :atlas.llm-ide/compare-entities
+                                                        :tool/args {:entity/dev-id-set #{:fn/with-inline-impl :component/db}}})
+          props (:props (first (filter #(= :fn/with-inline-impl (:entity %)) (:entities data))))]
+      (is success?)
+      (is (= [:user/id] (:execution-function/context props)) "data props are kept")
+      (is (not-any? fn? (vals props)) "no function reaches the answer")
+      (is (not (contains? props :execution-function/impl)))
+      (is (not (contains? props :undeclared/handler))))))
