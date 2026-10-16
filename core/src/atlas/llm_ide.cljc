@@ -62,6 +62,7 @@
   (:require [atlas.core :as atlas]
             [atlas.registry :as registry]
             [atlas.registry.lookup :as lookup]
+            [atlas.registry.serialise :as serialise]
             [atlas.query :as q]
             [atlas.ontology :as ontology]
             [atlas.ide :as ide]
@@ -645,9 +646,13 @@
                       entities (mapv (fn [id]
                                       (when (some? (lookup/identity-for id))
                                         {:entity id
+                                         ;; the keys the ontology declares as code, and any
+                                         ;; other value that isn't data (an impl under a key
+                                         ;; no ontology declares): a tool answer goes to an
+                                         ;; LLM as data, never a function
                                          :props (let [cid (lookup/identity-for id)
                                                       not-ser (ontology/not-serialisable-keys-for-identity cid)]
-                                                  (reduce dissoc (lookup/props-for id) not-ser))
+                                                  (serialise/sanitize-props (reduce dissoc (lookup/props-for id) not-ser)))
                                          :identity (lookup/identity-for id)
                                          :type (first (extract-aspects id "atlas"))
                                          :domains (vec (extract-aspects id "domain"))
