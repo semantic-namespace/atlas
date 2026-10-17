@@ -19,6 +19,7 @@ jobs:
       - run: bb bb-compat
       - run: bb store-cli-smoke
       - run: bb source-smoke
+      - run: bb invariants-smoke
 
   upgrade-check:
     runs-on: ubuntu-latest

@@ -14,6 +14,9 @@
          upgrade-check-smoke {:doc "Runs upgrade-check on the cart example: same atlas identical, a patched atlas caught, a --probes file used. Needs the clojure CLI."
                               :requires ([upgrade-check-smoke])
                               :task (upgrade-check-smoke/-main)}
+         invariants-smoke {:doc "Runs atlas's function and DSL invariants in bb, with no Datascript, on the cart and pet-shop examples"
+                           :requires ([invariants-smoke])
+                           :task (invariants-smoke/-main)}
          bb-compat {:doc "Every namespace under core, store and review loads in bb, except those in bb/jvm-only.edn"
                     :requires ([bb-compat])
                     :task (bb-compat/-main)}
