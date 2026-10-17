@@ -13,6 +13,8 @@
 
 (def ^:private operators (atom {}))
 
+(declare eval-predicate)
+
 (defn register-operator!
   "Register a DSL operator."
   [id operator-def]
@@ -114,9 +116,7 @@
                      (fn [children]
                        {:type :combinator
                         :check-fn (fn [entity-id compiled-children]
-                                    (every? (fn [child]
-                                              ((:check-fn child) entity-id))
-                                            compiled-children))})})
+                                    (every? #(eval-predicate % entity-id) compiled-children))})})
 
 (register-operator! #{:dsl.op/logic-or}
                     {:operator/arity :variadic
@@ -126,9 +126,7 @@
                      (fn [children]
                        {:type :combinator
                         :check-fn (fn [entity-id compiled-children]
-                                    (some (fn [child]
-                                            ((:check-fn child) entity-id))
-                                          compiled-children))})})
+                                    (boolean (some #(eval-predicate % entity-id) compiled-children)))})})
 
 (register-operator! #{:dsl.op/logic-not}
                     {:operator/arity 1
@@ -137,8 +135,8 @@
                      :operator/compile-fn
                      (fn [child]
                        {:type :combinator
-                        :check-fn (fn [entity-id compiled-child]
-                                    (not ((:check-fn compiled-child) entity-id)))})})
+                        :check-fn (fn [entity-id [compiled-child]]
+                                    (not (eval-predicate compiled-child entity-id)))})})
 
 (register-operator! #{:dsl.op/logic-implies}
                     {:operator/arity 2
@@ -148,8 +146,8 @@
                      (fn [[antecedent consequent]]
                        {:type :combinator
                         :check-fn (fn [entity-id [compiled-a compiled-b]]
-                                    (or (not ((:check-fn compiled-a) entity-id))
-                                        ((:check-fn compiled-b) entity-id)))})})
+                                    (or (not (eval-predicate compiled-a entity-id))
+                                        (eval-predicate compiled-b entity-id)))})})
 
 ;; =============================================================================
 ;; GRAPH OPERATORS
@@ -245,9 +243,14 @@
     :combinator ((:check-fn compiled) entity-id (:compiled-children compiled))))
 
 (defn check-invariant
-  "Check a single invariant against all entities."
+  "Check a single invariant against all entities, leaving out ontology
+   meta-entities (marked :atlas/ontology) as the Datalog backend does: an
+   ontology's dev-id is often its entity type, so a rule about
+   :atlas/execution-function would otherwise also judge the ontology itself."
   [{:keys [invariant/id invariant/level invariant/doc compiled/when compiled/assert] :as compiled-invariant}]
-  (let [all-entities (map :atlas/dev-id (vals (cid/current-registry)))
+  (let [all-entities (->> (cid/current-registry)
+                          (remove (fn [[compound-id _]] (contains? compound-id :atlas/ontology)))
+                          (map (comp :atlas/dev-id val)))
         message doc
         violations (for [entity-id all-entities
                          :when (eval-predicate when entity-id)
