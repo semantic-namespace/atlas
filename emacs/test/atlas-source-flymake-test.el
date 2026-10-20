@@ -10,6 +10,8 @@
   (expand-file-name "../.." (file-name-directory (or load-file-name buffer-file-name))))
 (load (expand-file-name "emacs/atlas-source.el" atlas-source-flymake-test--checkout) nil t)
 (setq atlas-source-bb-config (expand-file-name "bb.edn" atlas-source-flymake-test--checkout))
+;; this checkout's code, even when an atlas-source command is installed
+(setq atlas-source-command (list "bb" "--config" atlas-source-bb-config "source"))
 
 (defun atlas-source-flymake-test--fixture (file)
   (expand-file-name (concat "test/fixtures/source-packs/" file) atlas-source-flymake-test--checkout))
