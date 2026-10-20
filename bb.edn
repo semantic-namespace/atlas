@@ -11,6 +11,9 @@
          source-packs-smoke {:doc "Runs atlas.source.index with its packs (clojure.spec, malli, Pathom, a project's own) over the shop fixture, with and without the Pathom runtime snapshot"
                              :requires ([source-packs-smoke])
                              :task (source-packs-smoke/-main)}
+         emacs-smoke {:doc "Runs atlas-source.el's batch tests against a real bb source serve: Flymake on the shop fixture, and eldoc/xref/describe on the cart example when clojure-mode is found. Needs Emacs 27+ ($EMACS)."
+                      :requires ([emacs-smoke])
+                      :task (emacs-smoke/-main)}
          pathom-snapshot-check {:doc "Rebuilds the shop fixture's Pathom snapshot from real Pathom 3 and 2 and checks it matches the committed one. Needs the clojure CLI."
                                 :requires ([pathom-snapshot-check])
                                 :task (pathom-snapshot-check/-main)}

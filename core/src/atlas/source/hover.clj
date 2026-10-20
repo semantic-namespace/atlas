@@ -181,6 +181,112 @@
    :references (vec (for [[id e] carriers] {:file (:file e) :line (:line e) :summary (pr-str id)}))})
 
 ;; =============================================================================
+;; Diagnostics: check's problems, for one file
+;; =============================================================================
+
+(defn- locations
+  "Every {:file :line :end-line} a problem points at."
+  [p]
+  (concat
+   (when (and (:file p) (:line p)) [(select-keys p [:file :line])])
+   (for [k [:definition :impl] :let [l (get p k)] :when (:file l)] l)
+   (filter :file (:vars p))
+   (filter :file (:definitions p))
+   (for [v (:values p) s (:sources v) :when (:file s)] s)))
+
+(defn- token-at
+  "[line col end-col] for the first occurrence of `k` (a keyword, or a
+   symbol) written in `lines` from line `from` (1-based) to `to`, or nil.
+   ::name forms are not matched; :ns/name and :name are."
+  [lines k from to]
+  (let [text (pr-str k)
+        pat (re-pattern (str "(?<![\\w:/.*+!?<>=-])" (java.util.regex.Pattern/quote text) "(?![\\w/.*+!?<>=-])"))]
+    (some (fn [n]
+            (when-let [l (nth lines (dec n) nil)]
+              (let [m (re-matcher pat l)]
+                (when (.find m) [n (inc (.start m)) (inc (.end m))]))))
+          (range from (inc (min to (count lines)))))))
+
+(def ^:private window
+  "How many lines after a problem's line a key it names is looked for, at
+   most: the search also stops where the file's next definition starts."
+  40)
+
+(defn- starts
+  "The lines where something is defined in the file at canonical `path`:
+   entries, forms a pack read, vars."
+  [idx path]
+  (into (sorted-set)
+        (concat (for [[_ e] (:entities idx) d (:definitions e) :when (and (= path (:file d)) (:line d))] (:line d))
+                (for [v (get-in idx [:code path :vars])] (:row v)))))
+
+(defn- message
+  "What the problem says, in a line, about `k` when it is about one key."
+  [p k]
+  (let [id (some-> (:dev-id p) pr-str)
+        ks (or (some-> k pr-str) (str/join " " (map pr-str (:keys p))))]
+    (str "atlas: "
+         (case (:problem p)
+           :keys-outside-contract (str ks " is used here but is not in " id "'s contract")
+           :undeclared-call (str id " calls " (pr-str (:calls p)) ", which its entry doesn't name")
+           :conflicting-values (str id " " (pr-str (:key p)) ": the sources give different values: "
+                                    (str/join ", " (for [v (:values p) src (:sources v)] (str (:file src) ":" (:line src)))))
+           :ref-to-undefined (str "no config defines " ks)
+           :init-key-without-config (str "init-key for " id ", which no config defines")
+           :data-key-without-schema (str "no schema shapes " ks)
+           :schema-key-without-shape (str ks " has no spec of its own")
+           :unqualified-schema-keys (str "unqualified key " ks ": dataflow can't follow it")
+           :input-without-producer (str "nothing produces " ks)
+           :operation-option-not-read (str id ": " (str/join ", " (map name (:options p))) " written as code, not read")
+           :pack-form-not-read (str (some-> (:pack p) name) " form not read: " (:reason p))
+           :register-call-not-read (str "register! call not read: " (:reason p))
+           :id-in-several-packs (str id " is declared by several packs: " (str/join ", " (map name (:packs p))))
+           :runtime-disagrees (str id " differs from the running process"
+                                   (when (:changed-since-snapshot p) " (the file changed since the snapshot)"))
+           :not-in-runtime (str id " is not registered in the running process")
+           (str (name (:problem p)) (when id (str " " id)) (when (seq (:keys p)) (str " " ks))
+                (when (:reason p) (str ": " (:reason p))) (when (:message p) (str ": " (:message p))))))))
+
+(defn diagnostics
+  "check's problems located in `file` (absolute, or relative to the root),
+   for an editor: [{:line :col :end-col :severity :problem :message}], the
+   columns 1-based and only when a token was found. A problem about keys
+   is underlined at each key, after its line; otherwise at its dev-id on
+   its line; otherwise the whole line."
+  [idx file]
+  (let [f (io/file file)
+        path (str (.getCanonicalFile (if (.isAbsolute f) f (io/file (:root idx) file))))
+        rel (#'index/relative (:root idx) path)
+        lines (when (.isFile (io/file path)) (str/split-lines (slurp path)))
+        starts (starts idx path)]
+    (vec
+     (distinct
+      (for [p (index/check idx)
+            l (locations p)
+            :when (= rel (:file l))
+            :let [line (:line l)
+                  next-start (first (subseq starts > line))
+                  end (or (:end-line l) (min (+ line window) (if next-start (dec next-start) Long/MAX_VALUE)))
+                  severity (get {:error "error" :warning "warning"} (:severity p) "note")
+                  ;; the key as written, or its name where it is destructured
+                  ;; ({:user/keys [loyalty-tier]}), within the form
+                  at-keys (keep (fn [k] (when-let [t (or (token-at lines k line end)
+                                                         (when (qualified-keyword? k) (token-at lines (symbol (name k)) line end)))]
+                                          [k t]))
+                                (:keys p))
+                  ;; the dev-id as written, or its name as the defining
+                  ;; form's symbol ((pco/defresolver seed ...))
+                  at-id (when-let [id (:dev-id p)]
+                          (or (token-at lines id line line)
+                              (when (qualified-keyword? id) (token-at lines (symbol (name id)) line line))))]
+            d (cond
+                (seq at-keys) (for [[k [n c e]] at-keys] {:line n :col c :end-col e :key k})
+                at-id (let [[n c e] at-id] [{:line n :col c :end-col e}])
+                :else [{:line line}])]
+        (cond-> (assoc (dissoc d :key) :severity severity :problem (name (:problem p)) :message (message p (:key d)))
+          (nil? (:col d)) (dissoc :col :end-col)))))))
+
+;; =============================================================================
 
 (defn lookup
   "What to show for keyword `k`. {:kind \"none\"} when atlas doesn't know it."
