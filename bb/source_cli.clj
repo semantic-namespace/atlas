@@ -8,7 +8,7 @@
    by atlas.source/watch!) and the registry store CI records (a git checkout,
    at --store-ref, default origin/main). Settings come from the flags, or from
    <root>/atlas-source.edn ({:registry [...] :src [...] :store {:dir :prefix
-   :ref}}). The code analysis is cached in <root>/.atlas/source-index.transit
+   :ref} :packs {:spec {} :malli {:registries [ns/var ...]}}}). The code analysis is cached in <root>/.atlas/source-index.transit
    and refreshed for the files that changed since the last call."
   (:require [atlas.source.hover :as hover]
             [atlas.source.index :as index]
@@ -53,6 +53,8 @@
      :registry (if (seq registry) registry (:registry from-file ["registry"]))
      :src (if (seq src) src (:src from-file ["src"]))
      :store (or store (:store from-file))
+     :packs (:packs from-file {})
+     :dataflow (:dataflow from-file)
      :cache (when-not no-cache (str (io/file root ".atlas" "source-index.transit")))}))
 
 (defn- kw [s] (keyword (str/replace s #"^:" "")))

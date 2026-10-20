@@ -57,7 +57,10 @@ Higher-level vocabularies beyond the built-in entity types:
 The registry as the merge of EDN files and generators, with plain `defn`s
 linked by `^{:atlas.source/id …}`; `bb source` answers from the files with no
 JVM; `emacs/atlas-source.el` gives hover, `M-.` and `M-?` from it. The file
-format, the merge rules and the CLI may change. See [docs/source.md](docs/source.md).
+format, the merge rules and the CLI may change. See [docs/source.md](docs/source.md). The packs
+(`atlas.source.pack.schema`: data keys from clojure.spec and malli;
+`atlas.source.pack.pathom`: resolvers and mutations) and `:dataflow` are part
+of it.
 
 ### Upgrade check — `bb upgrade-check`
 Builds a project's registry with two atlas versions and diffs the registries
