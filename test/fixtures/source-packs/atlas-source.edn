@@ -1,0 +1,8 @@
+;; A small shop whose data keys are shaped by clojure.spec and malli. The
+;; schema pack reads the s/def calls and the malli registry named here; the
+;; Pathom pack reads the resolvers and mutations.
+{:registry ["registry"]
+ :src ["src"]
+ :packs {:spec {}
+         :malli {:registries [shop.schema/registry]}
+         :pathom {:resolver-macros [shop.connect/defresolver]}}}

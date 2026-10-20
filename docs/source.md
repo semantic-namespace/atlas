@@ -119,6 +119,126 @@ Coverage on real code:
 | atlas `core/src` | 520 of 536 |
 | a 535-file production app | 336 of 344 |
 
+## Data keys from clojure.spec and malli: the schema pack
+
+A project that already shapes its data keys with clojure.spec or malli can
+have the index read those shapes. Name the pack in `atlas-source.edn`:
+
+```clojure
+{:registry ["registry"] :src ["src"]
+ :packs {:spec {}                                    ; every s/def call
+         :malli {:registries [shop.schema/registry]}}} ; vars holding a malli registry map
+```
+
+Each `s/def` and each qualified registry entry becomes an entity keyed by its data key (an unqualified one, like `:map`, overrides a malli schema and is skipped),
+in the pack's own vocabulary: `:spec/form`, and for `s/keys` the
+`:spec/req`, `:spec/opt`, `:spec/req-un` and `:spec/opt-un` keys; `:malli/form`,
+and for a `:map` its qualified `:malli/keys` and its `:malli/unqualified-keys`.
+Forms are kept as text. Nothing is loaded; `.cljc` reader conditionals are
+read as `:clj`.
+
+A data key is one entity whatever describes it, so a registry file can add
+facts the schema has no place for:
+
+```clojure
+;; registry/privacy.edn
+{:user/email {:data/privacy :pii}}
+```
+
+`bb source data :user/email` then gives its shape and where it is written,
+`:data/privacy :pii`, the `s/keys` it belongs to, and who produces and
+consumes it. The hover shows the same. A data key needs no `:atlas/type`, and
+data keys are not listed as dependencies.
+
+`check` adds, all as info:
+
+- `:schema-key-without-shape`: an `s/keys` names a key with no spec of its own.
+  spec allows it, and it is also how a typo looks;
+- `:unqualified-schema-keys`: a malli `:map` with unqualified keys, which no
+  dataflow query can follow;
+- `:data-key-without-schema`: keys in an entity's contract that no schema shapes;
+- `:schema-def-not-read`: an `s/def` or registry the pack couldn't read.
+
+Keys a schema shapes also count as data keys for `:keys-outside-contract`, so
+code that reads a spec'd key its contract doesn't name is reported even when
+no other contract names that key.
+
+Not read yet: specs or schemas declared through a project's own wrapper fn or
+macro, malli schemas held in vars rather than a registry, and function schemas
+(`s/fdef`, `m/=>`). Every entry of a malli registry gets the line of its
+`def`. On a 535-file app the pack read 1,770 `s/def` calls, none unreadable;
+`test/fixtures/source-packs` is a small project using both libraries, checked
+by `bb source-packs-smoke`, which also covers the Pathom pack below.
+
+## Resolvers and mutations: the Pathom pack
+
+Pathom resolvers already say what they consume and produce. With
+`:packs {:pathom {}}`, each `defresolver` and `defmutation` (Pathom 3,
+`com.wsscode.pathom3.connect.operation`, and Pathom 2,
+`com.wsscode.pathom.connect`) becomes an entity keyed by its op-name, `ns/name`
+as a keyword:
+
+```clojure
+:shop.resolvers/order-total
+#:pathom{:op :resolver
+         :input [:order/lines]
+         :output [:order/total]
+         :inferred #{:input :output}}
+```
+
+- `:pathom/input`, `:pathom/params` (a mutation's) and `:pathom/output` come
+  from `::pco/input`, `::pco/params` and `::pco/output`. Output joins
+  contribute their key and the keys inside them.
+- When they aren't written, they are inferred as Pathom 3 does: the input from
+  the destructuring of the input argument, the output from a map literal
+  returned last. `:pathom/inferred` says which.
+- An option may name a `def` in the same file whose value is data
+  (`{::pco/output concept-properties}`); it is read through it.
+- An option written as code (`(->> registry keys vec)`) is not guessed:
+  `:pathom/not-read` lists it, and `check` reports it.
+- A project's own wrapper macro that takes `defresolver`'s or `defmutation`'s
+  arguments is read when named: `:pathom {:resolver-macros [app.connect/defresolver]
+  :mutation-macros [...]}`.
+
+Resolvers are producers and consumers next to everything else.
+`bb source data :user/email` lists the resolvers that need it alongside the
+functions whose contracts produce it, its spec and its privacy class. `check`
+adds, as info:
+
+- `:input-without-producer`: a resolver needs a key that nothing produces, no
+  resolver and no other contract. The query can still pass it in (that is how
+  a graph's entry points look); when nothing does, the resolver is
+  unreachable. When some operation's output couldn't be read,
+  `:unread-outputs` names those operations: any of them may produce the key;
+- `:operation-option-not-read`: an input, params or output written as code;
+- `:operation-not-read`: a form the pack couldn't read.
+
+On two open-source Pathom 3 apps:
+
+| | Operations read | Notes |
+|---|---|---|
+| [hermes](https://github.com/wardle/hermes) (SNOMED CT server) | 38 of 38, plus 227 `s/def` | one unproduced input: `:info.snomed/id`, the graph's entry point; one `s/keys` naming optional keys with no spec |
+| [duck-repled](https://github.com/mauricioszabo/duck-repled) | 29 of 29 through its wrapper macro, plus 38 malli registry entries | the seed resolver's output is code, so unproduced inputs name it; two resolver outputs (`:var/spec`, `:repl/cljs`) are missing from the registry its wrapper validates against, so they are never validated |
+
+Not read yet: `pco/resolver` and `pco/mutation` calls (resolvers built as
+values), dynamic resolvers, and options naming a def in another namespace. kondo doesn't attribute the keywords inside a
+resolver's body to it, so `:keys-outside-contract` doesn't cover resolvers.
+
+## Which keys carry data: `:dataflow`
+
+The index knows an entry consumes or produces data keys in two ways: from props
+named `context` and `response` (atlas's types), and from `:dataflow` in
+`atlas-source.edn`, which lists keys in any vocabulary:
+
+```clojure
+{:dataflow {:consumes [:job/reads] :produces [:job/writes]}}
+```
+
+Each pack adds its own (the Pathom pack: `:pathom/input`, `:pathom/params`,
+`:pathom/output`). With this, a nightly job written as
+`{:job/nightly-digest {:job/reads [:user/email]}}` is a consumer of
+`:user/email` without any atlas type.
+
 ## What only the running code knows: REPL snapshot and store
 
 Some entities are made at runtime: by a generator, in a loop, or by a

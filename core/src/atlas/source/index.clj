@@ -16,6 +16,8 @@
    classpath)."
   (:require [atlas.registry :as registry]
             [atlas.source :as source]
+            [atlas.source.pack.pathom :as pathom]
+            [atlas.source.pack.schema :as schema]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
@@ -25,7 +27,7 @@
 
 (def ^:private bb? (some? (System/getProperty "babashka.version")))
 
-(def cache-version 3)
+(def cache-version 7)
 
 ;; =============================================================================
 ;; Files
@@ -121,14 +123,17 @@
   "The form that starts with the `(` just before the symbol at `row`/`col`
    (1-based), :unreadable when it can't be read as data, nil when the symbol
    isn't at the head of a call. Auto-resolved keywords are resolved with the
-   file's namespace and aliases first."
-  [lines row col own-ns aliases]
-  (let [line (nth lines (dec row) nil)]
-    (when (and line (>= col 2) (= \( (nth line (- col 2) nil)))
-      (try (binding [*read-eval* false]
-             (read-string (resolve-keywords (str/join "\n" (cons (subs line (- col 2)) (drop row lines)))
-                                            own-ns aliases)))
-           (catch Exception _ :unreadable)))))
+   file's namespace and aliases first. `read-opts` go to read-string: the
+   schema pack reads .cljc reader conditionals as :clj."
+  ([lines row col own-ns aliases] (call-at lines row col own-ns aliases nil))
+  ([lines row col own-ns aliases read-opts]
+   (let [line (nth lines (dec row) nil)]
+     (when (and line (>= col 2) (= \( (nth line (- col 2) nil)))
+       (try (binding [*read-eval* false]
+              (let [text (resolve-keywords (str/join "\n" (cons (subs line (- col 2)) (drop row lines)))
+                                           own-ns aliases)]
+                (if read-opts (read-string read-opts text) (read-string text))))
+            (catch Exception _ :unreadable))))))
 
 (defn- registration
   "What a register! call says, when its dev-id, type and aspects are written
@@ -164,6 +169,72 @@
            (registration (call-at @lines name-row name-col own-ns aliases) row)))))
 
 ;; =============================================================================
+;; Schema pack: s/def calls and malli registries
+;; =============================================================================
+
+(def ^:private spec-nses '#{clojure.spec.alpha cljs.spec.alpha})
+
+(defn- schema-defs
+  "What the schema pack reads in `file`: each s/def call (clj-kondo usages,
+   once per position: a .cljc file reports each call per language) and each
+   var `registries` names, as [{:row :pack :dev-id :entry} or {:row :pack
+   :skipped reason}]."
+  [file spec-usages registry-defs own-ns aliases]
+  (let [lines (delay (str/split-lines (slurp file)))
+        opts {:read-cond :allow :features #{:clj}}]
+    (vec (concat
+          (for [{:keys [row name-row name-col]} (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) spec-usages))))]
+            (assoc (schema/spec-def (call-at @lines name-row name-col own-ns aliases opts))
+                   :row row :pack :spec))
+          (for [{:keys [row col]} (sort-by :row (map first (vals (group-by :row registry-defs))))
+                d (schema/malli-registry (call-at @lines row (inc col) own-ns aliases opts))]
+            (assoc d :row row :pack :malli))))))
+
+;; =============================================================================
+;; Pathom pack: defresolver and defmutation forms
+;; =============================================================================
+
+(defn- wrapper-ops
+  "{macro-symbol op} for a project's own macros that take defresolver's or
+   defmutation's arguments: :pathom {:resolver-macros [...] :mutation-macros
+   [...]} in atlas-source.edn."
+  [packs]
+  (merge (zipmap (get-in packs [:pathom :resolver-macros]) (repeat :resolver))
+         (zipmap (get-in packs [:pathom :mutation-macros]) (repeat :mutation))))
+
+(defn- operations
+  "What the Pathom pack reads in `file`: each defresolver and defmutation
+   call (or call to a wrapper macro named in `packs`), once per position, as
+   [{:row :pack :dev-id :entry} or {:row :pack :skipped reason}]."
+  [file usages defs packs own-ns aliases]
+  (let [lines (delay (str/split-lines (slurp file)))
+        opts {:read-cond :allow :features #{:clj}}
+        ;; defs whose value is data, which an operation's options may name
+        consts (into {} (for [{:keys [row col name]} defs
+                              :let [form (call-at @lines row (inc col) own-ns aliases opts)
+                                    v (when (and (seq? form) (>= (count form) 3)) (last form))]
+                              :when (and (coll? v) (literal? v))]
+                          [name v]))]
+    (vec (for [{:keys [row name-row name-col to name]} (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) usages))))]
+           (assoc (pathom/operation (call-at @lines name-row name-col own-ns aliases opts)
+                                    {:own-ns own-ns :consts consts
+                                     :op (get (wrapper-ops packs) (symbol (str to) (str name)))})
+                  :row row :pack pathom/kind)))))
+
+(def ^:private pack-kinds
+  "The :kind of every source a library pack produces."
+  (conj schema/kinds pathom/kind))
+
+(defn- dataflow
+  "Which entry keys list consumed and produced data keys: atlas-source.edn's
+   :dataflow, plus what each enabled pack declares."
+  [{:keys [packs] :as config}]
+  (merge-with (comp vec distinct concat)
+              {:consumes [] :produces []}
+              (:dataflow config)
+              (when (contains? packs :pathom) pathom/dataflow)))
+
+;; =============================================================================
 ;; Code (clj-kondo)
 ;; =============================================================================
 
@@ -176,9 +247,11 @@
           (throw (ex-info "atlas.source.index needs clj-kondo on the classpath" {}))))))
 
 (defn- analyse-code
-  "{file {:vars [..] :calls [..] :keywords [..] :registrations [..]}} for
-   `files`, the parts of clj-kondo's analysis the index uses."
-  [files]
+  "{file {:vars [..] :calls [..] :keywords [..] :registrations [..]
+   :schemas [..]}} for `files`, the parts of clj-kondo's analysis the index
+   uses. `packs` is atlas-source.edn's :packs: the schema pack reads s/def
+   calls with :spec, and the registry vars :malli :registries names."
+  [files packs]
   (if (empty? files)
     {}
     (let [{:keys [analysis]} (@kondo {:lint (vec files)
@@ -199,12 +272,32 @@
                                #(into {} (for [{:keys [alias to]} %] [(str alias) (str to)])))
           regs (by-file :var-usages
                         (filter #(and (= 'atlas.registry (:to %)) (= 'register! (:name %)))))
+          specs (if (contains? packs :spec)
+                  (by-file :var-usages (filter #(and (spec-nses (:to %)) (= 'def (:name %)))))
+                  {})
+          ops (if (contains? packs :pathom)
+                (let [wrappers (wrapper-ops packs)]
+                  (by-file :var-usages (filter #(or (and (pathom/operation-nses (:to %)) (pathom/operation-macros (:name %)))
+                                                    (contains? wrappers (symbol (str (:to %)) (str (:name %))))))))
+                {})
+          plain-defs (if (contains? packs :pathom)
+                       (by-file :var-definitions (filter #(= 'clojure.core/def (:defined-by %))))
+                       {})
+          registries (set (get-in packs [:malli :registries]))
+          registry-defs (by-file :var-definitions
+                                 (filter #(contains? registries (symbol (str (:ns %)) (str (:name %))))))
           kws (by-file :keywords
                        (comp (filter #(and (:from-var %) (:ns %)))
                              (map #(select-keys % [:filename :from :from-var :ns :name :row]))))]
       (into {} (for [f files :let [f (canonical f)]]
                  [f {:vars (vec (get vars f)) :calls (vec (get calls f)) :keywords (vec (get kws f))
-                     :registrations (registrations f (get regs f) (get own-ns f "user") (get aliases f {}))}])))))
+                     :registrations (registrations f (get regs f) (get own-ns f "user") (get aliases f {}))
+                     :schemas (if (or (get specs f) (get registry-defs f))
+                                (schema-defs f (get specs f) (get registry-defs f) (get own-ns f "user") (get aliases f {}))
+                                [])
+                     :operations (if (get ops f)
+                                   (operations f (get ops f) (get plain-defs f) packs (get own-ns f "user") (get aliases f {}))
+                                   [])}])))))
 
 ;; =============================================================================
 ;; Store (the record CI keeps of the evaluated registry)
@@ -274,9 +367,10 @@
    cache rewritten. With `:previous`, an index this fn returned, that index
    is the cache instead: a long-lived process refreshes in memory, and the
    registry files are re-read only when one of them changed."
-  [{:keys [root registry src cache previous runtime store] :or {root "." runtime ".atlas/runtime.edn"}}]
+  [{:keys [root registry src cache previous runtime store packs dataflow] :or {root "." runtime ".atlas/runtime.edn"}}]
   (let [store (when (:dir store) (update store :dir #(canonical (under root %))))
-        config {:root (canonical root) :registry (vec registry) :src (vec src) :runtime runtime :store store}
+        config {:root (canonical root) :registry (vec registry) :src (vec src) :runtime runtime :store store
+                :packs (or packs {}) :dataflow dataflow}
         store-sha (when store (store-commit store))
         runtime-file (let [f (under root runtime)] (when (.isFile f) (canonical f)))
         edn-files (cond-> (vec (files-under root registry [".edn"])) runtime-file (conj runtime-file))
@@ -306,7 +400,7 @@
   (let [fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
-                    (analyse-code stale))
+                    (analyse-code stale (:packs config)))
         ;; registry files: re-read only the ones that changed
         edn (into {} (for [f edn-files]
                        [f (if (= (edn-stamps f) (get-in cached [:edn-stamps f]))
@@ -322,6 +416,11 @@
                  (for [[f {:keys [registrations]}] code
                        {:keys [row dev-id entry dropped]} registrations :when dev-id]
                    {:label (str f ":" row) :file f :kind :register :dropped dropped
+                    :lines {dev-id row} :entities {dev-id entry}})
+                 ;; schema pack: one source per s/def call or registry entry
+                 (for [[f {:keys [schemas operations]}] code
+                       {:keys [row pack dev-id entry]} (concat schemas operations) :when dev-id]
+                   {:label (str f ":" row ":" dev-id) :file f :kind pack
                     :lines {dev-id row} :entities {dev-id entry}}))
         by-label (into {} (map (juxt :label identity)) sources)
         merged (source/merge-sources (for [{:keys [label entities]} sources] {:source label :entities entities}))
@@ -332,7 +431,10 @@
                          (seq dropped) (assoc :dropped dropped))))
         static (into {} (for [[id entry] (:entities merged)
                               :let [defs (mapv #(definition id %) (source/sources-of (:provenance merged) id))
-                                    primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs)) (first defs))]]
+                                    primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs))
+                                                ;; a data key: where its schema is written
+                                                (first (filter #(schema/kinds (:kind %)) defs))
+                                                (first defs))]]
                           [id (assoc primary :entry entry :definitions defs)]))
         ;; the REPL snapshot fills gaps: only dev-ids no file defines
         snapshot (read-runtime runtime-file)
@@ -356,6 +458,7 @@
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
      :config config
+     :dataflow (dataflow config)
      :stamps stamps
      :edn-stamps edn-stamps
      :edn edn
@@ -389,27 +492,49 @@
     (= kind :store) (cond-> {:store-commit (:store-commit m) :as-of as-of}
                       file (assoc :file (relative (:root idx) file) :line line))
     file (cond-> {:file (relative (:root idx) file) :line line}
-           (= kind :register) (assoc :register! true))
+           (= kind :register) (assoc :register! true)
+           (pack-kinds kind) (assoc :pack kind))
     (contains? m :file) nil
     filename {:file (relative (:root idx) filename) :line row :end-line end-row :var (symbol (str ns) (str name))}))
 
+(defn- shaped?
+  "True when a schema pack gives the entity: it is a data key, whatever else
+   the sources say about it."
+  [e]
+  (boolean (some #(schema/kinds (:kind %)) (:definitions e))))
+
 (defn- references
-  "[[prop dev-id] ...] for every registry entity an entry names in its props."
+  "[[prop dev-id] ...] for every registry entity an entry names in its props.
+   Data keys are not references: `data-key` answers for them."
   [idx entry]
   (let [ids (:entities idx)]
     (distinct
      (for [[k v] entry
            :when (not (#{:atlas/type :atlas/aspects} k))
            x (tree-seq coll? seq v)
-           :when (and (qualified-keyword? x) (contains? ids x))]
+           :when (and (qualified-keyword? x) (contains? ids x) (not (shaped? (get ids x))))]
        [k x]))))
+
+(defn- schema-entities [idx]
+  (filter #(shaped? (val %)) (:entities idx)))
+
+(defn- inline-shaped
+  "Data keys a malli :map gives a schema inline ([:product/id :uuid]), with
+   no registry entry of their own."
+  [idx]
+  (into #{} (mapcat #(get-in (val %) [:entry :malli/keys])) (schema-entities idx)))
 
 (defn- prop-named [entry n]
   (mapcat val (filter #(and (coll? (val %)) (= n (name (key %)))) entry)))
 
-(defn- contract-keys [entry]
-  {:consumes (set (prop-named entry "context"))
-   :produces (set (prop-named entry "response"))})
+(defn- contract-keys
+  "The data keys an entry consumes and produces: props named context and
+   response (atlas's types), and the keys the index's :dataflow lists."
+  [idx entry]
+  (let [{:keys [consumes produces]} (:dataflow idx)
+        declared (fn [ks] (mapcat #(let [v (get entry %)] (when (coll? v) v)) ks))]
+    {:consumes (set (concat (prop-named entry "context") (declared consumes)))
+     :produces (set (concat (prop-named entry "response") (declared produces)))}))
 
 ;; =============================================================================
 ;; Questions
@@ -471,15 +596,27 @@
                         {:dev-id x :via prop :definition (loc idx (get-in idx [:entities x]))}))}))
 
 (defn data-key
-  "The entities producing (response) and consuming (context) data key `k`."
+  "The entities producing (response) and consuming (context) data key `k`.
+   When a schema pack shapes it: :shape, each pack's form and where it is
+   written; :props, what other sources say about it (:data/privacy, say);
+   :member-of, the schemas it is a key of."
   [idx k]
   (let [rows (for [[id e] (sort-by key (:entities idx))
-                   :let [{:keys [consumes produces]} (contract-keys (:entry e))]]
+                   :let [{:keys [consumes produces]} (contract-keys idx (:entry e))]]
                {:dev-id id :produces? (contains? produces k) :consumes? (contains? consumes k)
-                :definition (loc idx e)})]
-    {:data-key k
-     :producers (vec (for [r rows :when (:produces? r)] (select-keys r [:dev-id :definition])))
-     :consumers (vec (for [r rows :when (:consumes? r)] (select-keys r [:dev-id :definition])))}))
+                :definition (loc idx e)})
+        e (get-in idx [:entities k])
+        own (when (and e (shaped? e)) (:entry e))
+        member-of (vec (for [[id s] (sort-by key (schema-entities idx))
+                             :when (some #{k} (schema/member-keys (:entry s)))]
+                         {:dev-id id :definition (loc idx s)}))]
+    (cond-> {:data-key k
+             :producers (vec (for [r rows :when (:produces? r)] (select-keys r [:dev-id :definition])))
+             :consumers (vec (for [r rows :when (:consumes? r)] (select-keys r [:dev-id :definition])))}
+      own (assoc :shape (vec (for [d (:definitions e) :when (schema/kinds (:kind d))]
+                               (assoc (loc idx d) :form (get (schema/shapes own) (:kind d)))))
+                 :props (into (sorted-map) (remove #(#{"spec" "malli"} (namespace (key %)))) own))
+      (seq member-of) (assoc :member-of member-of))))
 
 ;; =============================================================================
 ;; Checks
@@ -500,10 +637,14 @@
 (defn- keys-outside-contract
   "Data keys a linked var mentions that are neither in its own context or
    response nor in the response of an entity it names. Only keys that appear
-   in some entity's contract count as data keys."
+   in some entity's contract, or that a schema pack shapes, count as data
+   keys."
   [idx]
-  (let [contracts (into {} (for [[id e] (:entities idx)] [id (contract-keys (:entry e))]))
-        data-keys (into #{} (mapcat (fn [{:keys [consumes produces]}] (concat consumes produces))) (vals contracts))]
+  (let [contracts (into {} (for [[id e] (:entities idx)] [id (contract-keys idx (:entry e))]))
+        data-keys (-> #{}
+                      (into (mapcat (fn [{:keys [consumes produces]}] (concat consumes produces))) (vals contracts))
+                      (into (map key) (schema-entities idx))
+                      (into (inline-shaped idx)))]
     (for [[id [v]] (sort-by key (linked-vars idx))
           :when (contains? (:entities idx) id)
           :let [own (contracts id)
@@ -520,6 +661,68 @@
       {:severity :info :problem :keys-outside-contract :dev-id id :keys outside
        :impl (loc idx v)})))
 
+(defn- schema-problems
+  "What the schema pack notices, all :info:
+   - :schema-key-without-shape: an s/keys names a key with no spec of its
+     own. spec allows it (presence only), and it is how a typo looks;
+   - :unqualified-schema-keys: a malli :map with unqualified keys, which no
+     dataflow query can follow;
+   - :data-key-without-schema: keys in an entity's contract no pack shapes,
+     reported only once some pack shapes something;
+   - :schema-def-not-read: an s/def or registry the pack couldn't read."
+  [idx]
+  (let [schemas (schema-entities idx)
+        shaped (into (set (map key schemas)) (inline-shaped idx))]
+    (concat
+     (for [[id e] (sort-by key schemas)
+           :let [{:spec/keys [req opt req-un opt-un]} (:entry e)
+                 missing (vec (sort (remove shaped (concat req opt req-un opt-un))))]
+           :when (seq missing)]
+       {:severity :info :problem :schema-key-without-shape :dev-id id :keys missing :definition (loc idx e)})
+     (for [[id e] (sort-by key schemas)
+           :let [ks (get-in e [:entry :malli/unqualified-keys])]
+           :when (seq ks)]
+       {:severity :info :problem :unqualified-schema-keys :dev-id id :keys ks :definition (loc idx e)})
+     (when (seq schemas)
+       (for [[id e] (sort-by key (:entities idx))
+             :when (not (shaped? e))
+             :let [{:keys [consumes produces]} (contract-keys idx (:entry e))
+                   missing (vec (sort (remove shaped (into consumes produces))))]
+             :when (seq missing)]
+         {:severity :info :problem :data-key-without-schema :dev-id id :keys missing :definition (loc idx e)}))
+     (for [[f {:keys [schemas]}] (sort-by key (:code idx))
+           {:keys [row skipped pack]} schemas :when skipped]
+       {:severity :info :problem :schema-def-not-read :pack pack :reason skipped
+        :file (relative (:root idx) f) :line row}))))
+
+(defn- pathom-problems
+  "What the Pathom pack notices, all :info:
+   - :input-without-producer: a resolver needs a key that nothing produces,
+     no resolver and no other entity's contract. The query can still give it
+     as input; when nothing does, the resolver is unreachable. When some
+     operation's output is written as code, :unread-outputs names them: any
+     of them may produce the key;
+   - :operation-option-not-read: an input, params or output written as code
+     ((->> registry keys vec)), so its keys are unknown;
+   - :operation-not-read: a defresolver or defmutation the pack couldn't read."
+  [idx]
+  (let [produced (into #{} (mapcat #(:produces (contract-keys idx (:entry (val %))))) (:entities idx))
+        unread (vec (sort (for [[id e] (:entities idx) :when (get-in e [:entry :pathom/not-read :output])] id)))]
+    (concat
+     (for [[id e] (sort-by key (:entities idx))
+           :let [missing (vec (sort (remove produced (get-in e [:entry :pathom/input]))))]
+           :when (seq missing)]
+       (cond-> {:severity :info :problem :input-without-producer :dev-id id :keys missing :definition (loc idx e)}
+         (seq unread) (assoc :unread-outputs unread)))
+     (for [[id e] (sort-by key (:entities idx))
+           :let [options (get-in e [:entry :pathom/not-read])]
+           :when (seq options)]
+       {:severity :info :problem :operation-option-not-read :dev-id id :options (vec (sort options)) :definition (loc idx e)})
+     (for [[f {:keys [operations]}] (sort-by key (:code idx))
+           {:keys [row skipped]} operations :when skipped]
+       {:severity :info :problem :operation-not-read :pack pathom/kind :reason skipped
+        :file (relative (:root idx) f) :line row}))))
+
 (defn check
   "Where code and registry files disagree, most severe first."
   [idx]
@@ -532,13 +735,18 @@
           (for [p (source/linkage-problems (into {} (for [[id e] (:entities idx)] [id (:entry e)])) by-id)
                 ;; a var is how an entity from a registry file gets its code; an
                 ;; entity from register! or the REPL has it inline or at runtime
-                :when (or (not= :entity-without-impl (:problem p))
-                          (every? #(= :edn (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))]
+                :when (and (or (not= :entity-without-impl (:problem p))
+                               (every? #(= :edn (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))
+                           ;; a data key a schema pack shapes needs no :atlas/type
+                           (not (and (= :entity-without-type (:problem p))
+                                     (some #(pack-kinds (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))))]
             (cond-> (assoc (dissoc p :var) :severity :error)
               (:var p) (assoc :impl (loc idx (:var p)))
               (get-in idx [:entities (:dev-id p)]) (assoc :definition (loc idx (get-in idx [:entities (:dev-id p)])))))
           (undeclared-calls idx)
           (keys-outside-contract idx)
+          (schema-problems idx)
+          (pathom-problems idx)
           (for [[f {:keys [registrations]}] (sort-by key (:code idx))
                 {:keys [row skipped]} registrations :when skipped]
             {:severity :info :problem :register-call-not-read :reason skipped
@@ -550,6 +758,10 @@
     {:entities (count (:entities idx))
      :entities-by-source (into (sorted-map) kinds)
      :register-calls {:read (count (filter :dev-id regs)) :not-read (count (filter :skipped regs))}
+     :operations (let [os (mapcat :operations (vals (:code idx)))]
+                   {:read (count (filter :dev-id os)) :not-read (count (filter :skipped os))})
+     :schema-defs (let [ds (mapcat :schemas (vals (:code idx)))]
+                    {:read (frequencies (map :pack (filter :dev-id ds))) :not-read (count (filter :skipped ds))})
      :runtime-snapshot (:runtime idx)
      :store (some-> (:store idx) (select-keys [:commit :date :filled]))
      :source-files (count (:code idx))

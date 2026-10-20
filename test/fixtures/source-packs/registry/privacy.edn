@@ -1,0 +1,2 @@
+;; Facts no library holds: the privacy class of a data key the spec shapes.
+{:user/email {:data/privacy :pii}}

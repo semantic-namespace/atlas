@@ -15,6 +15,7 @@
 
    Locations are absolute paths, so an editor can open them directly."
   (:require [atlas.source.index :as index]
+            [atlas.source.pack.pathom :as pathom]
             [clojure.java.io :as io]
             [clojure.string :as str]))
 
@@ -63,6 +64,7 @@
         fields (prop-ending entry "fields")
         n-used (+ (count (:referenced-by u)) (count (:called-from u)))
         contract (cond
+                   (:pathom/op entry) (pathom/summary-line entry)
                    (or context response) (str "[" (few context 4) "] → [" (few response 4) "]")
                    fields (str "fields [" (few fields 5) "]"))
         line2 (str/join "  ·  " (remove nil? [contract
@@ -135,18 +137,34 @@
     {:file file :line (:row kw) :var (symbol (str (:from kw)) (str (:from-var kw)))}))
 
 (defn- data-key [idx k]
-  (let [{:keys [producers consumers]} (index/data-key idx k)
+  (let [{:keys [producers consumers shape props member-of]} (index/data-key idx k)
         code (mentions idx k)
-        ids #(str/join ", " (map (comp pr-str :dev-id) %))]
+        ids #(str/join ", " (map (comp pr-str :dev-id) %))
+        problems (filter #(= k (:dev-id %)) (index/check idx))]
     {:kind "data-key"
-     :eldoc (str (pr-str k) "  data key\nproduced by " (if (seq producers) (ids producers) "nothing")
-                 "  ·  consumed by " (if (seq consumers) (ids consumers) "nothing"))
+     :eldoc (str (pr-str k) "  data key"
+                 (str/join (for [s shape] (str "  " (name (:pack s)) " " (:form s))))
+                 (str/join (for [[p v] props] (str "  " (pr-str p) " " (pr-str v))))
+                 "\nproduced by " (if (seq producers) (ids producers) "nothing")
+                 "  ·  consumed by " (if (seq consumers) (ids consumers) "nothing")
+                 (when (seq member-of) (str "  ·  in " (ids member-of))))
      :describe (str/join "\n" (concat [(str (pr-str k) "    data key") ""]
+                                      (for [s shape] (str (format "%-11s" (name (:pack s))) (:form s) "    " (at s)))
+                                      (for [[p v] props] (str (pr-str p) "  " (pr-str v)))
+                                      (when (seq member-of)
+                                        (cons "member of" (for [m member-of] (str "  " (pr-str (:dev-id m)) "    " (at (:definition m))))))
+                                      (when (or (seq shape) (seq props) (seq member-of)) [""])
                                       ["produced by"] (for [p producers] (str "  " (pr-str (:dev-id p)) "    " (at (:definition p))))
                                       [""] ["consumed by"] (for [c consumers] (str "  " (pr-str (:dev-id c)) "    " (at (:definition c))))
                                       [""] [(str "mentioned in code (" (count code) ")")]
-                                      (for [m code] (str "  " (:var m) "    " (at {:file (#'index/relative (:root idx) (:file m)) :line (:line m)})))))
-     :definitions (vec (for [p producers] {:file (abs-path idx (get-in p [:definition :file])) :line (get-in p [:definition :line]) :summary (str "produced by " (pr-str (:dev-id p)))}))
+                                      (for [m code] (str "  " (:var m) "    " (at {:file (#'index/relative (:root idx) (:file m)) :line (:line m)})))
+                                      (when (seq problems)
+                                        (concat [""] (for [p problems]
+                                                       (str "⚠ " (name (:severity p)) " " (name (:problem p))
+                                                            (when (:keys p) (str " " (few (:keys p) 6)))))))))
+     :definitions (vec (concat (for [s shape :when (:file s)]
+                                 {:file (abs-path idx (:file s)) :line (:line s) :summary (str (name (:pack s)) ": " (:form s))})
+                               (for [p producers] {:file (abs-path idx (get-in p [:definition :file])) :line (get-in p [:definition :line]) :summary (str "produced by " (pr-str (:dev-id p)))})))
      :references (vec (concat (for [c consumers] {:file (abs-path idx (get-in c [:definition :file])) :line (get-in c [:definition :line]) :summary (str "consumed by " (pr-str (:dev-id c)))})
                               (for [m code] {:file (:file m) :line (:line m) :summary (str "in " (:var m))})))}))
 
@@ -170,6 +188,7 @@
   (let [entities (:entities idx)
         carriers (sort-by key (filter #(contains? (set (get-in (val %) [:entry :atlas/aspects])) k) entities))]
     (cond
+      (:shape (index/data-key idx k)) (data-key idx k)
       (contains? entities k) (entity idx k)
       (or (seq (:producers (index/data-key idx k))) (seq (:consumers (index/data-key idx k)))) (data-key idx k)
       (seq carriers) (aspect idx k carriers)
