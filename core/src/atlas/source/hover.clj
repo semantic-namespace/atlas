@@ -32,6 +32,7 @@
        (cond
          (:runtime-ns s) (str "REPL: registered by " (:runtime-ns s) ", snapshot " (:as-of s) "    ")
          (:store-commit s) (str "store: recorded at " (subs (:store-commit s) 0 7) ", " (:as-of s) "    ")
+         (:runtime-as-of s) (str "running process: snapshot " (:runtime-as-of s) "    ")
          (:register! s) "register!    ")
        (str/join " " (map name (:keys s)))
        (when (seq (:dropped s)) (str "    (as code: " (str/join " " (map name (:dropped s))) ")"))))

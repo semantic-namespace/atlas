@@ -199,6 +199,16 @@
 ;;   :pack/shape            (fn [entry kind]) → a data key's shape, as text
 ;;   :pack/members          (fn [entry]) → the data keys a schema is made of
 ;;   :pack/describe         (fn [entry]) → one line for an editor, or nil
+;;   :pack/runtime-fill     (fn [entry runtime]) → entry with what static reading
+;;                          couldn't read taken from the running process's entry
+;;   :pack/runtime-diff     (fn [entry runtime]) → where code and the running
+;;                          process disagree, or nil
+;;
+;; A pack's runtime half is a snapshot file the running process writes (the
+;; Pathom pack's `snapshot!`): {:pack id :written epoch-ms :entities {dev-id
+;; entry}}, at .atlas/packs/<id>.edn or the pack's :snapshot option. The
+;; index reads it beside the code: it fills what static reading couldn't
+;; read, adds what only the process has, and checks where they disagree.
 ;;
 ;; `opts` is atlas-source.edn's :packs map. What :pack/read returns is
 ;; cached per file, so it must be data.
@@ -215,7 +225,7 @@
               (let [p (some-> (requiring-resolve k) deref)]
                 (when-not (and (map? p) (:pack/find p) (:pack/read p))
                   (throw (ex-info "A pack is a map with :pack/find and :pack/read" {:pack k})))
-                p))
+                (update p :pack/config-keys (fnil conj #{}) k)))
         ps (vec (concat (filter #(some ks (:pack/config-keys %)) builtin-packs) (sort-by :pack/id own)))]
     (when-let [dup (seq (for [[k n] (frequencies (mapcat :pack/kinds ps)) :when (> n 1)] k))]
       (throw (ex-info "Two packs give sources of the same kind" {:kinds (vec dup)})))
@@ -242,6 +252,27 @@
          {:consumes [] :produces []}
          (:dataflow config)
          (keep :pack/dataflow packs)))
+
+(defn- snapshot-file
+  "Where `pack`'s runtime snapshot is: its :snapshot option, or
+   .atlas/packs/<id>.edn, under `root`."
+  [root packs-config pack]
+  (under root (or (some #(get-in packs-config [% :snapshot]) (:pack/config-keys pack))
+                  (str ".atlas/packs/" (name (:pack/id pack)) ".edn"))))
+
+(defn- read-snapshots
+  "[{:pack-id :kind :file :written :entities}] for each enabled pack whose
+   snapshot file exists and reads."
+  [root packs-config packs]
+  (vec (for [p packs
+             :let [f (snapshot-file root packs-config p)]
+             :when (.isFile f)
+             :let [data (try (edn/read-string (slurp f)) (catch Exception _ nil))]
+             :when (map? (:entities data))]
+         {:pack-id (:pack/id p) :kind (first (sort (:pack/kinds p))) :file (canonical f)
+          :written (:written data) :entities (:entities data)})))
+
+(defn- instant [ms] (when ms (str (java.time.Instant/ofEpochMilli ms))))
 
 (defn- pack-kinds [idx] (set (mapcat :pack/kinds (:packs idx))))
 
@@ -380,12 +411,14 @@
         cached (cond
                  (and previous (= config (:config previous))) previous
                  cache (read-cache cache config))
+        packs (enabled-packs (:packs config))
         stamps (into {} (map (juxt identity mtime)) src-files)
-        edn-stamps (into {} (map (juxt identity mtime)) edn-files)]
+        edn-stamps (into {} (map (juxt identity mtime))
+                         (concat edn-files (for [p packs :let [f (snapshot-file root (:packs config) p)] :when (.isFile f)] (canonical f))))]
     (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous))
              (= store-sha (get-in previous [:store :commit])))
       (assoc previous :analysed 0)
-      (build* config (enabled-packs (:packs config)) root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
+      (build* config packs root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
               (when store-sha
                 (if (= store-sha (get-in cached [:store :commit]))
                   (:store cached)
@@ -440,6 +473,24 @@
                                                 (first (filter #(data-key-kinds (:kind %)) defs))
                                                 (first defs))]]
                           [id (assoc primary :entry entry :definitions defs)]))
+        ;; packs' runtime snapshots: fill what static reading couldn't read,
+        ;; add what only the running process has
+        snapshots (read-snapshots root (:packs config) packs)
+        pack-of-id (into {} (for [p packs] [(:pack/id p) p]))
+        static (reduce (fn [st {:keys [pack-id kind file written entities]}]
+                         (let [fill (or (:pack/runtime-fill (pack-of-id pack-id)) (fn [e _] e))]
+                           (reduce (fn [st [id rentry]]
+                                     (let [d {:kind kind :runtime true :written written :snapshot file
+                                              :keys (vec (sort (keys rentry)))}]
+                                       (if-let [e (get st id)]
+                                         (assoc st id (-> e
+                                                          (update :entry fill rentry)
+                                                          (update :definitions conj d)
+                                                          (assoc :runtime {:pack-id pack-id :entry rentry :written written})))
+                                         (assoc st id (assoc d :entry rentry :definitions [d]
+                                                             :runtime {:pack-id pack-id :entry rentry :written written})))))
+                                   st entities)))
+                       static snapshots)
         ;; the REPL snapshot fills gaps: only dev-ids no file defines
         snapshot (read-runtime runtime-file)
         ns-file (merge (:ns-files snapshot)
@@ -472,6 +523,7 @@
      :code code
      :analysed (count stale)
      :runtime (when snapshot {:file runtime-file :written (:written snapshot) :filled (count runtime)})
+     :pack-snapshots (mapv #(-> % (dissoc :entities) (assoc :ids (set (keys (:entities %))))) snapshots)
      :read-problems (concat (keep :problem (vals edn))
                             (for [c (:conflicts merged)]
                               (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [l] (let [{:keys [file lines]} (by-label l)]
@@ -492,6 +544,8 @@
 
 (defn- loc [idx {:keys [file line filename row end-row ns name kind as-of] :as m}]
   (cond
+    (and (:runtime m) (not file)) {:pack kind :runtime-as-of (instant (:written m))
+                                   :snapshot (relative (:root idx) (:snapshot m))}
     (= kind :runtime) (cond-> {:runtime-ns ns :as-of as-of}
                         file (assoc :file (relative (:root idx) file) :line line))
     (= kind :store) (cond-> {:store-commit (:store-commit m) :as-of as-of}
@@ -674,9 +728,43 @@
       {:severity :info :problem :keys-outside-contract :dev-id id :keys outside
        :impl (loc idx v)})))
 
+(defn- runtime-problems
+  "Where a pack's runtime snapshot and the code differ:
+   - :runtime-disagrees (warning): the pack's :pack/runtime-diff between what
+     the code says and what the running process registered.
+     :changed-since-snapshot is true when the file changed after the
+     snapshot was written, so the snapshot may be the stale side;
+   - :not-in-runtime (info): defined in the code, not registered in the
+     running process: unused, or a registration forgotten;
+   - :runtime-only (info): registered in the running process, in no file
+     the pack read: built as a value, generated, or in code not indexed."
+  [idx]
+  (for [{:keys [pack-id kind written ids] :as snap} (:pack-snapshots idx)
+        :let [pack (first (filter #(= pack-id (:pack/id %)) (:packs idx)))
+              diff (:pack/runtime-diff pack)
+              snapshot (relative (:root idx) (:file snap))]
+        [id e] (sort-by key (:entities idx))
+        :let [code-defs (filter #(and (= kind (:kind %)) (not (:runtime %))) (:definitions e))
+              runtime (:runtime e)]
+        p (cond
+            (and (seq code-defs) (not (contains? ids id)))
+            [{:severity :info :problem :not-in-runtime :dev-id id :pack kind :definition (loc idx e)
+              :snapshot snapshot :snapshot-as-of (instant written)}]
+            (and runtime (empty? code-defs) (= pack-id (:pack-id runtime)))
+            [{:severity :info :problem :runtime-only :dev-id id :pack kind :snapshot snapshot
+              :snapshot-as-of (instant written)}]
+            (and runtime (seq code-defs) diff)
+            (when-let [d (diff (:entry e) (:entry runtime))]
+              (let [changed (some #(when-let [t (get (:stamps idx) (:file %))] (> t (or written 0))) code-defs)]
+                [{:severity :warning :problem :runtime-disagrees :dev-id id :pack kind :diff d
+                  :definition (loc idx e) :snapshot snapshot :snapshot-as-of (instant written)
+                  :changed-since-snapshot (boolean changed)}])))]
+    p))
+
 (defn- pack-problems
-  "Each enabled pack's :pack/checks, and the forms a pack found but couldn't
-   read (:pack-form-not-read, info)."
+  "Each enabled pack's :pack/checks, the forms a pack found but couldn't
+   read (:pack-form-not-read, info), and where its runtime snapshot and the
+   code differ."
   [idx]
   (let [view {:entities (:entities idx)
               :of-kinds #(of-kinds idx %)
@@ -689,7 +777,8 @@
            [_ results] (sort-by key pack-results)
            {:keys [row kind skipped]} results :when skipped]
        {:severity :info :problem :pack-form-not-read :pack kind :reason skipped
-        :file (relative (:root idx) f) :line row}))))
+        :file (relative (:root idx) f) :line row})
+     (runtime-problems idx))))
 
 (defn check
   "Where code and registry files disagree, most severe first."
@@ -730,6 +819,8 @@
                                    [kind {:read (count (filter :dev-id rs)) :not-read (count (filter :skipped rs))}])))
      :runtime-snapshot (:runtime idx)
      :store (some-> (:store idx) (select-keys [:commit :date :filled]))
+     :pack-snapshots (into (sorted-map) (for [{:keys [kind file written ids]} (:pack-snapshots idx)]
+                                          [kind {:file (relative (:root idx) file) :as-of (instant written) :entities (count ids)}]))
      :source-files (count (:code idx))
      :analysed-now (:analysed idx)
      :coverage (dissoc (coverage-note idx) :note)}))

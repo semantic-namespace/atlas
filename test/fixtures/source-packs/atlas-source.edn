@@ -5,4 +5,6 @@
  :src ["src"]
  :packs {:spec {}
          :malli {:registries [shop.schema/registry]}
-         :pathom {:resolver-macros [shop.connect/defresolver]}}}
+         :pathom {:resolver-macros [shop.connect/defresolver]
+                  ;; written by make_pathom_snapshot.clj from real Pathom envs
+                  :snapshot "snapshots/pathom.edn"}}}

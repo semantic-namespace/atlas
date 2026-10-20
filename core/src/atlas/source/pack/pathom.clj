@@ -165,6 +165,83 @@
          (str "  (inferred: " (str/join ", " (map name (sort (:pathom/inferred entry)))) ")"))))
 
 ;; =============================================================================
+;; The running environment
+;; =============================================================================
+
+(defn- runtime-entry [op config]
+  (let [in (option config (if (= op :mutation) "params" "input"))
+        out (option config "output")]
+    (cond-> {:pathom/op op}
+      (seq in) (assoc (if (= op :mutation) :pathom/params :pathom/input) (eql-keys in))
+      (seq out) (assoc :pathom/output (eql-keys out)))))
+
+(defn runtime-entities
+  "{dev-id entry} for every operation the running Pathom environments in
+   `envs` have registered, in the pack's vocabulary. An env is what Pathom
+   3's pci/register returns, or Pathom 2's indexes (what pc/register
+   returns, or a map holding them under ::pc/indexes). Read by keyword:
+   Pathom need not be on atlas's classpath."
+  [envs]
+  (into (sorted-map)
+        (for [env envs
+              :let [p2 (or (:com.wsscode.pathom.connect/indexes env) env)]
+              [op index config-of] [[:resolver (:com.wsscode.pathom3.connect.indexes/index-resolvers env) :config]
+                                    [:mutation (:com.wsscode.pathom3.connect.indexes/index-mutations env) :config]
+                                    [:resolver (:com.wsscode.pathom.connect/index-resolvers p2) identity]
+                                    [:mutation (:com.wsscode.pathom.connect/index-mutations p2) identity]]
+              [sym operation] index
+              :when (qualified-symbol? sym)]
+          [(keyword (namespace sym) (name sym)) (runtime-entry op (config-of operation))])))
+
+(defn snapshot!
+  "Writes what the running Pathom environments in `envs` have registered to
+   `file` (default .atlas/packs/pathom.edn), for atlas.source.index to read
+   beside what it reads from the code. Call it from the app's REPL, or after
+   the env is built:
+
+     (atlas.source.pack.pathom/snapshot! [env])"
+  ([envs] (snapshot! envs {}))
+  ([envs {:keys [file] :or {file ".atlas/packs/pathom.edn"}}]
+   (let [f (java.io.File. ^String file)]
+     (some-> (.getParentFile f) .mkdirs)
+     (spit f (with-out-str
+               (prn {:pack :pathom
+                     :written (System/currentTimeMillis)
+                     :entities (runtime-entities envs)})))
+     file)))
+
+(def ^:private slots {:input :pathom/input :params :pathom/params :output :pathom/output})
+
+(defn- runtime-fill
+  "`entry` with the slots static reading couldn't read (:pathom/not-read)
+   taken from the running environment's `runtime` entry, and listed under
+   :pathom/from-runtime."
+  [entry runtime]
+  (let [unread (:pathom/not-read entry)
+        filled (filter #(contains? runtime (slots %)) unread)
+        left (reduce disj (set unread) filled)]
+    (if (empty? filled)
+      entry
+      (cond-> (-> (reduce (fn [e k] (assoc e (slots k) (get runtime (slots k)))) entry filled)
+                  (assoc :pathom/from-runtime (set filled))
+                  (dissoc :pathom/not-read))
+        (seq left) (assoc :pathom/not-read left)))))
+
+(defn- runtime-diff
+  "{slot {:only-in-code [...] :only-at-runtime [...]}} where what the code
+   says and what the running environment registered differ; nil when they
+   agree."
+  [entry runtime]
+  (not-empty
+   (into (sorted-map)
+         (for [k (vals slots)
+               :let [code (set (get entry k)) live (set (get runtime k))]
+               :when (not= code live)]
+           [k (cond-> {}
+                (seq (remove live code)) (assoc :only-in-code (vec (sort (remove live code))))
+                (seq (remove code live)) (assoc :only-at-runtime (vec (sort (remove code live)))))]))))
+
+;; =============================================================================
 ;; The pack
 ;; =============================================================================
 
@@ -245,4 +322,6 @@
    :pack/find find-forms
    :pack/read read-forms
    :pack/checks checks
+   :pack/runtime-fill runtime-fill
+   :pack/runtime-diff runtime-diff
    :pack/describe (fn [entry] (when (:pathom/op entry) (summary-line entry)))})

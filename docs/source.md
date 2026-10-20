@@ -220,9 +220,46 @@ On two open-source Pathom 3 apps:
 | [hermes](https://github.com/wardle/hermes) (SNOMED CT server) | 38 of 38, plus 227 `s/def` | one unproduced input: `:info.snomed/id`, the graph's entry point; one `s/keys` naming optional keys with no spec |
 | [duck-repled](https://github.com/mauricioszabo/duck-repled) | 29 of 29 through its wrapper macro, plus 38 malli registry entries | the seed resolver's output is code, so unproduced inputs name it; two resolver outputs (`:var/spec`, `:repl/cljs`) are missing from the registry its wrapper validates against, so they are never validated |
 
-Not read yet: `pco/resolver` and `pco/mutation` calls (resolvers built as
-values), dynamic resolvers, and options naming a def in another namespace. kondo doesn't attribute the keywords inside a
-resolver's body to it, so `:keys-outside-contract` doesn't cover resolvers.
+Not read from the code: `pco/resolver` and `pco/mutation` calls (resolvers
+built as values), dynamic resolvers, and options naming a def in another
+namespace. kondo doesn't attribute the keywords inside a resolver's body to it,
+so `:keys-outside-contract` doesn't cover resolvers. The running environment
+covers the first three:
+
+### What the running environment registered: the Pathom snapshot
+
+A running Pathom environment holds the exact index of what it registered,
+however each operation was built. Write it from the app's REPL, or wherever
+the env is built:
+
+```clojure
+(atlas.source.pack.pathom/snapshot! [env])   ; Pathom 3 env, or Pathom 2 indexes; several at once
+;; => ".atlas/packs/pathom.edn"
+```
+
+Pathom need not be on atlas's classpath, nor atlas on the app's beyond this
+one call: the index is read by keyword. The file is
+`{:pack :pathom :written <ms> :entities {op-id entry}}`, in the pack's
+vocabulary; `:pathom {:snapshot "path"}` in `atlas-source.edn` reads it from
+elsewhere. With it, the index:
+
+- **fills** what reading the code couldn't: an output written as code takes
+  the registered one, listed under `:pathom/from-runtime`, so the inputs it
+  produces are no longer reported as unproduced;
+- **adds** what only the environment has, such as a `pco/resolver` value, as
+  an entity the hover marks "running process";
+- **checks**, beside the static checks:
+  - `:runtime-disagrees` (warning): an operation whose inputs, params or
+    outputs differ between the code and the environment, with the keys only
+    each side has. `:changed-since-snapshot` is true when the file changed after
+    the snapshot was written, so the snapshot may be the stale side;
+  - `:not-in-runtime` (info): defined in the code, never registered;
+  - `:runtime-only` (info): registered, in no file the pack read.
+
+`bb source summary` gives the snapshot's file, time and count under
+`:pack-snapshots`. On the shop fixture, a snapshot from real Pathom 3 and 2
+agrees with the code on all nine operations both have. `bb pathom-snapshot-check`
+rebuilds it from real Pathom and fails if the operations change.
 
 ## Which keys carry data: `:dataflow`
 
@@ -281,6 +318,7 @@ The optional keys:
 | `:pack/inline-data-keys` | `(fn [entities])` → data keys its entities define with no entity of their own |
 | `:pack/shape`, `:pack/members` | a data key's shape as text, and the keys a schema is made of |
 | `:pack/describe` | one line for the hover |
+| `:pack/runtime-fill`, `:pack/runtime-diff` | its runtime half: `(fn [entry runtime])`, filling what static reading couldn't read, and saying where code and the running process disagree. The process writes `{:pack id :written ms :entities {...}}` to `.atlas/packs/<id>.edn` (or the pack's `:snapshot` option) |
 
 `form-at` reads the form whose head symbol is at a row and column, with
 `::keywords` resolved and `.cljc` reader conditionals read as `:clj`. A

@@ -40,7 +40,16 @@
   {::pco/output [{:order/buyer user-properties}]}
   {})
 
-;; an option written as code: its keys are not guessed
-(pco/defresolver seed [{:keys [seed]}]
-  {::pco/output (vec (keys seed))}
-  seed)
+;; an option written as code: its keys are not guessed statically, and the
+;; running environment knows them
+(def seed-keys [:user/loyalty-tier])
+
+(pco/defresolver seed []
+  {::pco/output (vec seed-keys)}
+  {:user/loyalty-tier :gold})
+
+;; a resolver built as a value: only the running environment has it
+(def list-price
+  (pco/resolver 'shop.resolvers/list-price
+    {::pco/input [:product/price] ::pco/output [:product/list-price]}
+    (fn [_ {:product/keys [price]}] {:product/list-price (* 2 price)})))

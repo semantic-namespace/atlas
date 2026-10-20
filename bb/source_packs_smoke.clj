@@ -5,6 +5,7 @@
    files that give the functions' contracts and a data key's privacy class."
   (:require [atlas.source.hover :as hover]
             [atlas.source.index :as index]
+            [babashka.fs :as fs]
             [clojure.edn :as edn]
             [clojure.string :as str]))
 
@@ -41,7 +42,9 @@
   (filter #(= problem (:problem %)) (index/check idx)))
 
 (defn -main [& _]
-  (let [cfg (assoc (edn/read-string (slurp (str root "/atlas-source.edn"))) :root root)
+  (let [with-runtime (assoc (edn/read-string (slurp (str root "/atlas-source.edn"))) :root root)
+        ;; static reading alone: the checks below until "runtime snapshot"
+        cfg (update-in with-runtime [:packs :pathom] dissoc :snapshot)
         idx (index/build cfg)
         email (index/data-key idx :user/email)]
     (check "every s/def and registry entry is read"
@@ -170,6 +173,59 @@
       (check "the pack is opt-in: without :packs no s/def becomes an entity"
              (and (nil? (index/where plain :shop.spec/user))
                   (empty? (problems plain :data-key-without-schema)))))
+
+    ;; ---- runtime snapshot: snapshots/pathom.edn, written from real Pathom 3
+    ;; and 2 environments by make_pathom_snapshot.clj
+    (let [rt (index/build with-runtime)]
+      (check "the snapshot is read: 10 operations the running environments registered"
+             (= 10 (get-in (index/summary rt) [:pack-snapshots :pathom :entities])))
+      (check "code and the running environments agree on every operation both have"
+             (empty? (problems rt :runtime-disagrees)))
+      (check "an output written as code is filled from the running environment"
+             (= #:pathom{:op :resolver :output [:user/loyalty-tier] :from-runtime #{:output}}
+                (:entry (index/where rt :shop.resolvers/seed))))
+      (check "so the input it produces is no longer unproduced, and nothing is left unread"
+             (and (not-any? #(= :shop.resolvers/user-discount (:dev-id %)) (problems rt :input-without-producer))
+                  (empty? (problems rt :operation-option-not-read))
+                  (not-any? :unread-outputs (problems rt :input-without-producer))))
+      (check "a resolver built as a value: only the running environment has it"
+             (and (= [:shop.resolvers/list-price] (map :dev-id (problems rt :runtime-only)))
+                  (= [:shop.resolvers/list-price] (map :dev-id (:producers (index/data-key rt :product/list-price))))))
+      (check "a resolver defined in the code and never registered"
+             (= [:shop.resolvers/order-buyer] (map :dev-id (problems rt :not-in-runtime))))
+      (check "where lists the running environment as a source"
+             (some :runtime-as-of (:sources (index/where rt :shop.resolvers/user-by-email))))
+      (check "the hover says where an entity only the running environment has comes from"
+             (str/includes? (:describe (hover/lookup rt :shop.resolvers/list-price)) "running process: snapshot")))
+
+    ;; ---- code edited after the snapshot, and a snapshot that disagrees with
+    ;; unchanged code: on a copy, with mtimes set
+    (let [dir (fs/create-temp-dir {:prefix "atlas-source-packs"})
+          _ (fs/copy-tree root dir)
+          snap (str (fs/path dir "snapshots" "pathom.edn"))
+          past (- (System/currentTimeMillis) 60000)
+          data (edn/read-string (slurp snap))]
+      (try
+        (doseq [f (fs/glob dir "**")] (.setLastModified (fs/file f) past))
+        ;; the snapshot was taken now, after every file; one entity disagrees
+        (spit snap (pr-str (-> data
+                               (assoc :written (+ past 30000))
+                               (update-in [:entities :shop.wrapped/product-price :pathom/output] conj :product/currency))))
+        ;; then the code changes: user-by-email now also outputs :user/phone
+        (let [f (str (fs/path dir "src" "shop" "resolvers.clj"))]
+          (spit f (str/replace-first (slurp f) "::pco/output [:user/id :user/name]}" "::pco/output [:user/id :user/name :user/phone]}"))
+          (.setLastModified (fs/file f) (System/currentTimeMillis)))
+        (let [idx (index/build (assoc with-runtime :root (str dir)))
+              ds (into {} (map (juxt :dev-id identity)) (problems idx :runtime-disagrees))]
+          (check "a disagreement names the slot and which side has each key"
+                 (and (= {:pathom/output {:only-in-code [:user/phone]}} (get-in ds [:shop.resolvers/user-by-email :diff]))
+                      (= {:pathom/output {:only-at-runtime [:product/currency]}} (get-in ds [:shop.wrapped/product-price :diff]))))
+          (check "and says when the file changed after the snapshot, so the snapshot may be stale"
+                 (and (true? (get-in ds [:shop.resolvers/user-by-email :changed-since-snapshot]))
+                      (false? (get-in ds [:shop.wrapped/product-price :changed-since-snapshot]))))
+          (check "a disagreement is a warning"
+                 (every? #(= :warning (:severity %)) (vals ds))))
+        (finally (fs/delete-tree dir))))
 
     (if (zero? @failures)
       (println "source-packs-smoke: all checks passed")
