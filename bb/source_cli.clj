@@ -27,6 +27,7 @@
   check               where code and registry files disagree
   summary             counts, coverage, files re-analysed by this call
   hover <keyword>     what an editor shows for a keyword: eldoc line, describe text, locations
+  diagnostics <file>  check's problems in one file, with the line and columns to underline
   serve               long-lived: one JSON request per line on stdin, one JSON reply per line
                       {\"id\":1,\"op\":\"hover\",\"keyword\":\":fn/x\"} -> {\"id\":1,\"result\":{...}}
                       the index stays in memory and is refreshed from disk before each reply")
@@ -66,13 +67,14 @@
   (let [idx (atom (index/build (dissoc cfg :cache)))]
     (loop []
       (when-let [line (read-line)]
-        (let [{:keys [id op keyword]} (try (json/parse-string line true) (catch Exception _ nil))
+        (let [{:keys [id op keyword file]} (try (json/parse-string line true) (catch Exception _ nil))
               reply (try
                       (swap! idx #(index/build (assoc (dissoc cfg :cache) :previous %)))
                       {:id id
                        :result (case op
                                  "hover" (hover/lookup @idx (kw keyword))
                                  "check" (index/check @idx)
+                                 "diagnostics" (hover/diagnostics @idx file)
                                  "summary" (index/summary @idx)
                                  {:error (str "unknown op " op)})}
                       (catch Exception e {:id id :error (ex-message e)}))]
@@ -89,6 +91,7 @@
               "deps" (or (index/dependencies @idx (kw arg)) {:not-found (kw arg)})
               "data" (index/data-key @idx (kw arg))
               "check" (index/check @idx)
+              "diagnostics" (hover/diagnostics @idx arg)
               "summary" (index/summary @idx)
               "hover" (hover/lookup @idx (kw arg))
               "serve" (do (serve (config opts)) (System/exit 0))

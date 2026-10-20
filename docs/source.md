@@ -476,7 +476,7 @@ Measured on a 535-file, 49k-line project:
 
 Reading a 2,000-entity registry from 40 EDN files takes about 70 ms.
 
-## Emacs: hover, `M-.`, `M-?`
+## Emacs: hover, `M-.`, `M-?`, Flymake
 
 ```elisp
 (load "<atlas checkout>/emacs/atlas-source.el")
@@ -492,13 +492,32 @@ Point on any `:ns/name` keyword, in a `.clj` file or a registry `.edn` file:
 | `M-?` | the entries that name it, and the code that calls its var |
 | `C-c .` | a `*atlas*` buffer with everything, `file:line` links and keywords clickable |
 
+**Flymake** underlines what `check` finds, in the file where it is: a key code
+uses outside its function's contract, at that key; an integrant ref no config
+defines; a resolver input nothing produces, at its name in the destructuring;
+two specs for one key, naming both places. Errors, warnings and info keep
+`check`'s severity (info is a note). `M-x flymake-show-buffer-diagnostics`
+lists a buffer's, `flymake-show-project-diagnostics` the project's open
+files. `atlas-source-mode` turns Flymake on; set `atlas-source-flymake` to
+nil to add the backend without that.
+
+The server reads files from disk, so while a buffer has unsaved changes the
+backend doesn't answer: Flymake keeps the markers it has, which move with the
+text, and asks again on save. Each answer runs the whole `check` on the
+index in memory: about 70 ms on a 535-file app. `bb source diagnostics <file>`
+gives the same, as data: each problem's line and, when there is a token to
+underline, its columns.
+
 Keywords atlas doesn't know fall through to clojure-lsp and CIDER. No REPL is
 needed. Each project gets one long-lived `bb source serve` process, which
 keeps the index in memory and refreshes it from disk before each answer
 (about 12 ms per hover once warm). Saved files are seen; unsaved edits are
 not. `M-x atlas-source-stop` stops the servers.
 
-Batch test: `emacs --batch -Q -L <dir with clojure-mode.el> -l emacs/test/atlas-source-test.el`.
+Batch tests: `bb emacs-smoke` runs `emacs/test/atlas-source-flymake-test.el`
+(Flymake, on `test/fixtures/source-packs`), and `emacs/test/atlas-source-test.el`
+(eldoc, xref, describe, on the cart example) when it finds clojure-mode. Both
+start a real `bb source serve`. CI runs them on Emacs from Ubuntu.
 
 ## Sources and the store
 

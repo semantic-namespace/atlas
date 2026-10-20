@@ -11,6 +11,10 @@
 ;;             describes it, and the var that implements it
 ;;   M-?       lists what uses it
 ;;   C-c .     opens a describe buffer with clickable file:line links
+;;   Flymake   underlines what `bb source check' finds, where it is: a key
+;;             used outside its contract, a ref no config defines, a
+;;             resolver input nothing produces, conflicting sources...
+;;             (M-x flymake-show-buffer-diagnostics lists them)
 ;;
 ;; Entities come from the project's registry files, from register! calls
 ;; written as data, and — when a REPL is connected through CIDER — from a
@@ -20,7 +24,9 @@
 ;; Answers come from `bb source serve', one long-lived babashka process per
 ;; project that reads the registry files and the code (clj-kondo) without
 ;; loading anything, keeps the index in memory and refreshes it from disk
-;; before each answer.  Saved files are seen; unsaved edits are not.
+;; before each answer.  Saved files are seen; unsaved edits are not: while
+;; a buffer has unsaved changes, Flymake keeps the markers it has, which
+;; move with the text, and asks again when the buffer is saved.
 ;;
 ;; For keywords atlas doesn't know, eldoc and xref fall through to the next
 ;; backend (clojure-lsp, CIDER).
@@ -33,6 +39,7 @@
 
 (require 'cl-lib)
 (require 'eldoc)
+(require 'flymake)
 (require 'xref)
 (require 'json)
 
@@ -52,6 +59,11 @@
 (defcustom atlas-source-watch-repl t
   "When non-nil, a CIDER connection in an atlas project starts
 `atlas.source/watch!', so the REPL keeps .atlas/runtime.edn current."
+  :type 'boolean)
+
+(defcustom atlas-source-flymake t
+  "When non-nil, `atlas-source-mode' turns Flymake on with atlas's
+diagnostics.  The backend is added either way; Flymake shows it when on."
   :type 'boolean)
 
 (defcustom atlas-source-timeout 3
@@ -108,12 +120,13 @@
         (puthash root proc atlas-source--servers)
         proc))))
 
-(defun atlas-source--request (root op keyword callback)
-  "Send OP for KEYWORD to ROOT's server; call CALLBACK with the reply plist."
+(defun atlas-source--request (root op keyword callback &optional extra)
+  "Send OP for KEYWORD to ROOT's server; call CALLBACK with the reply plist.
+EXTRA is a plist of more request fields, such as (:file FILE)."
   (let ((id (cl-incf atlas-source--next-id)))
     (puthash id callback atlas-source--callbacks)
     (process-send-string (atlas-source--server root)
-                         (concat (json-serialize (list :id id :op op :keyword (or keyword ""))) "\n"))
+                         (concat (json-serialize (append (list :id id :op op :keyword (or keyword "")) extra)) "\n"))
     id))
 
 (defun atlas-source--request-sync (root op keyword)
@@ -237,6 +250,55 @@
       (display-buffer (current-buffer)))))
 
 ;; =============================================================================
+;; Flymake
+;; =============================================================================
+
+(defun atlas-source--diagnostic (buffer d)
+  "A Flymake diagnostic in BUFFER for D, a plist from the `diagnostics' op:
+:line, and :col/:end-col (1-based) when there is a token to underline."
+  (with-current-buffer buffer
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (forward-line (1- (plist-get d :line)))
+        (let* ((bol (point))
+               (eol (line-end-position))
+               (col (plist-get d :col))
+               (end-col (plist-get d :end-col))
+               (beg (if col (min eol (+ bol (1- col))) bol))
+               (end (if end-col (min eol (+ bol (1- end-col))) eol)))
+          (flymake-make-diagnostic
+           buffer beg (max end (min (1+ beg) (point-max)))
+           (pcase (plist-get d :severity)
+             ("error" :error)
+             ("warning" :warning)
+             (_ :note))
+           (plist-get d :message)))))))
+
+(defun atlas-source-flymake (report-fn &rest _)
+  "Flymake backend: what `bb source check' finds in this buffer's file.
+The server reads files from disk, so while the buffer has unsaved changes
+it doesn't answer: Flymake keeps the markers it has, which move with the
+text, and asks again on save."
+  (let ((root (atlas-source--root))
+        (file buffer-file-name)
+        (buffer (current-buffer)))
+    (cond
+     ((not (and root file)) (funcall report-fn nil))
+     ((buffer-modified-p) nil)
+     (t (atlas-source--request
+         root "diagnostics" nil
+         (lambda (reply)
+           (when (buffer-live-p buffer)
+             (if-let* ((err (plist-get reply :error)))
+                 (funcall report-fn :panic :explanation err)
+               (funcall report-fn
+                        (mapcar (lambda (d) (atlas-source--diagnostic buffer d))
+                                (plist-get reply :result))))))
+         (list :file (expand-file-name file)))))))
+
+;; =============================================================================
 ;; REPL snapshot (CIDER)
 ;; =============================================================================
 
@@ -280,10 +342,13 @@ hover sees entities only the running code knows about."
         ;; still reaches them.
         (add-hook 'eldoc-documentation-functions #'atlas-source-eldoc -95 t)
         (add-hook 'xref-backend-functions #'atlas-source--xref-backend -95 t)
+        (add-hook 'flymake-diagnostic-functions #'atlas-source-flymake nil t)
         (setq-local eldoc-echo-area-use-multiline-p t)
-        (eldoc-mode 1))
+        (eldoc-mode 1)
+        (when atlas-source-flymake (flymake-mode 1)))
     (remove-hook 'eldoc-documentation-functions #'atlas-source-eldoc t)
-    (remove-hook 'xref-backend-functions #'atlas-source--xref-backend t)))
+    (remove-hook 'xref-backend-functions #'atlas-source--xref-backend t)
+    (remove-hook 'flymake-diagnostic-functions #'atlas-source-flymake t)))
 
 (defun atlas-source-maybe-enable ()
   "Enable `atlas-source-mode' when the buffer is in an atlas project."

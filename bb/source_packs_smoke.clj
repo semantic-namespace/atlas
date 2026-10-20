@@ -198,6 +198,22 @@
            (let [b (index/build (assoc-in cfg [:packs 'source-packs-smoke/broken-pack] {}))]
              (some #(and (= :broken (:pack %)) (str/includes? (:reason %) "boom")) (problems b :pack-form-not-read))))
 
+    ;; ---- diagnostics: what an editor underlines, per file
+    (let [diags #(set (map (juxt :line :col :end-col :severity :problem) (hover/diagnostics idx %)))]
+      (check "diagnostics: a key used outside the contract, at the key in the code"
+             (= #{[10 49 64 "note" "keys-outside-contract"]} (diags "src/shop/handlers.clj")))
+      (check "diagnostics: an absolute path, as editors send"
+             (= (diags "src/shop/handlers.clj")
+                (diags (.getCanonicalPath (java.io.File. (str root "/src/shop/handlers.clj"))))))
+      (check "diagnostics: a key only destructured, at its name, within its own form"
+             (contains? (diags "src/shop/resolvers.clj") [13 45 50 "note" "input-without-producer"]))
+      (check "diagnostics: a dev-id written as the defining form's symbol"
+             (contains? (diags "src/shop/resolvers.clj") [48 18 22 "warning" "id-in-several-packs"]))
+      (check "diagnostics: severities follow check's"
+             (contains? (diags "resources/system.edn") [10 84 97 "warning" "ref-to-undefined"]))
+      (check "diagnostics: a file with nothing to report"
+             (empty? (diags "src/shop/order.cljc"))))
+
     (check "data keys are not dependencies"
            (empty? (:depends-on (index/dependencies idx :fn/place-order))))
     (check "a typo in s/keys: a key with no spec of its own"
