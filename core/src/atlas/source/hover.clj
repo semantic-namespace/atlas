@@ -63,6 +63,8 @@
         deps (prop-ending entry "deps")
         fields (prop-ending entry "fields")
         n-used (+ (count (:referenced-by u)) (count (:called-from u)))
+        ;; its atlas type, or for what a pack gives (no type), the pack
+        kind (or (short-type (:type w)) (some-> (get-in w [:definition :pack]) name))
         contract (or (index/describe idx entry)
                      (cond
                        (or context response) (str "[" (few context 4) "] → [" (few response 4) "]")
@@ -77,12 +79,12 @@
                                                  (str "store only (" (subs (:store-commit r) 0 7) ")"))]))
         others (sort-by key (remove (fn [[k _]] (#{"context" "response" "deps" "fields"} (name k))) entry))]
     {:kind "entity"
-     :eldoc (str (pr-str id) "  " (short-type (:type w)) "  " (few (sort (:aspects w)) 6) "\n" line2)
+     :eldoc (str (pr-str id) "  " kind (when (seq (:aspects w)) (str "  " (few (sort (:aspects w)) 6))) "\n" line2)
      :describe
      (str/join
       "\n"
       (concat
-       [(str (pr-str id) "    " (short-type (:type w)))
+       [(str (pr-str id) "    " kind)
         ""
         (str "aspects    " (str/join " " (map pr-str (sort (:aspects w)))))]
        (when context [(str "context    " (str/join " " (map pr-str context)))])

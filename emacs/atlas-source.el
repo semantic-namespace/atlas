@@ -31,9 +31,12 @@
 ;; For keywords atlas doesn't know, eldoc and xref fall through to the next
 ;; backend (clojure-lsp, CIDER).
 ;;
-;; Setup:
-;;   (load "<atlas checkout>/emacs/atlas-source.el")
+;; Setup: install the atlas-source command (bbin install <atlas checkout>/core,
+;; or from a release), put this file anywhere on your load path, and
+;;   (require 'atlas-source)
 ;;   (atlas-source-setup)   ; enable in Clojure buffers of atlas projects
+;; Without the command, it runs `bb source' from the atlas checkout this file
+;; is in (`atlas-source-bb-config').
 
 ;;; Code:
 
@@ -53,8 +56,22 @@
 
 (defcustom atlas-source-bb-config
   (expand-file-name "../bb.edn" (file-name-directory (or load-file-name buffer-file-name)))
-  "The atlas checkout's bb.edn, which defines the `source' task."
+  "The atlas checkout's bb.edn, which defines the `source' task: what
+`atlas-source-command' runs when the atlas-source command isn't installed."
   :type 'file)
+
+(defcustom atlas-source-command nil
+  "The command that answers for a project, before its arguments (\"serve\"
+\"--root\" ROOT).  nil: the atlas-source command when it is on `exec-path'
+\(bbin install <atlas checkout>/core), else `bb source' from
+`atlas-source-bb-config'."
+  :type '(choice (const :tag "atlas-source, else bb source from the checkout" nil)
+                 (repeat string)))
+
+(defun atlas-source--command ()
+  (or atlas-source-command
+      (when-let* ((cmd (executable-find "atlas-source"))) (list cmd))
+      (list atlas-source-bb-program "--config" atlas-source-bb-config "source")))
 
 (defcustom atlas-source-watch-repl t
   "When non-nil, a CIDER connection in an atlas project starts
@@ -110,8 +127,7 @@ diagnostics.  The backend is added either way; Flymake shows it when on."
       (let* ((default-directory root)
              (proc (make-process
                     :name (format "atlas-source[%s]" (file-name-nondirectory (directory-file-name root)))
-                    :command (list atlas-source-bb-program "--config" atlas-source-bb-config
-                                   "source" "serve" "--root" root)
+                    :command (append (atlas-source--command) (list "serve" "--root" root))
                     :connection-type 'pipe
                     :coding 'utf-8
                     :noquery t

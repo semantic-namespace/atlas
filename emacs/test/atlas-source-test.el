@@ -11,6 +11,8 @@
 (setq default-directory atlas-root)
 (add-to-list 'auto-mode-alist '("\\.edn\\'" . clojure-mode))
 (load (expand-file-name "emacs/atlas-source.el" atlas-root))
+;; this checkout's code, even when an atlas-source command is installed
+(setq atlas-source-command (list "bb" "--config" (expand-file-name "bb.edn" atlas-root) "source"))
 (defvar failures 0)
 (defun check (what ok) (princ (format "%s %s\n" (if ok "ok  " "FAIL") what)) (unless ok (setq failures (1+ failures))))
 (defun at (file needle)

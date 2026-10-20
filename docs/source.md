@@ -451,9 +451,29 @@ Output is EDN, or JSON with `--json`. The directories come from
 {:registry ["registry"] :src ["src"]}
 ```
 
-From another repo: `bb --config <atlas-checkout>/bb.edn source ...`. The
-cache is `<root>/.atlas/source-index.transit`; add `.atlas/` to
-`.gitignore`.
+### In any project: the `atlas-source` command
+
+Install it once with [bbin](https://github.com/babashka/bbin):
+
+```sh
+bbin install <atlas checkout>/core   # atlas-source, on your PATH
+```
+
+Then, in a project with an `atlas-source.edn` (four lines are enough for an
+integrant system: `{:src ["src"] :packs {:integrant {:configs ["resources"]}}}`):
+
+```sh
+atlas-source summary
+atlas-source check
+atlas-source uses :app/db
+```
+
+The command is `atlas.source.cli`, in atlas's core jar. Once a release has it,
+no checkout is needed: `bbin install io.github.semantic-namespace/atlas
+--mvn/version <version> --as atlas-source --main-opts '["-m" "atlas.source.cli"]'`.
+Without bbin, from a checkout: `bb --config <atlas-checkout>/bb.edn source ...`.
+Either needs Java the first time, to resolve dependencies. The cache is
+`<root>/.atlas/source-index.transit`; add `.atlas/` to `.gitignore`.
 
 `check` reports:
 
@@ -479,9 +499,14 @@ Reading a 2,000-entity registry from 40 EDN files takes about 70 ms.
 ## Emacs: hover, `M-.`, `M-?`, Flymake
 
 ```elisp
-(load "<atlas checkout>/emacs/atlas-source.el")
+;; atlas-source.el on your load path: copy it, or point at the checkout
+(require 'atlas-source)
 (atlas-source-setup)   ; enable in Clojure buffers of projects with an atlas-source.edn
 ```
+
+The file stands alone: it runs the `atlas-source` command when it is on
+`exec-path`, and otherwise `bb source` from the atlas checkout it is in.
+`atlas-source-command` overrides both.
 
 Point on any `:ns/name` keyword, in a `.clj` file or a registry `.edn` file:
 
