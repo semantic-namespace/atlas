@@ -18,9 +18,14 @@
    argument, and an undeclared output from a map literal returned last. So
    does this pack. Pathom 2 declares both.
 
-   `dataflow` is what this pack tells the index: which of these keys list
-   data consumed and produced."
-  (:require [clojure.string :as str]))
+   `pack` is what atlas.source.index runs (see the Packs section of
+   atlas.source.index), enabled by :pathom under atlas-source.edn's :packs.
+   A project's own macros that take defresolver's or defmutation's arguments
+   are read when named: :pathom {:resolver-macros [app.connect/defresolver]
+   :mutation-macros [...]}. Its :pack/dataflow tells the index which of
+   these keys list data consumed and produced."
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]))
 
 (def kind :pathom)
 
@@ -98,16 +103,15 @@
 
 (defn- resolve-names
   "`opts` with each symbol that names a def in `consts` replaced by its
-   value: {::pco/output concept-properties}, where (def concept-properties
-   [...]) is written in the same file."
+   value, wherever it is: {::pco/output concept-properties}, or inside a
+   join, [{:concept/descriptions description-properties}], where (def
+   concept-properties [...]) is written in the same file."
   [opts consts own-ns]
-  (let [value (fn [s] (when (and (symbol? s) (or (nil? (namespace s)) (= own-ns (namespace s))))
-                        (get consts (symbol (name s)))))]
-    (into {} (for [[k v] opts]
-               [k (cond
-                    (value v) (value v)
-                    (coll? v) (into (empty v) (map #(or (value %) %)) v)
-                    :else v)]))))
+  (walk/postwalk (fn [x]
+                   (or (when (and (symbol? x) (or (nil? (namespace x)) (= own-ns (namespace x))))
+                         (get consts (symbol (name x))))
+                       x))
+                 opts))
 
 (defn- computed?
   "True when an option's value is code rather than data: a call, or a name
@@ -159,3 +163,86 @@
        "] → [" (str/join " " (map pr-str (:pathom/output entry))) "]"
        (when (seq (:pathom/inferred entry))
          (str "  (inferred: " (str/join ", " (map name (sort (:pathom/inferred entry)))) ")"))))
+
+;; =============================================================================
+;; The pack
+;; =============================================================================
+
+(defn- wrapper-ops
+  "{macro-symbol op} for a project's own wrapper macros, from the pack's
+   options."
+  [opts]
+  (merge (zipmap (get-in opts [:pathom :resolver-macros]) (repeat :resolver))
+         (zipmap (get-in opts [:pathom :mutation-macros]) (repeat :mutation))))
+
+(defn- find-forms
+  "Each defresolver and defmutation call, and each call to a wrapper macro
+   the options name. A file's plain defs come along, as constants an
+   operation's options may name."
+  [analysis opts]
+  (let [wrappers (wrapper-ops opts)]
+    (concat
+     (for [u (:var-usages analysis)
+           :let [sym (symbol (str (:to u)) (str (:name u)))]
+           :when (or (and (operation-nses (:to u)) (operation-macros (:name u)))
+                     (contains? wrappers sym))]
+       (assoc (select-keys u [:filename :row :name-row :name-col]) :op (get wrappers sym)))
+     (for [d (:var-definitions analysis)
+           :when (= 'clojure.core/def (:defined-by d))]
+       {:filename (:filename d) :row (:row d) :name-row (:row d) :name-col (inc (:col d))
+        :const (:name d)}))))
+
+(defn- data?
+  "True when x is data a reader gives back as written: no symbols or lists."
+  [x]
+  (cond
+    (or (symbol? x) (seq? x)) false
+    (map? x) (every? (fn [[k v]] (and (data? k) (data? v))) x)
+    (coll? x) (every? data? x)
+    :else (or (nil? x) (keyword? x) (string? x) (number? x) (boolean? x))))
+
+(defn- read-forms [sites {:keys [form-at own-ns]} _opts]
+  (let [{consts true ops false} (group-by #(contains? % :const) sites)
+        consts (into {} (for [{:keys [const name-row name-col]} consts
+                              :let [form (form-at name-row name-col)
+                                    v (when (and (seq? form) (>= (count form) 3)) (last form))]
+                              :when (and (coll? v) (data? v))]
+                          [const v]))]
+    (vec (for [{:keys [row name-row name-col op]} ops]
+           (assoc (operation (form-at name-row name-col) {:own-ns own-ns :consts consts :op op})
+                  :row row :kind kind)))))
+
+(defn- checks
+  "All :info:
+   - :input-without-producer: a resolver needs a key that nothing produces,
+     no resolver and no other entity's contract. The query can still give it
+     as input (that is how a graph's entry points look); when nothing does,
+     the resolver is unreachable. When some operation's output is written as
+     code, :unread-outputs names them: any of them may produce the key;
+   - :operation-option-not-read: an input, params or output written as code
+     ((->> registry keys vec)), so its keys are unknown."
+  [{:keys [entities loc flow]}]
+  (let [produced (into #{} (mapcat #(:produces (flow (:entry (val %))))) entities)
+        unread (vec (sort (for [[id e] entities :when (get-in e [:entry :pathom/not-read :output])] id)))]
+    (concat
+     (for [[id e] (sort-by key entities)
+           :let [missing (vec (sort (remove produced (get-in e [:entry :pathom/input]))))]
+           :when (seq missing)]
+       (cond-> {:severity :info :problem :input-without-producer :dev-id id :keys missing :definition (loc e)}
+         (seq unread) (assoc :unread-outputs unread)))
+     (for [[id e] (sort-by key entities)
+           :let [options (get-in e [:entry :pathom/not-read])]
+           :when (seq options)]
+       {:severity :info :problem :operation-option-not-read :dev-id id :options (vec (sort options)) :definition (loc e)}))))
+
+(def pack
+  {:pack/id :pathom
+   :pack/config-keys #{:pathom}
+   :pack/kinds #{kind}
+   :pack/vocabulary #{"pathom"}
+   :pack/data-keys? false
+   :pack/dataflow dataflow
+   :pack/find find-forms
+   :pack/read read-forms
+   :pack/checks checks
+   :pack/describe (fn [entry] (when (:pathom/op entry) (summary-line entry)))})

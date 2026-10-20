@@ -16,6 +16,27 @@
 
 (def root "test/fixtures/source-packs")
 
+(def job-pack
+  "A project's own pack: the shop's defjob registry. Enabled by its
+   qualified symbol under :packs; a job reads the data keys :job/reads lists."
+  {:pack/id :jobs
+   :pack/kinds #{:job}
+   :pack/vocabulary #{"job"}
+   :pack/dataflow {:consumes [:job/reads]}
+   :pack/find (fn [analysis _opts]
+                (for [u (:var-usages analysis)
+                      :when (and (= 'shop.scheduler (:to u)) (= 'defjob (:name u)))]
+                  (select-keys u [:filename :row :name-row :name-col])))
+   :pack/read (fn [sites {:keys [form-at own-ns]} _opts]
+                (vec (for [{:keys [row name-row name-col]} sites
+                           :let [[_ nm opts] (form-at name-row name-col)]]
+                       {:row row :kind :job :dev-id (keyword own-ns (name nm)) :entry opts})))
+   :pack/describe (fn [entry] (when-let [s (:job/schedule entry)] (str "job  " s)))})
+
+(def pathom-again
+  "A pack claiming a kind the Pathom pack gives."
+  {:pack/id :pathom-again :pack/kinds #{:pathom} :pack/find (fn [_ _] []) :pack/read (fn [_ _ _] [])})
+
 (defn- problems [idx problem]
   (filter #(= problem (:problem %)) (index/check idx)))
 
@@ -24,7 +45,8 @@
         idx (index/build cfg)
         email (index/data-key idx :user/email)]
     (check "every s/def and registry entry is read"
-           (= {:read {:spec 6 :malli 2} :not-read 0} (:schema-defs (index/summary idx))))
+           (= {:spec {:read 6 :not-read 0} :malli {:read 2 :not-read 0}}
+              (select-keys (:packs (index/summary idx)) [:spec :malli])))
     (check "every entity a pack gives needs no :atlas/type"
            (empty? (problems idx :entity-without-type)))
     (check "no errors: a data key with only a privacy entry needs no :atlas/type"
@@ -39,7 +61,7 @@
            (and (= [:spec] (map :pack (:shape email)))
                 (= {:data/privacy :pii} (:props email))
                 (= [:shop.spec/user] (map :dev-id (:member-of email)))
-                (= [:fn/register-user :shop.resolvers/user-by-id] (map :dev-id (:producers email)))))
+                (= [:fn/register-user :shop.resolvers/order-buyer :shop.resolvers/user-by-id] (map :dev-id (:producers email)))))
     (check "a .cljc s/def is read with its reader conditional as :clj"
            (= "decimal?" (:form (first (:shape (index/data-key idx :order/total))))))
     (check "a registry's unqualified key (:map, overriding malli's own) is not a data key"
@@ -50,11 +72,14 @@
               (:entry (index/where idx :order/lines))))
 
     (check "every defresolver and defmutation is read, Pathom 3 and 2"
-           (= {:read 9 :not-read 1} (:operations (index/summary idx))))
+           (= {:read 10 :not-read 1} (:pathom (:packs (index/summary idx)))))
     (check "the one not read is the pco/defresolver inside the wrapper macro, whose name is ~name"
-           (= [["src/shop/connect.clj" 7]] (map (juxt :file :line) (problems idx :operation-not-read))))
+           (= [[:pathom "src/shop/connect.clj" 7]] (map (juxt :pack :file :line) (problems idx :pack-form-not-read))))
     (check "an option naming a def in the same file is read through it"
            (= [:user/id :user/name :user/email] (get-in (index/where idx :shop.resolvers/user-by-id) [:entry :pathom/output])))
+    (check "and inside a join"
+           (= [:order/buyer :user/id :user/name :user/email]
+              (get-in (index/where idx :shop.resolvers/order-buyer) [:entry :pathom/output])))
     (check "a project's own wrapper macro, named in :resolver-macros"
            (= #:pathom{:op :resolver :input [:product/id] :output [:product/price] :inferred #{:input :output}}
               (:entry (index/where idx :shop.wrapped/product-price))))
@@ -78,7 +103,7 @@
     (check "Pathom 2: a set input"
            (= [:product/id] (get-in (index/where idx :shop.resolvers2/product-name) [:entry :pathom/input])))
     (check "one data key across three registries: an EDN contract and a resolver produce it, a resolver consumes it, a spec shapes it"
-           (and (= [:fn/register-user :shop.resolvers/user-by-id] (map :dev-id (:producers email)))
+           (and (= [:fn/register-user :shop.resolvers/order-buyer :shop.resolvers/user-by-id] (map :dev-id (:producers email)))
                 (= [:fn/register-user :shop.resolvers/user-by-email] (map :dev-id (:consumers email)))))
     (check "resolver outputs count as producers, next to function contracts"
            (= [:fn/place-order :shop.resolvers/order-total :shop.resolvers/user-orders]
@@ -98,6 +123,23 @@
                      (map :dev-id (:consumers (index/data-key own :user/email))))
                   (empty? (:consumers (index/data-key idx :order/total))))))
 
+    (let [own (index/build (assoc-in cfg [:packs 'source-packs-smoke/job-pack] {}))]
+      (check "a project's own pack, named by its symbol, reads its own macro"
+             (= {:job/reads [:user/email :order/total] :job/schedule "0 3 * * *"}
+                (:entry (index/where own :shop.jobs/nightly-digest))))
+      (check "its :pack/dataflow makes the job a consumer next to functions and resolvers"
+             (= [:fn/register-user :shop.jobs/nightly-digest :shop.resolvers/user-by-email]
+                (map :dev-id (:consumers (index/data-key own :user/email)))))
+      (check "its entities need no :atlas/type, and it counts its reads"
+             (and (empty? (problems own :entity-without-type))
+                  (= {:read 1 :not-read 0} (:job (:packs (index/summary own))))))
+      (check "the hover uses its :pack/describe"
+             (str/includes? (:eldoc (hover/lookup own :shop.jobs/nightly-digest)) "job  0 3 * * *")))
+    (check "two packs giving the same kind are refused"
+           (= {:kinds [:pathom]}
+              (try (index/build (assoc-in cfg [:packs 'source-packs-smoke/pathom-again] {})) nil
+                   (catch clojure.lang.ExceptionInfo e (ex-data e)))))
+
     (check "data keys are not dependencies"
            (empty? (:depends-on (index/dependencies idx :fn/place-order))))
     (check "a typo in s/keys: a key with no spec of its own"
@@ -107,6 +149,7 @@
            (= [[:order/lines [:qty]]] (map (juxt :dev-id :keys) (problems idx :unqualified-schema-keys))))
     (check "a contract key no schema shapes"
            (= [[:fn/register-user [:user/phone]]
+               [:shop.resolvers/order-buyer [:order/buyer]]
                [:shop.resolvers/user-discount [:user/loyalty-tier]]
                [:shop.resolvers/user-orders [:user/orders]]
                [:shop.resolvers2/product-name [:product/name]]

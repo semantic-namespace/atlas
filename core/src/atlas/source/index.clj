@@ -27,7 +27,7 @@
 
 (def ^:private bb? (some? (System/getProperty "babashka.version")))
 
-(def cache-version 7)
+(def cache-version 8)
 
 ;; =============================================================================
 ;; Files
@@ -169,70 +169,88 @@
            (registration (call-at @lines name-row name-col own-ns aliases) row)))))
 
 ;; =============================================================================
-;; Schema pack: s/def calls and malli registries
+;; Packs
 ;; =============================================================================
+;;
+;; A pack reads one library's own registry, in place: clojure.spec and malli
+;; (atlas.source.pack.schema), Pathom (atlas.source.pack.pathom), or a
+;; project's own, named by its qualified symbol under :packs. A pack is a map;
+;; only :pack/find and :pack/read are required.
+;;
+;;   :pack/id               a keyword naming it
+;;   :pack/config-keys      the :packs keys that enable a built-in pack
+;;   :pack/kinds            the :kind of the sources it gives (one pack per kind)
+;;   :pack/vocabulary       the key namespaces its entries use
+;;   :pack/data-keys?       true when its entities are data keys (schemas)
+;;   :pack/dataflow         {:consumes [k ...] :produces [k ...]}: entry keys
+;;                          that list data keys
+;;   :pack/find             (fn [analysis opts]) → sites, each {:filename :row
+;;                          :name-row :name-col ...} found in clj-kondo's
+;;                          analysis; name-row/name-col is the symbol right
+;;                          after the form's opening paren
+;;   :pack/read             (fn [sites file opts]) → [{:row :kind :dev-id
+;;                          :entry} or {:row :kind :skipped reason}] for one
+;;                          file's sites; file is {:form-at (fn [row col])
+;;                          :own-ns :aliases}, form-at reading the form as data
+;;   :pack/checks           (fn [view]) → problems; view is {:entities
+;;                          :of-kinds :data-key? :loc :flow}
+;;   :pack/inline-data-keys (fn [entities]) → data keys its entities define
+;;                          inline, with no entity of their own
+;;   :pack/shape            (fn [entry kind]) → a data key's shape, as text
+;;   :pack/members          (fn [entry]) → the data keys a schema is made of
+;;   :pack/describe         (fn [entry]) → one line for an editor, or nil
+;;
+;; `opts` is atlas-source.edn's :packs map. What :pack/read returns is
+;; cached per file, so it must be data.
 
-(def ^:private spec-nses '#{clojure.spec.alpha cljs.spec.alpha})
+(def builtin-packs [schema/pack pathom/pack])
 
-(defn- schema-defs
-  "What the schema pack reads in `file`: each s/def call (clj-kondo usages,
-   once per position: a .cljc file reports each call per language) and each
-   var `registries` names, as [{:row :pack :dev-id :entry} or {:row :pack
-   :skipped reason}]."
-  [file spec-usages registry-defs own-ns aliases]
+(defn enabled-packs
+  "The packs `packs-config` (atlas-source.edn's :packs) enables: each
+   built-in pack one of whose :pack/config-keys it has, and each qualified
+   symbol in it, resolved to a project's own pack."
+  [packs-config]
+  (let [ks (set (keys packs-config))
+        own (for [k ks :when (qualified-symbol? k)]
+              (let [p (some-> (requiring-resolve k) deref)]
+                (when-not (and (map? p) (:pack/find p) (:pack/read p))
+                  (throw (ex-info "A pack is a map with :pack/find and :pack/read" {:pack k})))
+                p))
+        ps (vec (concat (filter #(some ks (:pack/config-keys %)) builtin-packs) (sort-by :pack/id own)))]
+    (when-let [dup (seq (for [[k n] (frequencies (mapcat :pack/kinds ps)) :when (> n 1)] k))]
+      (throw (ex-info "Two packs give sources of the same kind" {:kinds (vec dup)})))
+    ps))
+
+(defn- read-packs
+  "{pack-id [result ...]} for `file`: each pack's :pack/read over its sites
+   there, once per position (a .cljc file reports each form per language)."
+  [file found packs-config own-ns aliases]
   (let [lines (delay (str/split-lines (slurp file)))
-        opts {:read-cond :allow :features #{:clj}}]
-    (vec (concat
-          (for [{:keys [row name-row name-col]} (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) spec-usages))))]
-            (assoc (schema/spec-def (call-at @lines name-row name-col own-ns aliases opts))
-                   :row row :pack :spec))
-          (for [{:keys [row col]} (sort-by :row (map first (vals (group-by :row registry-defs))))
-                d (schema/malli-registry (call-at @lines row (inc col) own-ns aliases opts))]
-            (assoc d :row row :pack :malli))))))
-
-;; =============================================================================
-;; Pathom pack: defresolver and defmutation forms
-;; =============================================================================
-
-(defn- wrapper-ops
-  "{macro-symbol op} for a project's own macros that take defresolver's or
-   defmutation's arguments: :pathom {:resolver-macros [...] :mutation-macros
-   [...]} in atlas-source.edn."
-  [packs]
-  (merge (zipmap (get-in packs [:pathom :resolver-macros]) (repeat :resolver))
-         (zipmap (get-in packs [:pathom :mutation-macros]) (repeat :mutation))))
-
-(defn- operations
-  "What the Pathom pack reads in `file`: each defresolver and defmutation
-   call (or call to a wrapper macro named in `packs`), once per position, as
-   [{:row :pack :dev-id :entry} or {:row :pack :skipped reason}]."
-  [file usages defs packs own-ns aliases]
-  (let [lines (delay (str/split-lines (slurp file)))
-        opts {:read-cond :allow :features #{:clj}}
-        ;; defs whose value is data, which an operation's options may name
-        consts (into {} (for [{:keys [row col name]} defs
-                              :let [form (call-at @lines row (inc col) own-ns aliases opts)
-                                    v (when (and (seq? form) (>= (count form) 3)) (last form))]
-                              :when (and (coll? v) (literal? v))]
-                          [name v]))]
-    (vec (for [{:keys [row name-row name-col to name]} (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) usages))))]
-           (assoc (pathom/operation (call-at @lines name-row name-col own-ns aliases opts)
-                                    {:own-ns own-ns :consts consts
-                                     :op (get (wrapper-ops packs) (symbol (str to) (str name)))})
-                  :row row :pack pathom/kind)))))
-
-(def ^:private pack-kinds
-  "The :kind of every source a library pack produces."
-  (conj schema/kinds pathom/kind))
+        f {:own-ns own-ns :aliases aliases
+           :form-at (fn [row col] (call-at @lines row col own-ns aliases {:read-cond :allow :features #{:clj}}))}]
+    (into {} (for [[pack sites] found]
+               [(:pack/id pack)
+                (vec ((:pack/read pack)
+                      (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) sites))))
+                      f packs-config))]))))
 
 (defn- dataflow
   "Which entry keys list consumed and produced data keys: atlas-source.edn's
    :dataflow, plus what each enabled pack declares."
-  [{:keys [packs] :as config}]
-  (merge-with (comp vec distinct concat)
-              {:consumes [] :produces []}
-              (:dataflow config)
-              (when (contains? packs :pathom) pathom/dataflow)))
+  [config packs]
+  (apply merge-with (comp vec distinct concat)
+         {:consumes [] :produces []}
+         (:dataflow config)
+         (keep :pack/dataflow packs)))
+
+(defn- pack-kinds [idx] (set (mapcat :pack/kinds (:packs idx))))
+
+(defn- pack-of [idx kind] (first (filter #(contains? (:pack/kinds %) kind) (:packs idx))))
+
+(defn describe
+  "The line a pack gives an editor for `entry`, or nil."
+  [idx entry]
+  (some #(when-let [d (:pack/describe %)] (d entry)) (:packs idx)))
 
 ;; =============================================================================
 ;; Code (clj-kondo)
@@ -248,10 +266,9 @@
 
 (defn- analyse-code
   "{file {:vars [..] :calls [..] :keywords [..] :registrations [..]
-   :schemas [..]}} for `files`, the parts of clj-kondo's analysis the index
-   uses. `packs` is atlas-source.edn's :packs: the schema pack reads s/def
-   calls with :spec, and the registry vars :malli :registries names."
-  [files packs]
+   :pack-results {pack-id [..]}}} for `files`, the parts of clj-kondo's
+   analysis the index uses, and what each enabled pack reads there."
+  [files packs packs-config]
   (if (empty? files)
     {}
     (let [{:keys [analysis]} (@kondo {:lint (vec files)
@@ -272,32 +289,17 @@
                                #(into {} (for [{:keys [alias to]} %] [(str alias) (str to)])))
           regs (by-file :var-usages
                         (filter #(and (= 'atlas.registry (:to %)) (= 'register! (:name %)))))
-          specs (if (contains? packs :spec)
-                  (by-file :var-usages (filter #(and (spec-nses (:to %)) (= 'def (:name %)))))
-                  {})
-          ops (if (contains? packs :pathom)
-                (let [wrappers (wrapper-ops packs)]
-                  (by-file :var-usages (filter #(or (and (pathom/operation-nses (:to %)) (pathom/operation-macros (:name %)))
-                                                    (contains? wrappers (symbol (str (:to %)) (str (:name %))))))))
-                {})
-          plain-defs (if (contains? packs :pathom)
-                       (by-file :var-definitions (filter #(= 'clojure.core/def (:defined-by %))))
-                       {})
-          registries (set (get-in packs [:malli :registries]))
-          registry-defs (by-file :var-definitions
-                                 (filter #(contains? registries (symbol (str (:ns %)) (str (:name %))))))
+          found (vec (for [p packs] [p (group-by :filename ((:pack/find p) analysis packs-config))]))
           kws (by-file :keywords
                        (comp (filter #(and (:from-var %) (:ns %)))
                              (map #(select-keys % [:filename :from :from-var :ns :name :row]))))]
       (into {} (for [f files :let [f (canonical f)]]
                  [f {:vars (vec (get vars f)) :calls (vec (get calls f)) :keywords (vec (get kws f))
                      :registrations (registrations f (get regs f) (get own-ns f "user") (get aliases f {}))
-                     :schemas (if (or (get specs f) (get registry-defs f))
-                                (schema-defs f (get specs f) (get registry-defs f) (get own-ns f "user") (get aliases f {}))
-                                [])
-                     :operations (if (get ops f)
-                                   (operations f (get ops f) (get plain-defs f) packs (get own-ns f "user") (get aliases f {}))
-                                   [])}])))))
+                     :pack-results (let [here (for [[p by-file] found :let [sites (get by-file f)] :when (seq sites)] [p sites])]
+                                     (if (seq here)
+                                       (read-packs f here packs-config (get own-ns f "user") (get aliases f {}))
+                                       {}))}])))))
 
 ;; =============================================================================
 ;; Store (the record CI keeps of the evaluated registry)
@@ -383,7 +385,7 @@
     (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous))
              (= store-sha (get-in previous [:store :commit])))
       (assoc previous :analysed 0)
-      (build* config root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
+      (build* config (enabled-packs (:packs config)) root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
               (when store-sha
                 (if (= store-sha (get-in cached [:store :commit]))
                   (:store cached)
@@ -396,11 +398,11 @@
   (when path
     (try (edn/read-string (slurp path)) (catch Exception _ nil))))
 
-(defn- build* [config root cache cached stamps edn-stamps edn-files src-files runtime-file stored]
+(defn- build* [config packs root cache cached stamps edn-stamps edn-files src-files runtime-file stored]
   (let [fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
-                    (analyse-code stale (:packs config)))
+                    (analyse-code stale packs (:packs config)))
         ;; registry files: re-read only the ones that changed
         edn (into {} (for [f edn-files]
                        [f (if (= (edn-stamps f) (get-in cached [:edn-stamps f]))
@@ -417,12 +419,14 @@
                        {:keys [row dev-id entry dropped]} registrations :when dev-id]
                    {:label (str f ":" row) :file f :kind :register :dropped dropped
                     :lines {dev-id row} :entities {dev-id entry}})
-                 ;; schema pack: one source per s/def call or registry entry
-                 (for [[f {:keys [schemas operations]}] code
-                       {:keys [row pack dev-id entry]} (concat schemas operations) :when dev-id]
-                   {:label (str f ":" row ":" dev-id) :file f :kind pack
+                 ;; packs: one source per entry a pack reads
+                 (for [[f {:keys [pack-results]}] code
+                       [_ results] (sort-by key pack-results)
+                       {:keys [row kind dev-id entry]} results :when dev-id]
+                   {:label (str f ":" row ":" dev-id) :file f :kind kind
                     :lines {dev-id row} :entities {dev-id entry}}))
         by-label (into {} (map (juxt :label identity)) sources)
+        data-key-kinds (set (mapcat :pack/kinds (filter :pack/data-keys? packs)))
         merged (source/merge-sources (for [{:keys [label entities]} sources] {:source label :entities entities}))
         definition (fn [id label]
                      (let [{:keys [file kind lines dropped]} (by-label label)]
@@ -433,7 +437,7 @@
                               :let [defs (mapv #(definition id %) (source/sources-of (:provenance merged) id))
                                     primary (or (first (filter #(some #{:atlas/type} (:keys %)) defs))
                                                 ;; a data key: where its schema is written
-                                                (first (filter #(schema/kinds (:kind %)) defs))
+                                                (first (filter #(data-key-kinds (:kind %)) defs))
                                                 (first defs))]]
                           [id (assoc primary :entry entry :definitions defs)]))
         ;; the REPL snapshot fills gaps: only dev-ids no file defines
@@ -458,7 +462,8 @@
       (write-cache cache {:version cache-version :config config :stamps stamps :code code}))
     {:root (canonical root)
      :config config
-     :dataflow (dataflow config)
+     :packs packs
+     :dataflow (dataflow config packs)
      :stamps stamps
      :edn-stamps edn-stamps
      :edn edn
@@ -493,15 +498,16 @@
                       file (assoc :file (relative (:root idx) file) :line line))
     file (cond-> {:file (relative (:root idx) file) :line line}
            (= kind :register) (assoc :register! true)
-           (pack-kinds kind) (assoc :pack kind))
+           ((pack-kinds idx) kind) (assoc :pack kind))
     (contains? m :file) nil
     filename {:file (relative (:root idx) filename) :line row :end-line end-row :var (symbol (str ns) (str name))}))
 
-(defn- shaped?
-  "True when a schema pack gives the entity: it is a data key, whatever else
-   the sources say about it."
-  [e]
-  (boolean (some #(schema/kinds (:kind %)) (:definitions e))))
+(defn- data-key?
+  "True when a pack whose entities are data keys gives the entity: it is a
+   data key, whatever else the sources say about it."
+  [idx e]
+  (let [kinds (set (mapcat :pack/kinds (filter :pack/data-keys? (:packs idx))))]
+    (boolean (some #(contains? kinds (:kind %)) (:definitions e)))))
 
 (defn- references
   "[[prop dev-id] ...] for every registry entity an entry names in its props.
@@ -512,17 +518,21 @@
      (for [[k v] entry
            :when (not (#{:atlas/type :atlas/aspects} k))
            x (tree-seq coll? seq v)
-           :when (and (qualified-keyword? x) (contains? ids x) (not (shaped? (get ids x))))]
+           :when (and (qualified-keyword? x) (contains? ids x) (not (data-key? idx (get ids x))))]
        [k x]))))
 
-(defn- schema-entities [idx]
-  (filter #(shaped? (val %)) (:entities idx)))
+(defn- of-kinds
+  "The entities some source of one of `kinds` gives."
+  [idx kinds]
+  (filter (fn [[_ e]] (some #(contains? kinds (:kind %)) (:definitions e))) (:entities idx)))
 
-(defn- inline-shaped
-  "Data keys a malli :map gives a schema inline ([:product/id :uuid]), with
-   no registry entry of their own."
+(defn- data-key-entities [idx]
+  (filter #(data-key? idx (val %)) (:entities idx)))
+
+(defn- inline-data-keys
+  "Data keys the packs' entities define inline, with no entity of their own."
   [idx]
-  (into #{} (mapcat #(get-in (val %) [:entry :malli/keys])) (schema-entities idx)))
+  (into #{} (mapcat #(when-let [f (:pack/inline-data-keys %)] (f (of-kinds idx (:pack/kinds %))))) (:packs idx)))
 
 (defn- prop-named [entry n]
   (mapcat val (filter #(and (coll? (val %)) (= n (name (key %)))) entry)))
@@ -597,25 +607,29 @@
 
 (defn data-key
   "The entities producing (response) and consuming (context) data key `k`.
-   When a schema pack shapes it: :shape, each pack's form and where it is
-   written; :props, what other sources say about it (:data/privacy, say);
-   :member-of, the schemas it is a key of."
+   When a pack shapes it: :shape, each pack's form and where it is written;
+   :props, what sources other than the packs say about it (:data/privacy,
+   say); :member-of, the schemas it is a key of."
   [idx k]
   (let [rows (for [[id e] (sort-by key (:entities idx))
                    :let [{:keys [consumes produces]} (contract-keys idx (:entry e))]]
                {:dev-id id :produces? (contains? produces k) :consumes? (contains? consumes k)
                 :definition (loc idx e)})
         e (get-in idx [:entities k])
-        own (when (and e (shaped? e)) (:entry e))
-        member-of (vec (for [[id s] (sort-by key (schema-entities idx))
-                             :when (some #{k} (schema/member-keys (:entry s)))]
+        own (when (and e (data-key? idx e)) (:entry e))
+        vocabulary (into #{} (mapcat :pack/vocabulary) (:packs idx))
+        member-of (vec (for [[id s] (sort-by key (data-key-entities idx))
+                             :when (some (fn [p] (when-let [m (:pack/members p)] (some #{k} (m (:entry s)))))
+                                         (:packs idx))]
                          {:dev-id id :definition (loc idx s)}))]
     (cond-> {:data-key k
              :producers (vec (for [r rows :when (:produces? r)] (select-keys r [:dev-id :definition])))
              :consumers (vec (for [r rows :when (:consumes? r)] (select-keys r [:dev-id :definition])))}
-      own (assoc :shape (vec (for [d (:definitions e) :when (schema/kinds (:kind d))]
-                               (assoc (loc idx d) :form (get (schema/shapes own) (:kind d)))))
-                 :props (into (sorted-map) (remove #(#{"spec" "malli"} (namespace (key %)))) own))
+      own (assoc :shape (vec (for [d (:definitions e)
+                                   :let [p (pack-of idx (:kind d))]
+                                   :when (and p (:pack/data-keys? p))]
+                               (assoc (loc idx d) :form (when-let [f (:pack/shape p)] (f own (:kind d))))))
+                 :props (into (sorted-map) (remove #(vocabulary (namespace (key %)))) own))
       (seq member-of) (assoc :member-of member-of))))
 
 ;; =============================================================================
@@ -637,14 +651,13 @@
 (defn- keys-outside-contract
   "Data keys a linked var mentions that are neither in its own context or
    response nor in the response of an entity it names. Only keys that appear
-   in some entity's contract, or that a schema pack shapes, count as data
-   keys."
+   in some entity's contract, or that a pack shapes, count as data keys."
   [idx]
   (let [contracts (into {} (for [[id e] (:entities idx)] [id (contract-keys idx (:entry e))]))
         data-keys (-> #{}
                       (into (mapcat (fn [{:keys [consumes produces]}] (concat consumes produces))) (vals contracts))
-                      (into (map key) (schema-entities idx))
-                      (into (inline-shaped idx)))]
+                      (into (map key) (data-key-entities idx))
+                      (into (inline-data-keys idx)))]
     (for [[id [v]] (sort-by key (linked-vars idx))
           :when (contains? (:entities idx) id)
           :let [own (contracts id)
@@ -661,66 +674,21 @@
       {:severity :info :problem :keys-outside-contract :dev-id id :keys outside
        :impl (loc idx v)})))
 
-(defn- schema-problems
-  "What the schema pack notices, all :info:
-   - :schema-key-without-shape: an s/keys names a key with no spec of its
-     own. spec allows it (presence only), and it is how a typo looks;
-   - :unqualified-schema-keys: a malli :map with unqualified keys, which no
-     dataflow query can follow;
-   - :data-key-without-schema: keys in an entity's contract no pack shapes,
-     reported only once some pack shapes something;
-   - :schema-def-not-read: an s/def or registry the pack couldn't read."
+(defn- pack-problems
+  "Each enabled pack's :pack/checks, and the forms a pack found but couldn't
+   read (:pack-form-not-read, info)."
   [idx]
-  (let [schemas (schema-entities idx)
-        shaped (into (set (map key schemas)) (inline-shaped idx))]
+  (let [view {:entities (:entities idx)
+              :of-kinds #(of-kinds idx %)
+              :data-key? #(data-key? idx %)
+              :loc #(loc idx %)
+              :flow #(contract-keys idx %)}]
     (concat
-     (for [[id e] (sort-by key schemas)
-           :let [{:spec/keys [req opt req-un opt-un]} (:entry e)
-                 missing (vec (sort (remove shaped (concat req opt req-un opt-un))))]
-           :when (seq missing)]
-       {:severity :info :problem :schema-key-without-shape :dev-id id :keys missing :definition (loc idx e)})
-     (for [[id e] (sort-by key schemas)
-           :let [ks (get-in e [:entry :malli/unqualified-keys])]
-           :when (seq ks)]
-       {:severity :info :problem :unqualified-schema-keys :dev-id id :keys ks :definition (loc idx e)})
-     (when (seq schemas)
-       (for [[id e] (sort-by key (:entities idx))
-             :when (not (shaped? e))
-             :let [{:keys [consumes produces]} (contract-keys idx (:entry e))
-                   missing (vec (sort (remove shaped (into consumes produces))))]
-             :when (seq missing)]
-         {:severity :info :problem :data-key-without-schema :dev-id id :keys missing :definition (loc idx e)}))
-     (for [[f {:keys [schemas]}] (sort-by key (:code idx))
-           {:keys [row skipped pack]} schemas :when skipped]
-       {:severity :info :problem :schema-def-not-read :pack pack :reason skipped
-        :file (relative (:root idx) f) :line row}))))
-
-(defn- pathom-problems
-  "What the Pathom pack notices, all :info:
-   - :input-without-producer: a resolver needs a key that nothing produces,
-     no resolver and no other entity's contract. The query can still give it
-     as input; when nothing does, the resolver is unreachable. When some
-     operation's output is written as code, :unread-outputs names them: any
-     of them may produce the key;
-   - :operation-option-not-read: an input, params or output written as code
-     ((->> registry keys vec)), so its keys are unknown;
-   - :operation-not-read: a defresolver or defmutation the pack couldn't read."
-  [idx]
-  (let [produced (into #{} (mapcat #(:produces (contract-keys idx (:entry (val %))))) (:entities idx))
-        unread (vec (sort (for [[id e] (:entities idx) :when (get-in e [:entry :pathom/not-read :output])] id)))]
-    (concat
-     (for [[id e] (sort-by key (:entities idx))
-           :let [missing (vec (sort (remove produced (get-in e [:entry :pathom/input]))))]
-           :when (seq missing)]
-       (cond-> {:severity :info :problem :input-without-producer :dev-id id :keys missing :definition (loc idx e)}
-         (seq unread) (assoc :unread-outputs unread)))
-     (for [[id e] (sort-by key (:entities idx))
-           :let [options (get-in e [:entry :pathom/not-read])]
-           :when (seq options)]
-       {:severity :info :problem :operation-option-not-read :dev-id id :options (vec (sort options)) :definition (loc idx e)})
-     (for [[f {:keys [operations]}] (sort-by key (:code idx))
-           {:keys [row skipped]} operations :when skipped]
-       {:severity :info :problem :operation-not-read :pack pathom/kind :reason skipped
+     (mapcat #(when-let [c (:pack/checks %)] (c view)) (:packs idx))
+     (for [[f {:keys [pack-results]}] (sort-by key (:code idx))
+           [_ results] (sort-by key pack-results)
+           {:keys [row kind skipped]} results :when skipped]
+       {:severity :info :problem :pack-form-not-read :pack kind :reason skipped
         :file (relative (:root idx) f) :line row}))))
 
 (defn check
@@ -737,16 +705,15 @@
                 ;; entity from register! or the REPL has it inline or at runtime
                 :when (and (or (not= :entity-without-impl (:problem p))
                                (every? #(= :edn (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))
-                           ;; a data key a schema pack shapes needs no :atlas/type
+                           ;; what a pack gives is in the library's vocabulary: no :atlas/type
                            (not (and (= :entity-without-type (:problem p))
-                                     (some #(pack-kinds (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))))]
+                                     (some #((pack-kinds idx) (:kind %)) (get-in idx [:entities (:dev-id p) :definitions])))))]
             (cond-> (assoc (dissoc p :var) :severity :error)
               (:var p) (assoc :impl (loc idx (:var p)))
               (get-in idx [:entities (:dev-id p)]) (assoc :definition (loc idx (get-in idx [:entities (:dev-id p)])))))
           (undeclared-calls idx)
           (keys-outside-contract idx)
-          (schema-problems idx)
-          (pathom-problems idx)
+          (pack-problems idx)
           (for [[f {:keys [registrations]}] (sort-by key (:code idx))
                 {:keys [row skipped]} registrations :when skipped]
             {:severity :info :problem :register-call-not-read :reason skipped
@@ -758,10 +725,9 @@
     {:entities (count (:entities idx))
      :entities-by-source (into (sorted-map) kinds)
      :register-calls {:read (count (filter :dev-id regs)) :not-read (count (filter :skipped regs))}
-     :operations (let [os (mapcat :operations (vals (:code idx)))]
-                   {:read (count (filter :dev-id os)) :not-read (count (filter :skipped os))})
-     :schema-defs (let [ds (mapcat :schemas (vals (:code idx)))]
-                    {:read (frequencies (map :pack (filter :dev-id ds))) :not-read (count (filter :skipped ds))})
+     :packs (let [rs (for [{:keys [pack-results]} (vals (:code idx)) [_ results] pack-results r results] r)]
+              (into (sorted-map) (for [[kind rs] (group-by :kind rs)]
+                                   [kind {:read (count (filter :dev-id rs)) :not-read (count (filter :skipped rs))}])))
      :runtime-snapshot (:runtime idx)
      :store (some-> (:store idx) (select-keys [:commit :date :filled]))
      :source-files (count (:code idx))

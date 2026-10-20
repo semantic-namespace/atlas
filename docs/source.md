@@ -157,7 +157,7 @@ data keys are not listed as dependencies.
 - `:unqualified-schema-keys`: a malli `:map` with unqualified keys, which no
   dataflow query can follow;
 - `:data-key-without-schema`: keys in an entity's contract that no schema shapes;
-- `:schema-def-not-read`: an `s/def` or registry the pack couldn't read.
+- `:pack-form-not-read`: an `s/def` or registry the pack couldn't read (any pack reports what it couldn't read this way, with `:pack` and `:reason`).
 
 Keys a schema shapes also count as data keys for `:keys-outside-contract`, so
 code that reads a spec'd key its contract doesn't name is reported even when
@@ -211,7 +211,7 @@ adds, as info:
   unreachable. When some operation's output couldn't be read,
   `:unread-outputs` names those operations: any of them may produce the key;
 - `:operation-option-not-read`: an input, params or output written as code;
-- `:operation-not-read`: a form the pack couldn't read.
+- `:pack-form-not-read` with `:pack :pathom`: a form the pack couldn't read.
 
 On two open-source Pathom 3 apps:
 
@@ -238,6 +238,56 @@ Each pack adds its own (the Pathom pack: `:pathom/input`, `:pathom/params`,
 `:pathom/output`). With this, a nightly job written as
 `{:job/nightly-digest {:job/reads [:user/email]}}` is a consumer of
 `:user/email` without any atlas type.
+
+## Writing a pack
+
+A pack is a map; the built-in ones are `atlas.source.pack.schema/pack` and
+`atlas.source.pack.pathom/pack`. A project enables its own by naming the var
+under `:packs`, with its options as the value:
+
+```clojure
+{:packs {:spec {} app.source/job-pack {}}}
+```
+
+Only `:pack/find` and `:pack/read` are required. This one reads a project's
+own `defjob` macro, and makes a job a consumer of the data keys it lists:
+
+```clojure
+(def job-pack
+  {:pack/id :jobs
+   :pack/kinds #{:job}                       ; the :kind of its sources; one pack per kind
+   :pack/vocabulary #{"job"}                 ; the key namespaces its entries use
+   :pack/dataflow {:consumes [:job/reads]}
+   ;; where its forms are, from clj-kondo's analysis
+   :pack/find (fn [analysis opts]
+                (for [u (:var-usages analysis)
+                      :when (and (= 'app.scheduler (:to u)) (= 'defjob (:name u)))]
+                  (select-keys u [:filename :row :name-row :name-col])))
+   ;; one file's forms, read as data; what it returns is cached, so it is data
+   :pack/read (fn [sites {:keys [form-at own-ns]} opts]
+                (vec (for [{:keys [row name-row name-col]} sites
+                           :let [[_ nm job] (form-at name-row name-col)]]
+                       {:row row :kind :job :dev-id (keyword own-ns (name nm)) :entry job})))
+   :pack/describe (fn [entry] (some->> (:job/schedule entry) (str "job  ")))})
+```
+
+The optional keys:
+
+| Key | What it gives |
+|---|---|
+| `:pack/config-keys` | for a built-in pack, the `:packs` keys that enable it |
+| `:pack/data-keys?` | true when its entities are data keys, as a schema's are |
+| `:pack/checks` | `(fn [view])` → problems; `view` has `:entities`, `:of-kinds`, `:data-key?`, `:loc` and `:flow` |
+| `:pack/inline-data-keys` | `(fn [entities])` → data keys its entities define with no entity of their own |
+| `:pack/shape`, `:pack/members` | a data key's shape as text, and the keys a schema is made of |
+| `:pack/describe` | one line for the hover |
+
+`form-at` reads the form whose head symbol is at a row and column, with
+`::keywords` resolved and `.cljc` reader conditionals read as `:clj`. A
+result is `{:row :kind :dev-id :entry}`, or `{:row :kind :skipped reason}` when
+the form can't be read; the index reports those as `:pack-form-not-read` and
+counts each kind's reads in `bb source summary`. Two packs giving the same
+`:kind` are refused. `bb source-packs-smoke` runs a pack like this one.
 
 ## What only the running code knows: REPL snapshot and store
 

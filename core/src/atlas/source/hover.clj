@@ -15,7 +15,6 @@
 
    Locations are absolute paths, so an editor can open them directly."
   (:require [atlas.source.index :as index]
-            [atlas.source.pack.pathom :as pathom]
             [clojure.java.io :as io]
             [clojure.string :as str]))
 
@@ -63,10 +62,10 @@
         deps (prop-ending entry "deps")
         fields (prop-ending entry "fields")
         n-used (+ (count (:referenced-by u)) (count (:called-from u)))
-        contract (cond
-                   (:pathom/op entry) (pathom/summary-line entry)
-                   (or context response) (str "[" (few context 4) "] → [" (few response 4) "]")
-                   fields (str "fields [" (few fields 5) "]"))
+        contract (or (index/describe idx entry)
+                     (cond
+                       (or context response) (str "[" (few context 4) "] → [" (few response 4) "]")
+                       fields (str "fields [" (few fields 5) "]")))
         line2 (str/join "  ·  " (remove nil? [contract
                                                (when (seq deps) (str "deps " (few deps 3)))
                                                (str "used by " n-used)

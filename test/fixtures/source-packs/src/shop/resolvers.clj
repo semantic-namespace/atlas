@@ -35,6 +35,11 @@
   {::pco/output user-properties}
   {})
 
+;; and inside a join
+(pco/defresolver order-buyer [{:order/keys [id]}]
+  {::pco/output [{:order/buyer user-properties}]}
+  {})
+
 ;; an option written as code: its keys are not guessed
 (pco/defresolver seed [{:keys [seed]}]
   {::pco/output (vec (keys seed))}
