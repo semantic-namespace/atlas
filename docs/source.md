@@ -453,6 +453,14 @@ Output is EDN, or JSON with `--json`. The directories come from
 
 ### In any project: the `atlas-source` command
 
+![Installing atlas-source with bbin, asking it about a project's integrant system, and Flymake and hover in Emacs](images/atlas-source-demo.gif)
+
+*Install with bbin; a four-line `atlas-source.edn`; `summary` and `uses`
+from the shell; then in Emacs, Flymake underlines a ref no config defines
+and a key used outside its function's contract, and the hover describes a
+component and a data key. Recorded in a terminal (tmux, rendered with agg)
+on a copy of `test/fixtures/source-packs`.*
+
 Install it once with [bbin](https://github.com/babashka/bbin):
 
 ```sh
