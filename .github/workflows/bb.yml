@@ -35,3 +35,4 @@ jobs:
           bb: 1.12.212
           cli: 1.12.0.1530
       - run: bb upgrade-check-smoke
+      - run: bb pathom-snapshot-check

@@ -1,6 +1,7 @@
 (ns shop.resolvers
   "Pathom 3 resolvers and a mutation over the shop's data keys."
-  (:require [com.wsscode.pathom3.connect.operation :as pco]))
+  ;; a :refer names a var: never a form the pack reads
+  (:require [com.wsscode.pathom3.connect.operation :as pco :refer [defresolver]]))
 
 ;; input and output declared
 (pco/defresolver user-by-email [{:user/keys [email]}]
@@ -35,7 +36,21 @@
   {::pco/output user-properties}
   {})
 
-;; an option written as code: its keys are not guessed
-(pco/defresolver seed [{:keys [seed]}]
-  {::pco/output (vec (keys seed))}
-  seed)
+;; and inside a join
+(pco/defresolver order-buyer [{:order/keys [id]}]
+  {::pco/output [{:order/buyer user-properties}]}
+  {})
+
+;; an option written as code: its keys are not guessed statically, and the
+;; running environment knows them
+(def seed-keys [:user/loyalty-tier])
+
+(pco/defresolver seed []
+  {::pco/output (vec seed-keys)}
+  {:user/loyalty-tier :gold})
+
+;; a resolver built as a value: only the running environment has it
+(def list-price
+  (pco/resolver 'shop.resolvers/list-price
+    {::pco/input [:product/price] ::pco/output [:product/list-price]}
+    (fn [_ {:product/keys [price]}] {:product/list-price (* 2 price)})))

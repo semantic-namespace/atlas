@@ -3,10 +3,12 @@
    shapes, read from clojure.spec `s/def` calls and from malli registries,
    as data. Nothing is loaded or evaluated.
 
-   atlas.source.index finds the forms (clj-kondo locates each `s/def` call
-   and each registry var named in atlas-source.edn) and reads them; this
-   namespace turns a read form into entries. Each entry is keyed by the
-   data key it shapes, in the pack's own vocabulary:
+   `pack` is what atlas.source.index runs (see the Packs section of
+   atlas.source.index): enabled by :spec and :malli {:registries [ns/var ...]}
+   under atlas-source.edn's :packs, it finds each `s/def` call and each named
+   registry var in clj-kondo's analysis, and turns each read form into
+   entries. Each entry is keyed by the data key it shapes, in the pack's own
+   vocabulary:
 
      :spec/form   the spec as written           :malli/form   the schema as written
      :spec/req    s/keys :req keys              :malli/keys   qualified keys of its :map children
@@ -148,3 +150,76 @@
   [entry]
   (vec (distinct (concat (:spec/req entry) (:spec/opt entry) (:spec/req-un entry) (:spec/opt-un entry)
                          (:malli/keys entry)))))
+
+;; =============================================================================
+;; The pack
+;; =============================================================================
+
+(def ^:private spec-nses '#{clojure.spec.alpha cljs.spec.alpha})
+
+(defn- find-forms
+  "Each s/def call, and each def of a registry var :malli :registries names."
+  [analysis opts]
+  (concat
+   (when (contains? opts :spec)
+     (for [u (:var-usages analysis)
+           :when (and (spec-nses (:to u)) (= 'def (:name u)))]
+       (assoc (select-keys u [:filename :row :name-row :name-col]) :kind :spec)))
+   (let [registries (set (get-in opts [:malli :registries]))]
+     (for [d (:var-definitions analysis)
+           :when (contains? registries (symbol (str (:ns d)) (str (:name d))))]
+       {:filename (:filename d) :row (:row d) :name-row (:row d) :name-col (inc (:col d)) :kind :malli}))))
+
+(defn- read-forms [sites {:keys [form-at]} _opts]
+  (vec (for [{:keys [kind row name-row name-col]} sites
+             r (let [form (form-at name-row name-col)]
+                 (if (= kind :spec) [(spec-def form)] (malli-registry form)))]
+         (assoc r :row row :kind kind))))
+
+(defn- inline-data-keys
+  "Data keys a malli :map gives a schema inline ([:product/id :uuid]), with
+   no registry entry of their own."
+  [schema-entities]
+  (into #{} (mapcat #(get-in (val %) [:entry :malli/keys])) schema-entities))
+
+(defn- checks
+  "All :info:
+   - :schema-key-without-shape: an s/keys names a key with no spec of its
+     own. spec allows it (presence only), and it is how a typo looks;
+   - :unqualified-schema-keys: a malli :map with unqualified keys, which no
+     dataflow query can follow;
+   - :data-key-without-schema: keys in an entity's contract no schema shapes,
+     reported only once some schema shapes something."
+  [{:keys [entities of-kinds data-key? loc flow]}]
+  (let [schemas (sort-by key (of-kinds kinds))
+        shaped (into (set (map key schemas)) (inline-data-keys schemas))]
+    (concat
+     (for [[id e] schemas
+           :let [{:spec/keys [req opt req-un opt-un]} (:entry e)
+                 missing (vec (sort (remove shaped (concat req opt req-un opt-un))))]
+           :when (seq missing)]
+       {:severity :info :problem :schema-key-without-shape :dev-id id :keys missing :definition (loc e)})
+     (for [[id e] schemas
+           :let [ks (get-in e [:entry :malli/unqualified-keys])]
+           :when (seq ks)]
+       {:severity :info :problem :unqualified-schema-keys :dev-id id :keys ks :definition (loc e)})
+     (when (seq schemas)
+       (for [[id e] (sort-by key entities)
+             :when (not (data-key? e))
+             :let [{:keys [consumes produces]} (flow (:entry e))
+                   missing (vec (sort (remove shaped (into consumes produces))))]
+             :when (seq missing)]
+         {:severity :info :problem :data-key-without-schema :dev-id id :keys missing :definition (loc e)})))))
+
+(def pack
+  {:pack/id :schema
+   :pack/config-keys #{:spec :malli}
+   :pack/kinds kinds
+   :pack/vocabulary #{"spec" "malli"}
+   :pack/data-keys? true
+   :pack/find find-forms
+   :pack/read read-forms
+   :pack/inline-data-keys inline-data-keys
+   :pack/shape (fn [entry kind] (get (shapes entry) kind))
+   :pack/members member-keys
+   :pack/checks checks})

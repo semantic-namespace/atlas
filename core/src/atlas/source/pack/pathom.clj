@@ -18,9 +18,14 @@
    argument, and an undeclared output from a map literal returned last. So
    does this pack. Pathom 2 declares both.
 
-   `dataflow` is what this pack tells the index: which of these keys list
-   data consumed and produced."
-  (:require [clojure.string :as str]))
+   `pack` is what atlas.source.index runs (see the Packs section of
+   atlas.source.index), enabled by :pathom under atlas-source.edn's :packs.
+   A project's own macros that take defresolver's or defmutation's arguments
+   are read when named: :pathom {:resolver-macros [app.connect/defresolver]
+   :mutation-macros [...]}. Its :pack/dataflow tells the index which of
+   these keys list data consumed and produced."
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]))
 
 (def kind :pathom)
 
@@ -98,16 +103,15 @@
 
 (defn- resolve-names
   "`opts` with each symbol that names a def in `consts` replaced by its
-   value: {::pco/output concept-properties}, where (def concept-properties
-   [...]) is written in the same file."
+   value, wherever it is: {::pco/output concept-properties}, or inside a
+   join, [{:concept/descriptions description-properties}], where (def
+   concept-properties [...]) is written in the same file."
   [opts consts own-ns]
-  (let [value (fn [s] (when (and (symbol? s) (or (nil? (namespace s)) (= own-ns (namespace s))))
-                        (get consts (symbol (name s)))))]
-    (into {} (for [[k v] opts]
-               [k (cond
-                    (value v) (value v)
-                    (coll? v) (into (empty v) (map #(or (value %) %)) v)
-                    :else v)]))))
+  (walk/postwalk (fn [x]
+                   (or (when (and (symbol? x) (or (nil? (namespace x)) (= own-ns (namespace x))))
+                         (get consts (symbol (name x))))
+                       x))
+                 opts))
 
 (defn- computed?
   "True when an option's value is code rather than data: a call, or a name
@@ -125,8 +129,10 @@
    An option written as code, like (->> registry keys vec), is not guessed:
    :pathom/not-read lists it, and its keys are left out."
   [form {:keys [own-ns consts op]}]
-  (if (= form :unreadable)
-    {:skipped "not readable as data"}
+  (cond
+    (= form :unreadable) {:skipped "not readable as data"}
+    (not (seq? form)) {:skipped "not a call: the name is used as a value, or quoted"}
+    :else
     (let [op (or op (if (= "defmutation" (name (first form))) :mutation :resolver))
           {nm :name args :args opts :opts body :body} (update (parts form) :opts #(when % (resolve-names % consts own-ns)))
           input-arg (when (vector? args) (last args))
@@ -159,3 +165,165 @@
        "] → [" (str/join " " (map pr-str (:pathom/output entry))) "]"
        (when (seq (:pathom/inferred entry))
          (str "  (inferred: " (str/join ", " (map name (sort (:pathom/inferred entry)))) ")"))))
+
+;; =============================================================================
+;; The running environment
+;; =============================================================================
+
+(defn- runtime-entry [op config]
+  (let [in (option config (if (= op :mutation) "params" "input"))
+        out (option config "output")]
+    (cond-> {:pathom/op op}
+      (seq in) (assoc (if (= op :mutation) :pathom/params :pathom/input) (eql-keys in))
+      (seq out) (assoc :pathom/output (eql-keys out)))))
+
+(defn runtime-entities
+  "{dev-id entry} for every operation the running Pathom environments in
+   `envs` have registered, in the pack's vocabulary. An env is what Pathom
+   3's pci/register returns, or Pathom 2's indexes (what pc/register
+   returns, or a map holding them under ::pc/indexes). Read by keyword:
+   Pathom need not be on atlas's classpath."
+  [envs]
+  (into (sorted-map)
+        (for [env envs
+              :let [p2 (or (:com.wsscode.pathom.connect/indexes env) env)]
+              [op index config-of] [[:resolver (:com.wsscode.pathom3.connect.indexes/index-resolvers env) :config]
+                                    [:mutation (:com.wsscode.pathom3.connect.indexes/index-mutations env) :config]
+                                    [:resolver (:com.wsscode.pathom.connect/index-resolvers p2) identity]
+                                    [:mutation (:com.wsscode.pathom.connect/index-mutations p2) identity]]
+              [sym operation] index
+              :when (qualified-symbol? sym)]
+          [(keyword (namespace sym) (name sym)) (runtime-entry op (config-of operation))])))
+
+(defn snapshot!
+  "Writes what the running Pathom environments in `envs` have registered to
+   `file` (default .atlas/packs/pathom.edn), for atlas.source.index to read
+   beside what it reads from the code. Call it from the app's REPL, or after
+   the env is built:
+
+     (atlas.source.pack.pathom/snapshot! [env])"
+  ([envs] (snapshot! envs {}))
+  ([envs {:keys [file] :or {file ".atlas/packs/pathom.edn"}}]
+   (let [f (java.io.File. ^String file)]
+     (some-> (.getParentFile f) .mkdirs)
+     (spit f (with-out-str
+               (prn {:pack :pathom
+                     :written (System/currentTimeMillis)
+                     :entities (runtime-entities envs)})))
+     file)))
+
+(def ^:private slots {:input :pathom/input :params :pathom/params :output :pathom/output})
+
+(defn- runtime-fill
+  "`entry` with the slots static reading couldn't read (:pathom/not-read)
+   taken from the running environment's `runtime` entry, and listed under
+   :pathom/from-runtime."
+  [entry runtime]
+  (let [unread (:pathom/not-read entry)
+        filled (filter #(contains? runtime (slots %)) unread)
+        left (reduce disj (set unread) filled)]
+    (if (empty? filled)
+      entry
+      (cond-> (-> (reduce (fn [e k] (assoc e (slots k) (get runtime (slots k)))) entry filled)
+                  (assoc :pathom/from-runtime (set filled))
+                  (dissoc :pathom/not-read))
+        (seq left) (assoc :pathom/not-read left)))))
+
+(defn- runtime-diff
+  "{slot {:only-in-code [...] :only-at-runtime [...]}} where what the code
+   says and what the running environment registered differ; nil when they
+   agree."
+  [entry runtime]
+  (not-empty
+   (into (sorted-map)
+         (for [k (vals slots)
+               :let [code (set (get entry k)) live (set (get runtime k))]
+               :when (not= code live)]
+           [k (cond-> {}
+                (seq (remove live code)) (assoc :only-in-code (vec (sort (remove live code))))
+                (seq (remove code live)) (assoc :only-at-runtime (vec (sort (remove code live)))))]))))
+
+;; =============================================================================
+;; The pack
+;; =============================================================================
+
+(defn- wrapper-ops
+  "{macro-symbol op} for a project's own wrapper macros, from the pack's
+   options."
+  [opts]
+  (merge (zipmap (get-in opts [:pathom :resolver-macros]) (repeat :resolver))
+         (zipmap (get-in opts [:pathom :mutation-macros]) (repeat :mutation))))
+
+(defn- find-forms
+  "Each defresolver and defmutation call, and each call to a wrapper macro
+   the options name. A file's plain defs come along, as constants an
+   operation's options may name."
+  [analysis opts]
+  (let [wrappers (wrapper-ops opts)]
+    (concat
+     (for [u (:var-usages analysis)
+           :let [sym (symbol (str (:to u)) (str (:name u)))]
+           :when (or (and (operation-nses (:to u)) (operation-macros (:name u)))
+                     (contains? wrappers sym))]
+       (assoc (select-keys u [:filename :row :name-row :name-col]) :op (get wrappers sym)))
+     (for [d (:var-definitions analysis)
+           :when (= 'clojure.core/def (:defined-by d))]
+       {:filename (:filename d) :row (:row d) :name-row (:row d) :name-col (inc (:col d))
+        :const (:name d)}))))
+
+(defn- data?
+  "True when x is data a reader gives back as written: no symbols or lists."
+  [x]
+  (cond
+    (or (symbol? x) (seq? x)) false
+    (map? x) (every? (fn [[k v]] (and (data? k) (data? v))) x)
+    (coll? x) (every? data? x)
+    :else (or (nil? x) (keyword? x) (string? x) (number? x) (boolean? x))))
+
+(defn- read-forms [sites {:keys [form-at own-ns]} _opts]
+  (let [{consts true ops false} (group-by #(contains? % :const) sites)
+        consts (into {} (for [{:keys [const name-row name-col]} consts
+                              :let [form (form-at name-row name-col)
+                                    v (when (and (seq? form) (>= (count form) 3)) (last form))]
+                              :when (and (coll? v) (data? v))]
+                          [const v]))]
+    (vec (for [{:keys [row name-row name-col op]} ops]
+           (assoc (operation (form-at name-row name-col) {:own-ns own-ns :consts consts :op op})
+                  :row row :kind kind)))))
+
+(defn- checks
+  "All :info:
+   - :input-without-producer: a resolver needs a key that nothing produces,
+     no resolver and no other entity's contract. The query can still give it
+     as input (that is how a graph's entry points look); when nothing does,
+     the resolver is unreachable. When some operation's output is written as
+     code, :unread-outputs names them: any of them may produce the key;
+   - :operation-option-not-read: an input, params or output written as code
+     ((->> registry keys vec)), so its keys are unknown."
+  [{:keys [entities loc flow]}]
+  (let [produced (into #{} (mapcat #(:produces (flow (:entry (val %))))) entities)
+        unread (vec (sort (for [[id e] entities :when (get-in e [:entry :pathom/not-read :output])] id)))]
+    (concat
+     (for [[id e] (sort-by key entities)
+           :let [missing (vec (sort (remove produced (get-in e [:entry :pathom/input]))))]
+           :when (seq missing)]
+       (cond-> {:severity :info :problem :input-without-producer :dev-id id :keys missing :definition (loc e)}
+         (seq unread) (assoc :unread-outputs unread)))
+     (for [[id e] (sort-by key entities)
+           :let [options (get-in e [:entry :pathom/not-read])]
+           :when (seq options)]
+       {:severity :info :problem :operation-option-not-read :dev-id id :options (vec (sort options)) :definition (loc e)}))))
+
+(def pack
+  {:pack/id :pathom
+   :pack/config-keys #{:pathom}
+   :pack/kinds #{kind}
+   :pack/vocabulary #{"pathom"}
+   :pack/data-keys? false
+   :pack/dataflow dataflow
+   :pack/find find-forms
+   :pack/read read-forms
+   :pack/checks checks
+   :pack/runtime-fill runtime-fill
+   :pack/runtime-diff runtime-diff
+   :pack/describe (fn [entry] (when (:pathom/op entry) (summary-line entry)))})
