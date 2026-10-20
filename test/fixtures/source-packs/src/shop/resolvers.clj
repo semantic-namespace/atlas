@@ -1,6 +1,7 @@
 (ns shop.resolvers
   "Pathom 3 resolvers and a mutation over the shop's data keys."
-  (:require [com.wsscode.pathom3.connect.operation :as pco]))
+  ;; a :refer names a var: never a form the pack reads
+  (:require [com.wsscode.pathom3.connect.operation :as pco :refer [defresolver]]))
 
 ;; input and output declared
 (pco/defresolver user-by-email [{:user/keys [email]}]

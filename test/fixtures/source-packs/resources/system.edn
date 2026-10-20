@@ -1,0 +1,16 @@
+;; The shop's integrant system, with aero's #env.
+{:shop/db {:url #env DATABASE_URL}
+
+ :shop/mailer {:api-key #env MAILER_KEY}
+
+ [:shop/http-server :shop.http/main]
+ {:port 3000 :handler #ig/ref :shop/handler}
+
+ ;; nothing configures :shop/metrics
+ :shop/handler {:db #ig/ref :shop/db :mailer #ig/ref :shop/mailer :metrics #ig/ref :shop/metrics}
+
+ ;; a derive call in shop.system makes it a ::const
+ :shop/base-path "/api"
+
+ ;; deliberately the same keyword as a Pathom resolver
+ :shop.resolvers/seed {}}

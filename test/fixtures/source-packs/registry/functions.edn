@@ -3,7 +3,7 @@
   :atlas/aspects #{:domain/user :operation/create}
   :execution-function/context [:user/email :user/name :user/phone]
   :execution-function/response [:user/id :user/email]
-  :execution-function/deps #{}}
+  :execution-function/deps #{:shop/mailer}}
 
  :fn/place-order
  {:atlas/type :atlas/execution-function

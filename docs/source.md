@@ -261,6 +261,78 @@ elsewhere. With it, the index:
 agrees with the code on all nine operations both have. `bb pathom-snapshot-check`
 rebuilds it from real Pathom and fails if the operations change.
 
+## A system's components: the integrant pack
+
+```clojure
+:integrant {:configs ["resources/config"]   ; config files, or directories of .edn
+            :vars [app.system/config]       ; configs written in code
+            :provided [:duct/logger]}       ; keys something else adds, like a duct module
+```
+
+Each config key becomes a component, in the pack's own vocabulary:
+
+```clojure
+:shop/db
+#:integrant{:config-in ["resources/system.edn:2" "resources/system.test.edn:2"]
+            :env ["DATABASE_URL"]           ; aero's #env, from any branch
+            :varies true                    ; the files configure it differently
+            :init-key true :halt-key! true} ; the defmethods the code has
+```
+
+- `:integrant/refs` comes from `#ig/ref` and `#ig/refset` anywhere in the
+  config, `(ig/ref k)` in a config written in code. Refs are references, so
+  `bb source uses :shop/db` lists the components that need it, and an EDN
+  contract naming a component in its deps links a function to it.
+- Config files are read all at once: a key that a `.mock.edn` or test variant
+  configures too is one component with every file listed, not a conflict.
+  Tags no reader knows (`#env`, `#or`, `#profile`) are kept as data.
+- A composite key is named by the keyword no other config key uses, the others
+  being what it derives from (`:integrant/derives`): `:app/web` in duct's
+  `[:duct/server :app/web]`, and `:password.slack/webhook` in
+  `[:password.slack/webhook :app/rotable-password]` when every password shares
+  the second. Projects write them both ways round. When the config doesn't single
+  one out, the last keyword is the name.
+- A duct profile key (`:duct.profile/base {...}`) holds components, each read
+  as one with `:integrant/profiles`.
+- `(derive child parent)` calls are read in files that use integrant
+  (`:integrant/isa`): there they build component hierarchies, while elsewhere
+  `derive` also builds hierarchies of exceptions and the like.
+- `defmethod`s of integrant's multimethods (`init-key`, `halt-key!`,
+  `pre-init-spec`…) are read from the form, so `::keywords` get the file's
+  namespace. clj-kondo's own dispatch string gives them the wrong one.
+
+`check` adds:
+
+- `:ref-to-undefined` (warning): a ref to a key no config read defines,
+  directly, as a composite's parent or by `derive`, and not `:provided`;
+- `:init-key-without-config` (info): an `init-key` for a key nothing configures
+  or derives from: unused, or configured somewhere not read.
+
+On real systems:
+
+| | Read | What was left |
+|---|---|---|
+| a production app, 18 config files | 409 components, defmethods and derives | 16 `init-key`s no config read configures; of the four checked, two are configured nowhere in the repo, one only in tests, one in code |
+| [Swirrl/datahost-prototypes](https://github.com/Swirrl/datahost-prototypes), two services | 55 | none from integrant |
+| [walkable-server/realworld-fulcro](https://github.com/walkable-server/realworld-fulcro) (duct and Pathom) | 27 components, 16 resolvers and mutations | `:duct/logger`, which duct's logging module adds, declared with `:provided` |
+
+Those systems shaped the pack. Each of these was found on one of them:
+
+- composite keys written name-first;
+- `::keyword` dispatch values;
+- duct profiles;
+- `derive` used to share an `init-key`;
+- a `:refer` of a pack's macro.
+
+## One id, two packs
+
+Data keys are global: a spec and a malli schema shaping `:user/email` are one
+entity. A spec under a component's own key, as integrant systems often have, is
+that component's shape: the entity stays a component, with `:spec/form` beside
+its `:integrant/*` keys. Two packs that declare things giving one id (a Pathom
+resolver and an integrant component, say) are two things under one name, and
+`check` reports `:id-in-several-packs` (warning).
+
 ## Which keys carry data: `:dataflow`
 
 The index knows an entry consumes or produces data keys in two ways: from props
@@ -286,7 +358,8 @@ under `:packs`, with its options as the value:
 {:packs {:spec {} app.source/job-pack {}}}
 ```
 
-Only `:pack/find` and `:pack/read` are required. This one reads a project's
+A pack needs `:pack/find` and `:pack/read` (forms in code), or
+`:pack/data-files` and `:pack/read-data` (data files), or both. This one reads a project's
 own `defjob` macro, and makes a job a consumer of the data keys it lists:
 
 ```clojure
@@ -318,14 +391,16 @@ The optional keys:
 | `:pack/inline-data-keys` | `(fn [entities])` → data keys its entities define with no entity of their own |
 | `:pack/shape`, `:pack/members` | a data key's shape as text, and the keys a schema is made of |
 | `:pack/describe` | one line for the hover |
+| `:pack/data-files`, `:pack/read-data` | a pack that reads data files rather than code: `(fn [opts])` gives paths (files, or directories of `.edn`), and `(fn [files opts])` reads all of them at once, so a key several files define can be one result. `atlas.source.read/keyed-lines` reads EDN with each key's line, keeping unknown tags |
 | `:pack/runtime-fill`, `:pack/runtime-diff` | its runtime half: `(fn [entry runtime])`, filling what static reading couldn't read, and saying where code and the running process disagree. The process writes `{:pack id :written ms :entities {...}}` to `.atlas/packs/<id>.edn` (or the pack's `:snapshot` option) |
 
 `form-at` reads the form whose head symbol is at a row and column, with
 `::keywords` resolved and `.cljc` reader conditionals read as `:clj`. A
 result is `{:row :kind :dev-id :entry}`, or `{:row :kind :skipped reason}` when
 the form can't be read; the index reports those as `:pack-form-not-read` and
-counts each kind's reads in `bb source summary`. Two packs giving the same
-`:kind` are refused. `bb source-packs-smoke` runs a pack like this one.
+counts each kind's reads in `bb source summary`. A pack that throws on a
+file is reported the same way, for that file. Two packs giving the same
+`:kind` are refused; a `:refer` in an `ns` form is never handed to a pack. `bb source-packs-smoke` runs a pack like this one.
 
 ## What only the running code knows: REPL snapshot and store
 

@@ -16,14 +16,15 @@
    classpath)."
   (:require [atlas.registry :as registry]
             [atlas.source :as source]
+            [atlas.source.pack.integrant :as integrant]
             [atlas.source.pack.pathom :as pathom]
             [atlas.source.pack.schema :as schema]
+            [atlas.source.read :as read]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str])
-  (:import (java.io File StringReader)
-           (clojure.lang LineNumberingPushbackReader)))
+  (:import (java.io File StringReader)))
 
 (def ^:private bb? (some? (System/getProperty "babashka.version")))
 
@@ -61,35 +62,10 @@
 ;; Registry files
 ;; =============================================================================
 
-(defn- read-keyed-lines
-  "[[k v line] ...] for the top-level map in `text`, `line` being where k is
-   written. The reader keeps no lines on maps, so the map is read one key and
-   value at a time, noting the line before each key."
-  [text]
-  (let [r (LineNumberingPushbackReader. (StringReader. text))
-        skip (fn [] (loop []
-                      (let [c (.read r)]
-                        (cond
-                          (= c -1) c
-                          (or (Character/isWhitespace c) (= c (int \,))) (recur)
-                          (= c (int \;)) (do (while (not (#{-1 (int \newline)} (.read r)))) (recur))
-                          :else c))))]
-    (binding [*read-eval* false]
-      (when (= (int \{) (skip))
-        (loop [acc []]
-          (let [c (skip)]
-            (if (or (= c -1) (= c (int \})))
-              acc
-              (do (.unread r c)
-                  (let [line (.getLineNumber r)
-                        k (read r)
-                        v (read r)]
-                    (recur (conj acc [k v line])))))))))))
-
 (defn read-registry-file
   "{dev-id {:entry entry :file path :line n}} for one EDN registry file."
   [path]
-  (let [entries (read-keyed-lines (slurp path))]
+  (let [entries (read/keyed-lines (slurp path))]
     (when (nil? entries)
       (throw (ex-info "A registry file must hold a map of dev-id to entry" {:file path})))
     (into {} (for [[id entry line] entries]
@@ -191,14 +167,23 @@
 ;;   :pack/read             (fn [sites file opts]) → [{:row :kind :dev-id
 ;;                          :entry} or {:row :kind :skipped reason}] for one
 ;;                          file's sites; file is {:form-at (fn [row col])
-;;                          :own-ns :aliases}, form-at reading the form as data
+;;                          :read (fn [text]) :own-ns :aliases}, form-at reading
+;;                          the form at a position as data, read reading text
+;;                          with the file's ::keywords resolved
 ;;   :pack/checks           (fn [view]) → problems; view is {:entities
-;;                          :of-kinds :data-key? :loc :flow}
+;;                          :of-kinds :data-key? :loc :flow :opts}
 ;;   :pack/inline-data-keys (fn [entities]) → data keys its entities define
 ;;                          inline, with no entity of their own
 ;;   :pack/shape            (fn [entry kind]) → a data key's shape, as text
 ;;   :pack/members          (fn [entry]) → the data keys a schema is made of
 ;;   :pack/describe         (fn [entry]) → one line for an editor, or nil
+;;   :pack/data-files       (fn [opts]) → paths under the root, files or
+;;                          directories of .edn, that the pack reads as data
+;;   :pack/read-data        (fn [files opts]) → results as :pack/read gives,
+;;                          each with its :file; files is [{:file :path :text}],
+;;                          all of them at once, so a key several files define
+;;                          can be one result (atlas.source.read/keyed-lines
+;;                          reads them with each key's line)
 ;;   :pack/runtime-fill     (fn [entry runtime]) → entry with what static reading
 ;;                          couldn't read taken from the running process's entry
 ;;   :pack/runtime-diff     (fn [entry runtime]) → where code and the running
@@ -211,9 +196,10 @@
 ;; read, adds what only the process has, and checks where they disagree.
 ;;
 ;; `opts` is atlas-source.edn's :packs map. What :pack/read returns is
-;; cached per file, so it must be data.
+;; cached per file, so it must be data. A pack needs :pack/find and
+;; :pack/read, or :pack/data-files and :pack/read-data, or both.
 
-(def builtin-packs [schema/pack pathom/pack])
+(def builtin-packs [schema/pack pathom/pack integrant/pack])
 
 (defn enabled-packs
   "The packs `packs-config` (atlas-source.edn's :packs) enables: each
@@ -223,8 +209,9 @@
   (let [ks (set (keys packs-config))
         own (for [k ks :when (qualified-symbol? k)]
               (let [p (some-> (requiring-resolve k) deref)]
-                (when-not (and (map? p) (:pack/find p) (:pack/read p))
-                  (throw (ex-info "A pack is a map with :pack/find and :pack/read" {:pack k})))
+                (when-not (and (map? p) (or (and (:pack/find p) (:pack/read p))
+                                            (and (:pack/data-files p) (:pack/read-data p))))
+                  (throw (ex-info "A pack is a map with :pack/find and :pack/read, or :pack/data-files and :pack/read-data" {:pack k})))
                 (update p :pack/config-keys (fnil conj #{}) k)))
         ps (vec (concat (filter #(some ks (:pack/config-keys %)) builtin-packs) (sort-by :pack/id own)))]
     (when-let [dup (seq (for [[k n] (frequencies (mapcat :pack/kinds ps)) :when (> n 1)] k))]
@@ -236,13 +223,18 @@
    there, once per position (a .cljc file reports each form per language)."
   [file found packs-config own-ns aliases]
   (let [lines (delay (str/split-lines (slurp file)))
+        opts {:read-cond :allow :features #{:clj}}
         f {:own-ns own-ns :aliases aliases
-           :form-at (fn [row col] (call-at @lines row col own-ns aliases {:read-cond :allow :features #{:clj}}))}]
-    (into {} (for [[pack sites] found]
+           :form-at (fn [row col] (call-at @lines row col own-ns aliases opts))
+           :read (fn [text] (binding [*read-eval* false] (read-string opts (resolve-keywords text own-ns aliases))))}]
+    (into {} (for [[pack sites] found
+                   :let [sites (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) sites))))]]
                [(:pack/id pack)
-                (vec ((:pack/read pack)
-                      (sort-by :row (map first (vals (group-by (juxt :name-row :name-col) sites))))
-                      f packs-config))]))))
+                ;; a pack that fails on a file costs that file, not the index
+                (try (vec ((:pack/read pack) sites f packs-config))
+                     (catch Exception ex
+                       [{:row (:row (first sites)) :kind (first (sort (:pack/kinds pack)))
+                         :skipped (str "the pack failed reading this file: " (ex-message ex))}]))]))))
 
 (defn- dataflow
   "Which entry keys list consumed and produced data keys: atlas-source.edn's
@@ -259,6 +251,16 @@
   [root packs-config pack]
   (under root (or (some #(get-in packs-config [% :snapshot]) (:pack/config-keys pack))
                   (str ".atlas/packs/" (name (:pack/id pack)) ".edn"))))
+
+(defn- pack-data-files
+  "[[pack [canonical-path ...]] ...] for the packs that read data files."
+  [root packs-config packs]
+  (vec (for [p packs :when (:pack/data-files p)]
+         [p (vec (distinct (for [d ((:pack/data-files p) packs-config)
+                                 :let [f (under root d)]
+                                 path (cond (.isDirectory f) (files-under root [d] [".edn"])
+                                            (.isFile f) [(canonical f)])]
+                             path)))])))
 
 (defn- read-snapshots
   "[{:pack-id :kind :file :written :entities}] for each enabled pack whose
@@ -320,7 +322,9 @@
                                #(into {} (for [{:keys [alias to]} %] [(str alias) (str to)])))
           regs (by-file :var-usages
                         (filter #(and (= 'atlas.registry (:to %)) (= 'register! (:name %)))))
-          found (vec (for [p packs] [p (group-by :filename ((:pack/find p) analysis packs-config))]))
+          ;; a :refer in an ns form names a var; it is never a form to read
+          for-packs (update analysis :var-usages #(remove :refer %))
+          found (vec (for [p packs :when (:pack/find p)] [p (group-by :filename ((:pack/find p) for-packs packs-config))]))
           kws (by-file :keywords
                        (comp (filter #(and (:from-var %) (:ns %)))
                              (map #(select-keys % [:filename :from :from-var :ns :name :row]))))]
@@ -413,12 +417,15 @@
                  cache (read-cache cache config))
         packs (enabled-packs (:packs config))
         stamps (into {} (map (juxt identity mtime)) src-files)
+        data-files (pack-data-files root (:packs config) packs)
         edn-stamps (into {} (map (juxt identity mtime))
-                         (concat edn-files (for [p packs :let [f (snapshot-file root (:packs config) p)] :when (.isFile f)] (canonical f))))]
+                         (concat edn-files
+                                 (for [p packs :let [f (snapshot-file root (:packs config) p)] :when (.isFile f)] (canonical f))
+                                 (mapcat second data-files)))]
     (if (and previous (identical? cached previous) (= stamps (:stamps previous)) (= edn-stamps (:edn-stamps previous))
              (= store-sha (get-in previous [:store :commit])))
       (assoc previous :analysed 0)
-      (build* config packs root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
+      (build* config packs data-files root cache cached stamps edn-stamps (remove #{runtime-file} edn-files) src-files runtime-file
               (when store-sha
                 (if (= store-sha (get-in cached [:store :commit]))
                   (:store cached)
@@ -431,7 +438,7 @@
   (when path
     (try (edn/read-string (slurp path)) (catch Exception _ nil))))
 
-(defn- build* [config packs root cache cached stamps edn-stamps edn-files src-files runtime-file stored]
+(defn- build* [config packs data-files root cache cached stamps edn-stamps edn-files src-files runtime-file stored]
   (let [fresh? #(and (= (stamps %) (get-in cached [:stamps %])) (contains? (:code cached) %))
         stale (remove fresh? src-files)
         code (merge (select-keys (:code cached) (filter fresh? src-files))
@@ -443,6 +450,14 @@
                             (try {:located (read-registry-file f)}
                                  (catch Exception ex
                                    {:problem {:problem :unreadable-registry-file :file (relative root f) :message (ex-message ex)}})))]))
+        ;; packs reading data files: all of a pack's files at once
+        data-results (vec (for [[p files] data-files
+                                :let [fs (vec (for [f files] {:file f :path (relative root f) :text (slurp f)}))]
+                                r (try ((:pack/read-data p) fs (:packs config))
+                                       (catch Exception ex
+                                         [{:file (first files) :row 1 :kind (first (sort (:pack/kinds p)))
+                                           :skipped (str "the pack failed reading its files: " (ex-message ex))}]))]
+                            r))
         ;; sources: each registry file, and each register! call written as data
         sources (concat
                  (for [[f {:keys [located]}] edn :when located]
@@ -452,11 +467,15 @@
                        {:keys [row dev-id entry dropped]} registrations :when dev-id]
                    {:label (str f ":" row) :file f :kind :register :dropped dropped
                     :lines {dev-id row} :entities {dev-id entry}})
-                 ;; packs: one source per entry a pack reads
-                 (for [[f {:keys [pack-results]}] code
-                       [_ results] (sort-by key pack-results)
-                       {:keys [row kind dev-id entry]} results :when dev-id]
-                   {:label (str f ":" row ":" dev-id) :file f :kind kind
+                 ;; packs: one source per entry a pack reads, from code or data files
+                 (for [{:keys [file row kind dev-id entry]}
+                       (concat (for [[f {:keys [pack-results]}] code
+                                     [_ results] (sort-by key pack-results)
+                                     r results]
+                                 (assoc r :file f))
+                               data-results)
+                       :when dev-id]
+                   {:label (str file ":" row ":" dev-id) :file file :kind kind
                     :lines {dev-id row} :entities {dev-id entry}}))
         by-label (into {} (map (juxt :label identity)) sources)
         data-key-kinds (set (mapcat :pack/kinds (filter :pack/data-keys? packs)))
@@ -524,6 +543,7 @@
      :analysed (count stale)
      :runtime (when snapshot {:file runtime-file :written (:written snapshot) :filled (count runtime)})
      :pack-snapshots (mapv #(-> % (dissoc :entities) (assoc :ids (set (keys (:entities %))))) snapshots)
+     :pack-data-results data-results
      :read-problems (concat (keep :problem (vals edn))
                             (for [c (:conflicts merged)]
                               (update c :values (fn [vs] (mapv (fn [v] (update v :sources #(mapv (fn [l] (let [{:keys [file lines]} (by-label l)]
@@ -557,11 +577,15 @@
     filename {:file (relative (:root idx) filename) :line row :end-line end-row :var (symbol (str ns) (str name))}))
 
 (defn- data-key?
-  "True when a pack whose entities are data keys gives the entity: it is a
-   data key, whatever else the sources say about it."
+  "True when a pack whose entities are data keys gives the entity, and no
+   pack of declared things does: a spec under a component's own key (as
+   integrant configs are often specced) shapes the component, which stays a
+   component."
   [idx e]
-  (let [kinds (set (mapcat :pack/kinds (filter :pack/data-keys? (:packs idx))))]
-    (boolean (some #(contains? kinds (:kind %)) (:definitions e)))))
+  (let [{data true declared false} (group-by #(boolean (:pack/data-keys? %)) (:packs idx))
+        kinds-of #(set (mapcat :pack/kinds %))
+        given (set (map :kind (:definitions e)))]
+    (boolean (and (some (kinds-of data) given) (not (some (kinds-of declared) given))))))
 
 (defn- references
   "[[prop dev-id] ...] for every registry entity an entry names in its props.
@@ -728,6 +752,21 @@
       {:severity :info :problem :keys-outside-contract :dev-id id :keys outside
        :impl (loc idx v)})))
 
+(defn- identity-problems
+  "One id that two packs of declared things give (:id-in-several-packs,
+   warning): a resolver and a component sharing a keyword are two things
+   under one name. Schemas don't count: data keys are global, so a spec and
+   a malli schema shaping one key are one entity, and a spec under a
+   component's key is that component's shape."
+  [idx]
+  (let [kind->pack (into {} (for [p (:packs idx) k (:pack/kinds p)] [k p]))]
+    (for [[id e] (sort-by key (:entities idx))
+          :let [packs (distinct (keep #(kind->pack (:kind %)) (remove :runtime (:definitions e))))]
+          :when (> (count (remove :pack/data-keys? packs)) 1)]
+      {:severity :warning :problem :id-in-several-packs :dev-id id
+       :packs (vec (sort (map :pack/id packs)))
+       :definitions (vec (for [d (:definitions e) :when (and (kind->pack (:kind d)) (not (:runtime d)))] (loc idx d)))})))
+
 (defn- runtime-problems
   "Where a pack's runtime snapshot and the code differ:
    - :runtime-disagrees (warning): the pack's :pack/runtime-diff between what
@@ -767,17 +806,22 @@
    code differ."
   [idx]
   (let [view {:entities (:entities idx)
+              :opts (get-in idx [:config :packs])
               :of-kinds #(of-kinds idx %)
               :data-key? #(data-key? idx %)
               :loc #(loc idx %)
               :flow #(contract-keys idx %)}]
     (concat
      (mapcat #(when-let [c (:pack/checks %)] (c view)) (:packs idx))
-     (for [[f {:keys [pack-results]}] (sort-by key (:code idx))
-           [_ results] (sort-by key pack-results)
-           {:keys [row kind skipped]} results :when skipped]
+     (for [{:keys [file row kind skipped]} (concat (for [[f {:keys [pack-results]}] (sort-by key (:code idx))
+                                                         [_ results] (sort-by key pack-results)
+                                                         r results]
+                                                     (assoc r :file f))
+                                                   (:pack-data-results idx))
+           :when skipped]
        {:severity :info :problem :pack-form-not-read :pack kind :reason skipped
-        :file (relative (:root idx) f) :line row})
+        :file (relative (:root idx) file) :line row})
+     (identity-problems idx)
      (runtime-problems idx))))
 
 (defn check
@@ -814,7 +858,8 @@
     {:entities (count (:entities idx))
      :entities-by-source (into (sorted-map) kinds)
      :register-calls {:read (count (filter :dev-id regs)) :not-read (count (filter :skipped regs))}
-     :packs (let [rs (for [{:keys [pack-results]} (vals (:code idx)) [_ results] pack-results r results] r)]
+     :packs (let [rs (concat (for [{:keys [pack-results]} (vals (:code idx)) [_ results] pack-results r results] r)
+                             (:pack-data-results idx))]
               (into (sorted-map) (for [[kind rs] (group-by :kind rs)]
                                    [kind {:read (count (filter :dev-id rs)) :not-read (count (filter :skipped rs))}])))
      :runtime-snapshot (:runtime idx)

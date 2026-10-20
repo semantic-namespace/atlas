@@ -1,0 +1,3 @@
+;; duct's layout: the components inside a profile key.
+{:duct.profile/base
+ {:shop/cache {:ttl 60}}}
