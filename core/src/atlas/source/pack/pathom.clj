@@ -129,8 +129,10 @@
    An option written as code, like (->> registry keys vec), is not guessed:
    :pathom/not-read lists it, and its keys are left out."
   [form {:keys [own-ns consts op]}]
-  (if (= form :unreadable)
-    {:skipped "not readable as data"}
+  (cond
+    (= form :unreadable) {:skipped "not readable as data"}
+    (not (seq? form)) {:skipped "not a call: the name is used as a value, or quoted"}
+    :else
     (let [op (or op (if (= "defmutation" (name (first form))) :mutation :resolver))
           {nm :name args :args opts :opts body :body} (update (parts form) :opts #(when % (resolve-names % consts own-ns)))
           input-arg (when (vector? args) (last args))

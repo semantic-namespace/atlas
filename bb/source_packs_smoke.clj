@@ -38,6 +38,19 @@
   "A pack claiming a kind the Pathom pack gives."
   {:pack/id :pathom-again :pack/kinds #{:pathom} :pack/find (fn [_ _] []) :pack/read (fn [_ _ _] [])})
 
+(defn- pathom-part
+  "An entry's :pathom/* keys: :shop.resolvers/seed is also, deliberately,
+   an integrant key."
+  [entry]
+  (into {} (filter #(= "pathom" (namespace (key %)))) entry))
+
+(def broken-pack
+  "A project's pack that fails on every file it finds."
+  {:pack/id :broken :pack/kinds #{:broken}
+   :pack/find (fn [analysis _] (for [u (:var-usages analysis) :when (= 'defjob (:name u))]
+                                 (select-keys u [:filename :row :name-row :name-col])))
+   :pack/read (fn [_ _ _] (throw (ex-info "boom" {})))})
+
 (defn- problems [idx problem]
   (filter #(= problem (:problem %)) (index/check idx)))
 
@@ -48,7 +61,7 @@
         idx (index/build cfg)
         email (index/data-key idx :user/email)]
     (check "every s/def and registry entry is read"
-           (= {:spec {:read 6 :not-read 0} :malli {:read 2 :not-read 0}}
+           (= {:spec {:read 7 :not-read 0} :malli {:read 2 :not-read 0}}
               (select-keys (:packs (index/summary idx)) [:spec :malli])))
     (check "every entity a pack gives needs no :atlas/type"
            (empty? (problems idx :entity-without-type)))
@@ -87,7 +100,7 @@
            (= #:pathom{:op :resolver :input [:product/id] :output [:product/price] :inferred #{:input :output}}
               (:entry (index/where idx :shop.wrapped/product-price))))
     (check "an option written as code is not guessed, and check says so"
-           (and (= #:pathom{:op :resolver :not-read #{:output}} (:entry (index/where idx :shop.resolvers/seed)))
+           (and (= #:pathom{:op :resolver :not-read #{:output}} (pathom-part (:entry (index/where idx :shop.resolvers/seed))))
                 (= [[:shop.resolvers/seed [:output]]] (map (juxt :dev-id :options) (problems idx :operation-option-not-read)))))
     (check "an unproduced input names the outputs that couldn't be read, which may produce it"
            (every? #(= [:shop.resolvers/seed] (:unread-outputs %)) (problems idx :input-without-producer)))
@@ -143,6 +156,48 @@
               (try (index/build (assoc-in cfg [:packs 'source-packs-smoke/pathom-again] {})) nil
                    (catch clojure.lang.ExceptionInfo e (ex-data e)))))
 
+    ;; ---- integrant: resources/*.edn and shop.system
+    (let [ig #(:entry (index/where idx %))
+          ig-part #(into {} (filter (fn [[k _]] (= "integrant" (namespace k)))) (ig %))]
+      (check "every config component, defmethod and derive is read"
+             (= {:read 13 :not-read 0} (:integrant (:packs (index/summary idx)))))
+      (check "a component's refs, from #ig/ref, nested in its config"
+             (= [:shop/db :shop/mailer :shop/metrics] (:integrant/refs (ig :shop/handler))))
+      (check "variant files configuring one key: one entity, every file listed, :varies"
+             (= #:integrant{:config-in ["resources/system.edn:2" "resources/system.test.edn:2"]
+                            :env ["DATABASE_URL"] :varies true :init-key true :halt-key! true}
+                (ig-part :shop/db)))
+      (check "a composite key, named by the keyword no other key uses, deriving from the rest"
+             (= [:shop/http-server] (:integrant/derives (ig :shop.http/main))))
+      (check "a duct profile's components"
+             (= [:duct.profile/base] (:integrant/profiles (ig :shop/cache))))
+      (check "a ::keyword defmethod, with the file's namespace"
+             (true? (:integrant/init-key (ig :shop.system/const))))
+      (check "a derive call in a file that uses integrant"
+             (= [:shop.system/const] (:integrant/isa (ig :shop/base-path))))
+      (check "a ref to a key no config defines"
+             (= [[:shop/handler [:shop/metrics]]] (map (juxt :dev-id :keys) (problems idx :ref-to-undefined))))
+      (check ":provided lists keys something else adds"
+             (empty? (problems (index/build (assoc-in cfg [:packs :integrant :provided] [:shop/metrics])) :ref-to-undefined)))
+      (check "an init-key for a key no config has; a composite's parent and a derived-from key count as configured"
+             (= [:shop.system/unused] (map :dev-id (problems idx :init-key-without-config))))
+      (check "a component an EDN contract depends on"
+             (= [:shop/mailer] (map :dev-id (:depends-on (index/dependencies idx :fn/register-user)))))
+      (check "a spec under a component's key is its shape, not a second thing: no collision, still a dependency"
+             (and (= "map?" (:spec/form (ig :shop/mailer)))
+                  (not-any? #(= :shop/mailer (:dev-id %)) (problems idx :id-in-several-packs))))
+      (check "one keyword two packs declare things under: a collision"
+             (= [[:shop.resolvers/seed [:integrant :pathom]]] (map (juxt :dev-id :packs) (problems idx :id-in-several-packs))))
+      (check "who refers to a component"
+             (= [:shop.http/main] (map :dev-id (:referenced-by (index/uses idx :shop/handler)))))
+      (check "hover: a component's methods, configs and env"
+             (str/includes? (:eldoc (hover/lookup idx :shop/db)) "component  refs 0  ·  halt-key! init-key  ·  in 2 configs, varies  ·  env DATABASE_URL")))
+    (check "a :refer of a pack's macro is not read as a form"
+           (not-any? #(= "src/shop/resolvers.clj" (:file %)) (problems idx :pack-form-not-read)))
+    (check "a pack that throws costs its files, not the index"
+           (let [b (index/build (assoc-in cfg [:packs 'source-packs-smoke/broken-pack] {}))]
+             (some #(and (= :broken (:pack %)) (str/includes? (:reason %) "boom")) (problems b :pack-form-not-read))))
+
     (check "data keys are not dependencies"
            (empty? (:depends-on (index/dependencies idx :fn/place-order))))
     (check "a typo in s/keys: a key with no spec of its own"
@@ -183,7 +238,7 @@
              (empty? (problems rt :runtime-disagrees)))
       (check "an output written as code is filled from the running environment"
              (= #:pathom{:op :resolver :output [:user/loyalty-tier] :from-runtime #{:output}}
-                (:entry (index/where rt :shop.resolvers/seed))))
+                (pathom-part (:entry (index/where rt :shop.resolvers/seed)))))
       (check "so the input it produces is no longer unproduced, and nothing is left unread"
              (and (not-any? #(= :shop.resolvers/user-discount (:dev-id %)) (problems rt :input-without-producer))
                   (empty? (problems rt :operation-option-not-read))
