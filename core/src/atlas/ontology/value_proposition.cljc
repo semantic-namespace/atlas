@@ -85,7 +85,12 @@
  :invariant/value-proposition-has-pattern
  :atlas/invariant
  #{:meta/value-proposition-has-pattern}
- {:invariant/fn
+ {:invariant/rule {:doc "A value proposition implements a business pattern that exists"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/value-proposition}}
+                   :require [{:not {:in {:value-proposition/implements-pattern #{nil}}}}
+                             {:resolves :value-proposition/implements-pattern}]}
+  :invariant/fn
   (fn []
     (let [violations (for [vp-id (all-value-propositions)
                            :let [props   (entity/props-for vp-id)

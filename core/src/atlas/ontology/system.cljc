@@ -80,7 +80,11 @@
  :invariant/system-delivers-valid-vps
  :atlas/invariant
  #{:meta/system-delivers-valid-vps}
- {:invariant/fn
+ {:invariant/rule {:doc "What a system delivers exists"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/system}}
+                   :require [{:resolves :system/delivers}]}
+  :invariant/fn
   (fn []
     (let [violations (for [sys-id (all-systems)
                            :let   [props    (entity/props-for sys-id)
@@ -100,7 +104,11 @@
  :invariant/value-proposition-wired-to-system
  :atlas/invariant
  #{:meta/value-proposition-wired-to-system}
- {:invariant/fn
+ {:invariant/rule {:doc "A value proposition is delivered by a system"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/value-proposition}}
+                   :require [{:referenced-by {:system/delivers {:some {:= {:atlas/type :atlas/system}}}}}]}
+  :invariant/fn
   (fn []
     (let [delivered (into #{}
                           (mapcat #(:system/delivers (entity/props-for %)))

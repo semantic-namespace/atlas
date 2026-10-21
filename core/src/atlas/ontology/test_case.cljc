@@ -104,7 +104,11 @@
  :invariant/test-case-target-exists
  :atlas/invariant
  #{:meta/test-case-target-exists}
- {:invariant/fn
+ {:invariant/rule {:doc "A test case's :test-case/target exists"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/test-case}}
+                   :require [{:resolves :test-case/target}]}
+  :invariant/fn
   (fn []
     (let [test-cases (user-test-cases)
           violations (for [tc-id test-cases

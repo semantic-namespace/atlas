@@ -151,7 +151,13 @@
  :invariant/shapeup-bet-pitch-exists
  :atlas/invariant
  #{:meta/shapeup-bet-pitch-check}
- {:invariant/fn
+ {:invariant/rule {:doc "A bet's :shapeup/parent-pitch exists"
+                   :severity :warning
+                   :when {:or [{:= {:atlas/type :atlas/shapeup-bet}} {:= {:atlas/aspects :atlas/shapeup-bet}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :shapeup/parent-pitch}]}
+  :invariant/fn
   (fn []
     (let [violations (for [bet-id (entity/all-with-aspect :atlas/shapeup-bet)
                            :let   [pitch-id (:shapeup/parent-pitch (entity/props-for bet-id))]
@@ -168,7 +174,13 @@
  :invariant/shapeup-scope-bet-exists
  :atlas/invariant
  #{:meta/shapeup-scope-bet-check}
- {:invariant/fn
+ {:invariant/rule {:doc "A scope's :shapeup/parent-bet exists"
+                   :severity :warning
+                   :when {:or [{:= {:atlas/type :atlas/shapeup-scope}} {:= {:atlas/aspects :atlas/shapeup-scope}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :shapeup/parent-bet}]}
+  :invariant/fn
   (fn []
     (let [violations (for [scope-id (entity/all-with-aspect :atlas/shapeup-scope)
                            :let     [bet-id (:shapeup/parent-bet (entity/props-for scope-id))]
