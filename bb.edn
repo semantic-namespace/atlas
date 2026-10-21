@@ -4,7 +4,7 @@
                                            :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}
         ;; bb source: atlas's registry read by meta-source, with atlas.meta-source/pack
         io.github.semantic-namespace/meta-source {:git/url "https://github.com/semantic-namespace/meta-source"
-                                                  :git/sha "707d19a0d409291adee934ae5812fef21b114825"}}
+                                                  :git/sha "93469323793f2a9b71ae7e39d74d8d44f091d1fd"}}
  :tasks {source {:doc "meta-source (https://github.com/semantic-namespace/meta-source) on this checkout, with atlas.meta-source/pack: the project's sources read from its files (EDN registry, register! calls, annotated vars), no JVM and no code loaded. bb source <where|uses|deps|data|check|summary|serve> [arg] [--root dir] [--json] [--brief]; settings in <root>/meta-source.edn. A project of its own installs meta-source with bbin and names the pack there (see atlas.meta-source)."
                  :requires ([meta-source.cli])
                  :task (apply meta-source.cli/-main *command-line-args*)}

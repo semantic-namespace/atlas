@@ -145,6 +145,17 @@
            (and (= [[:fn/orphan :error 3]] (map (juxt :dev-id :severity (comp :line :impl)) (problems idx :var-without-entity)))
                 (empty? (problems idx :binding-only)))))
 
+  ;; ---- an atlas entity under an integrant component's key describes it
+  (let [root (project {"resources/system.edn" "{:app/db {:url \"jdbc:x\"}}"
+                       "src/app/system.clj" (str "(ns app.system (:require [atlas.registry :as registry]))\n"
+                                                 "(registry/register! :app/db :atlas/structure-component #{:tier/foundation} {})\n")})
+        idx (index/build {:root root :src ["src"] :registry []
+                          :packs {'atlas.meta-source/pack {} :integrant {:configs ["resources"]}}})]
+    (check "one entity, not one id in two packs; its primary definition is integrant's config"
+           (and (empty? (problems idx :id-in-several-packs))
+                (= :integrant (:pack (:definition (index/where idx :app/db))))
+                (= :atlas/structure-component (get-in (index/where idx :app/db) [:entry :atlas/type])))))
+
   ;; ---- the runtime half: what this process registered, written where meta-source reads it
   (let [root (project {"registry/functions.edn" (slurp "test/app/cart_registry/functions.edn")})]
     (registry/register! :tool/generated :atlas/execution-function #{:tier/service} {:execution-function/context [:x/y]})
