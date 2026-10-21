@@ -160,6 +160,11 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   `:dataflow` line in `meta-source.edn`.
 
   ![An atlas project's own ontology gives meta-source its dataflow, in Emacs](images/atlas-meta-source-dataflow.gif)
+- **An ontology's implementation key.** `load!` puts an annotated var under
+  `:atlas/impl`, unless the entity's ontology declares another with
+  `:ontology/impl-key` (an endpoint's `:endpoint/handler`); an entity of
+  such a type needs a var, as an execution function does, and the pack
+  checks that too.
 - **Checks**, as `atlas.source/load!` would refuse them (errors):
   `:entity-without-type`, an entity no source gives an `:atlas/type`;
   `:entity-without-impl`, an execution function given only by registry files

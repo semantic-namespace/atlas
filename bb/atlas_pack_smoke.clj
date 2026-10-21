@@ -197,6 +197,19 @@
                      (str (fs/relativize "core/src" f))))
               (set atlas-pack/builtin-rule-files))))
 
+  ;; ---- an ontology's :ontology/impl-key: its entities need a var too
+  (let [root (project {"src/app/ontology.clj"
+                       (str "(ns app.ontology (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :atlas/endpoint :atlas/ontology #{:atlas/endpoint}\n"
+                            "  {:ontology/for :atlas/endpoint :ontology/impl-key :endpoint/handler})\n")
+                       "src/app/handlers.clj"
+                       "(ns app.handlers)\n(defn ^{:atlas.source/id :endpoint/b} b [_] {})\n"
+                       "registry/endpoints.edn"
+                       "{:endpoint/a {:atlas/type :atlas/endpoint :atlas/aspects #{:tier/api :domain/x}}\n :endpoint/b {:atlas/type :atlas/endpoint :atlas/aspects #{:tier/api :domain/y}}}"})
+        idx (build {:root root :src ["src"] :registry ["registry"]})]
+    (check "an EDN entity of a type whose ontology declares :ontology/impl-key, with no var: an error; with one: none"
+           (= [:endpoint/a] (map :dev-id (problems idx :entity-without-impl)))))
+
   ;; ---- two dev-ids with one compound identity
   (let [root (project {"src/app/two.clj"
                        (str "(ns app.two (:require [atlas.registry :as registry]))\n"
