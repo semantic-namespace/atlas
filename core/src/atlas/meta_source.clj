@@ -178,16 +178,19 @@
      an entity another pack declares, are in their library's vocabulary
      and aren't atlas entities;
    - :entity-without-impl (error): an entity of one of atlas.source's
-     impl-types (an execution function) given only by registry files, with
-     no var carrying the meta key. A register! call gives its impl inline,
-     the running process at runtime;
+     impl-types (an execution function), or of a type whose ontology declares
+     :ontology/impl-key, given only by registry files, with no var carrying
+     the meta key. A register! call gives its impl inline, the running
+     process at runtime;
    - :var-without-entity (error): a var carrying :atlas.source/id for an
      id no source defines;
    - :compound-identity-shared (error): two dev-ids with the same compound
      identity (type and aspects). The registry keys entities by it, so one
      silently replaces the other, and calling the replaced one fails."
   [{:keys [entities data-key? loc impl linked-by]}]
-  (let [atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))]
+  (let [atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))
+        ;; the types whose ontology, read here, keeps an impl under its own key
+        keyed (set (for [[_ e] entities :when (get-in e [:entry :ontology/impl-key])] (get-in e [:entry :ontology/for])))]
     (concat
      (for [[id e] (sort-by key entities)
            :when (and (atlas-only? e) (not (data-key? e)) (not (get-in e [:entry :atlas/type]))
@@ -195,9 +198,14 @@
        {:severity :error :problem :entity-without-type :dev-id id :definition (loc e)})
      (for [[id e] (sort-by key entities)
            :let [type (get-in e [:entry :atlas/type])]
-           :when (and (source/impl-types type) (every? #(= :edn (:kind %)) (:definitions e))
+           :when (and (or (source/impl-types type) (keyed type)) (every? #(= :edn (:kind %)) (:definitions e))
                       (not (impl id)))]
-       {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)})
+       {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)
+        :message (str "no var carries :atlas.source/id " id ": " type " keeps one under "
+                      (or (some #(when (= type (get-in (val %) [:entry :ontology/for]))
+                                   (get-in (val %) [:entry :ontology/impl-key]))
+                                entities)
+                          :atlas/impl))})
      (for [[id e] (sort-by key entities)
            :when (and (every? #(= :binding (:kind %)) (:definitions e)) (= :atlas (linked-by id)))]
        {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)})

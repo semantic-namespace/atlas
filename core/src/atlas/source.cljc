@@ -27,7 +27,10 @@
 
    and loading registers each merged entity with that var as :atlas/impl
    (the var, so redefining at the REPL is seen) and the sources that gave it
-   as :atlas/source."
+   as :atlas/source. An ontology that keeps its implementation under another
+   key says so with :ontology/impl-key (an endpoint's :endpoint/handler): the
+   var goes there, and an entity of that type needs one, as an execution
+   function does."
   (:require [atlas.registry :as registry]
             #?(:clj [atlas.registry.serialise :as serialise])
             #?(:clj [clojure.java.io :as io])
@@ -35,8 +38,26 @@
                :cljs [cljs.reader :as edn])))
 
 (def impl-types
-  "Entity types whose entries must be backed by an annotated var."
+  "Entity types whose entries must be backed by an annotated var, besides
+   those whose ontology declares :ontology/impl-key."
   #{:atlas/execution-function})
+
+(defn- ontology-props
+  "The registered ontology for `type`: its props, or nil."
+  [type]
+  (some (fn [[_ v]] (when (= type (:ontology/for v)) v)) @registry/registry))
+
+(defn impl-key
+  "The key `type`'s entities keep their implementation under: its
+   ontology's :ontology/impl-key, or :atlas/impl."
+  [type]
+  (or (:ontology/impl-key (ontology-props type)) :atlas/impl))
+
+(defn impl-required?
+  "True when an entity of `type` must be backed by an annotated var: one of
+   `impl-types`, or a type whose ontology declares :ontology/impl-key."
+  [type]
+  (boolean (or (impl-types type) (:ontology/impl-key (ontology-props type)))))
 
 ;; =============================================================================
 ;; Reading
@@ -128,7 +149,7 @@
   "Where code and the merged entities disagree:
    - :var-without-entity — a var names a dev-id no source defines;
    - :entity-without-type — no source gives the entity an :atlas/type;
-   - :entity-without-impl — an entity of an `impl-types` type has no var."
+   - :entity-without-impl — an entity of a type `impl-required?` has no var."
   [entities vars]
   (concat
    (for [[id v] vars :when (not (contains? entities id))]
@@ -136,7 +157,7 @@
    (for [[id entry] entities :when (not (:atlas/type entry))]
      {:problem :entity-without-type :dev-id id})
    (for [[id {:atlas/keys [type]}] entities
-         :when (and (impl-types type) (not (contains? vars id)))]
+         :when (and (impl-required? type) (not (contains? vars id)))]
      {:problem :entity-without-impl :dev-id id :type type})))
 
 ;; =============================================================================
@@ -144,16 +165,16 @@
 ;; =============================================================================
 
 (defn register-entities!
-  "Registers every merged entity, with its annotated var (if any) as
-   :atlas/impl and the labels of its sources as :atlas/source. Returns the
-   registered dev-ids."
+  "Registers every merged entity, with its annotated var (if any) under its
+   type's `impl-key` and the labels of its sources as :atlas/source. Returns
+   the registered dev-ids."
   [{:keys [entities provenance]} vars]
   (doall
    (for [[id {:atlas/keys [type aspects] :as entry}] (sort-by key entities)]
      (do (registry/register! id type (set aspects)
                              (cond-> (assoc (dissoc entry :atlas/type :atlas/aspects)
                                             :atlas/source (sources-of provenance id))
-                               (contains? vars id) (assoc :atlas/impl (get vars id))))
+                               (contains? vars id) (assoc (impl-key type) (get vars id))))
          id))))
 
 #?(:clj
