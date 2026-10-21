@@ -201,10 +201,11 @@
            :when (and (or (source/impl-types type) (keyed type)) (every? #(= :edn (:kind %)) (:definitions e))
                       (not (impl id)))]
        {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)
-        :message (str "no var carries :atlas.source/id " id "; a " (name type) " is backed by one"
-                      (when (keyed type) (str ", as its " (some #(when (= type (get-in (val %) [:entry :ontology/for]))
-                                                                (get-in (val %) [:entry :ontology/impl-key]))
-                                                             entities))))})
+        :message (str "no var carries :atlas.source/id " id ": " type " keeps one under "
+                      (or (some #(when (= type (get-in (val %) [:entry :ontology/for]))
+                                   (get-in (val %) [:entry :ontology/impl-key]))
+                                entities)
+                          :atlas/impl))})
      (for [[id e] (sort-by key entities)
            :when (and (every? #(= :binding (:kind %)) (:definitions e)) (= :atlas (linked-by id)))]
        {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)})
