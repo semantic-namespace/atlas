@@ -165,6 +165,10 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   `:entity-without-impl`, an execution function given only by registry files
   with no var carrying `:atlas.source/id`; and `:var-without-entity`, a var
   carrying `:atlas.source/id` for an id no source defines, at the var.
+  And `:compound-identity-shared`: two dev-ids with the same type and
+  aspects, at each. The registry keys entities by compound identity, so the
+  second `register!` replaces the first, and the first dev-id then resolves
+  to the second's value: nothing fails until it is called.
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
   meta-source fills from it what no file says (entities a generator, a loop
