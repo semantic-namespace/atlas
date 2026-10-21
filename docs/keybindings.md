@@ -53,7 +53,13 @@ Minor mode with `C-c a` prefix. Enable with:
 
 - Uses REPL to confirm the keyword is a registered entity (no false positives)
 - Uses ripgrep/grep to find the source location (handles any alias: `registry/`, `cid/`, `r/`, etc.)
-- Falls through to CIDER/LSP for non-Atlas keywords
+- Falls through to CIDER/LSP for anything else: a symbol, a keyword the
+  buffer's REPL hasn't registered, a file with no REPL of its own
+- Paths resolve against the buffer's REPL's directory, cached per REPL, so
+  after switching REPLs (another checkout, a worktree) jumps land in that
+  REPL's checkout
+
+![M-. after switching REPLs: each REPL's checkout](images/atlas-emacs-xref-root.gif)
 
 ## Global
 
