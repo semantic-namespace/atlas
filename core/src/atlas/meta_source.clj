@@ -27,7 +27,9 @@
      key, a resolver's) describes that thing: it is one entity, its primary
      definition the library's, not one id in two packs;
    - atlas's context and response keys are dataflow: what an execution
-     function, an endpoint or a workflow consumes and produces;
+     function, an endpoint or a workflow consumes and produces, and what the
+     project's own ontologies declare as theirs (:dataflow/context-key,
+     :dataflow/response-key), with no :dataflow line in meta-source.edn;
    - check: an entity no source gives an :atlas/type, an execution
      function from EDN alone with no var carrying :atlas.source/id, and a
      var carrying :atlas.source/id for an entity no source defines (errors):
@@ -44,15 +46,28 @@
 (def kind :atlas)
 
 (def dataflow
-  "The entry keys listing the data keys atlas's entities consume and
-   produce. A project's own ontologies add theirs with :dataflow in
-   meta-source.edn."
+  "The entry keys listing the data keys atlas's built-in entity types
+   consume and produce. A project's own ontologies add theirs by declaring
+   :dataflow/context-key and :dataflow/response-key, read by
+   `ontology-dataflow`."
   {:consumes [:execution-function/context :interface-endpoint/context :dataflow/context :workflow/context]
    :produces [:execution-function/response :interface-endpoint/response :dataflow/response]})
 
 ;; =============================================================================
 ;; register! calls
 ;; =============================================================================
+
+(defn- ontology-dataflow
+  "The context and response keys the ontologies read declare (an
+   :atlas/ontology's :dataflow/context-key and :dataflow/response-key, a
+   keyword or a vector), as `dataflow` names the built-in ones."
+  [entries]
+  (let [ks (fn [k] (vec (distinct (for [e (vals entries)
+                                        :let [v (get e k)]
+                                        x (if (sequential? v) v [v])
+                                        :when (qualified-keyword? x)]
+                                    x))))]
+    {:consumes (ks :dataflow/context-key) :produces (ks :dataflow/response-key)}))
 
 (defn- literal?
   "True when x is plain data: no symbols or lists (var references, calls,
@@ -162,6 +177,7 @@
    :pack/describes? true
    :pack/merge {:atlas/aspects :union}
    :pack/dataflow dataflow
+   :pack/dataflow-of ontology-dataflow
    :pack/find find-forms
    :pack/read read-forms
    :pack/checks checks

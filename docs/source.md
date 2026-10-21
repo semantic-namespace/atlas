@@ -154,8 +154,12 @@ commit `bb.edn` pins: `bb source check --root <project>`.
 - **`:atlas/aspects` merge as a union**, as `atlas.source/merge-sources` does.
 - **Dataflow:** `:execution-function/context` and `/response`, and the same
   for `:interface-endpoint`, `:dataflow` and `:workflow`
-  (`atlas.meta-source/dataflow`). A project's own ontologies add theirs with
-  `:dataflow` in `meta-source.edn`.
+  (`atlas.meta-source/dataflow`). A project's own ontologies add theirs by
+  declaring `:dataflow/context-key` and `:dataflow/response-key`, as
+  atlas's own do: the pack reads them from the ontologies it reads, with no
+  `:dataflow` line in `meta-source.edn`.
+
+  ![An atlas project's own ontology gives meta-source its dataflow, in Emacs](images/atlas-meta-source-dataflow.gif)
 - **Checks**, as `atlas.source/load!` would refuse them (errors):
   `:entity-without-type`, an entity no source gives an `:atlas/type`;
   `:entity-without-impl`, an execution function given only by registry files
@@ -197,9 +201,9 @@ generated entities. `:atlas/source` links the record back to the input.
 - **Declared deps aren't checked against injected deps.** `check` sees a
   linked var calling another linked var directly. It can't see a dependency
   passed in as an argument.
-- **Data keys are found by the keys the pack names.** atlas's built-in
-  context and response keys are its dataflow; another ontology's need
-  `:dataflow` in `meta-source.edn`.
+- **Data keys are found by the keys the ontologies name.** An ontology
+  registered by a computed call, or one declaring no `:dataflow/context-key`,
+  still needs `:dataflow` in `meta-source.edn`.
 - **Nested data shows up as info notes.** `merge-carts` reads `:item/*` fields
   inside `:cart/items`, and its contract doesn't mention them.
 - **Runtime entities are only as fresh as their snapshot.** An entity made
