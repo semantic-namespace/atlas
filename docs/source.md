@@ -182,6 +182,8 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   from the classpath (`atlas.meta-source/builtin-rule-files`), and a
   project's own invariants from its files. A rule sees the aspects the code
   declares, not those `compile!` inherits through deps.
+
+  ![atlas's invariants checked from the files as rules, in Emacs](images/atlas-meta-source-invariant-rules.gif)
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
   meta-source fills from it what no file says (entities a generator, a loop
