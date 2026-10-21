@@ -1,5 +1,0 @@
-;; Installs the atlas-source command, for any project with an atlas-source.edn:
-;;   bbin install <atlas checkout>/core
-;; It reads the project's files with babashka and clj-kondo; nothing is loaded.
-{:paths ["src"]
- :bbin/bin {atlas-source {:main-opts ["-m" "atlas.source.cli"]}}}

@@ -1,22 +1,16 @@
 {:paths ["bb" "core/src" "store/src" "review/src"]
  :deps {org.clojure/data.json {:mvn/version "2.4.0"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
-                                           :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}}
- :tasks {source {:doc "The project's sources read from its files (EDN registry + annotated vars), no JVM and no code loaded; bb registry answers from the recorded store instead. bb source <where|uses|deps|data|check|summary> [arg] [--root dir] [--registry dir]... [--src dir]... [--json]. From another repo: bb --config <atlas-checkout>/bb.edn source ..."
-                 :requires ([source-cli])
-                 :task (apply source-cli/-main *command-line-args*)}
-         source-smoke {:doc "Edits a copy of the cart example and checks atlas.source.index sees each edit"
-                       :requires ([source-smoke])
-                       :task (source-smoke/-main)}
-         source-packs-smoke {:doc "Runs atlas.source.index with its packs (clojure.spec, malli, Pathom, a project's own) over the shop fixture, with and without the Pathom runtime snapshot"
-                             :requires ([source-packs-smoke])
-                             :task (source-packs-smoke/-main)}
-         emacs-smoke {:doc "Runs atlas-source.el's batch tests against a real bb source serve: Flymake on the shop fixture, and eldoc/xref/describe on the cart example when clojure-mode is found. Needs Emacs 27+ ($EMACS)."
-                      :requires ([emacs-smoke])
-                      :task (emacs-smoke/-main)}
-         pathom-snapshot-check {:doc "Rebuilds the shop fixture's Pathom snapshot from real Pathom 3 and 2 and checks it matches the committed one. Needs the clojure CLI."
-                                :requires ([pathom-snapshot-check])
-                                :task (pathom-snapshot-check/-main)}
+                                           :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}
+        ;; bb source: atlas's registry read by meta-source, with atlas.meta-source/pack
+        io.github.semantic-namespace/meta-source {:git/url "https://github.com/semantic-namespace/meta-source"
+                                                  :git/sha "5788be63a9fc37be04fa7dc9661389a104c951a1"}}
+ :tasks {source {:doc "meta-source (https://github.com/semantic-namespace/meta-source) on this checkout, with atlas.meta-source/pack: the project's sources read from its files (EDN registry, register! calls, annotated vars), no JVM and no code loaded. bb source <where|uses|deps|data|check|summary|serve> [arg] [--root dir] [--json] [--brief]; settings in <root>/meta-source.edn. A project of its own installs meta-source with bbin and names the pack there (see atlas.meta-source)."
+                 :requires ([meta-source.cli])
+                 :task (apply meta-source.cli/-main *command-line-args*)}
+         atlas-pack-smoke {:doc "meta-source with atlas.meta-source/pack over the cart example and register! calls: definitions, impl vars, uses, dataflow, checks, the cache, the runtime snapshot"
+                           :requires ([atlas-pack-smoke])
+                           :task (atlas-pack-smoke/-main)}
          upgrade-check {:doc "Whether another atlas version changes what atlas does for a project: builds its registry with each version and diffs the registries and the atlas.llm-ide tools' answers. bb upgrade-check --build <qualified-fn|file.clj> [--project dir] [--from v] [--to v] [--paths p,...] [--probes file] [--out dir]; versions: current | mvn:<v> | local:<core path> | git:<sha>. From another repo: bb --config <atlas-checkout>/bb.edn upgrade-check ..."
                        :requires ([upgrade-check])
                        :task (apply upgrade-check/-main *command-line-args*)}

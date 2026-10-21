@@ -1,4 +1,0 @@
-;; A project's own vocabulary: a nightly job that reads data keys. Only the
-;; smoke test's :dataflow {:consumes [:job/reads]} makes it a consumer.
-{:job/nightly-digest {:job/reads [:user/email :order/total]
-                      :job/schedule "0 3 * * *"}}

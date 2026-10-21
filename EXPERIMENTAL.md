@@ -53,15 +53,13 @@ Higher-level vocabularies beyond the built-in entity types:
 
 `atlas.ide` and `atlas.llm-ide` overlap and are a consolidation candidate.
 
-### Sources — `atlas.source`, `atlas.source.index`, `atlas.source.hover`
+### Sources — `atlas.source`, `atlas.meta-source`
 The registry as the merge of EDN files and generators, with plain `defn`s
-linked by `^{:atlas.source/id …}`; `bb source` answers from the files with no
-JVM; `emacs/atlas-source.el` gives hover, `M-.` and `M-?` from it. The file
-format, the merge rules and the CLI may change. See [docs/source.md](docs/source.md). The packs
-(`atlas.source.pack.schema`: data keys from clojure.spec and malli;
-`atlas.source.pack.pathom`: resolvers and mutations, with a runtime
-snapshot; `atlas.source.pack.integrant`: a system's components) and
-`:dataflow` are part of it.
+linked by `^{:atlas.source/id …}`. Reading those sources without running
+anything (`bb source`, `check`, the Emacs package) is
+[meta-source](https://github.com/semantic-namespace/meta-source)'s, with
+atlas's registry read by `atlas.meta-source/pack`. The file format, the merge
+rules and the pack may change. See [docs/source.md](docs/source.md).
 
 ### Upgrade check — `bb upgrade-check`
 Builds a project's registry with two atlas versions and diffs the registries
