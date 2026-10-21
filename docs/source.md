@@ -116,8 +116,7 @@ bbin install io.github.semantic-namespace/meta-source
 ;; meta-source.edn, at the project root
 {:registry ["registry"]
  :src ["src"]
- :id-key :atlas.source/id                     ; atlas's meta key
- :packs {atlas.meta-source/pack {}            ; atlas's registry
+ :packs {atlas.meta-source/pack {}            ; atlas's registry, and its meta key
          :spec {}}                            ; and whatever else the project uses
  :deps {io.github.semantic-namespace/atlas
         {:git/url "https://github.com/semantic-namespace/atlas"
@@ -138,6 +137,11 @@ commit `bb.edn` pins: `bb source check --root <project>`.
 
 ### What the atlas pack adds
 
+- **`:atlas.source/id` links a defn to its entity**, with nothing to
+  configure: the pack declares it as its meta key. `where`, hover and `M-.`
+  give the entry and the defn; the defn's body is checked against the
+  entity's context and response.
+
 - **`register!` calls are sources.** Nothing has to move to EDN. A call to
   `atlas.registry/register!` (or `atlas.core/register!`) whose dev-id, type
   and aspects are written as data is a source, as an EDN entry is, read from
@@ -152,10 +156,11 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   for `:interface-endpoint`, `:dataflow` and `:workflow`
   (`atlas.meta-source/dataflow`). A project's own ontologies add theirs with
   `:dataflow` in `meta-source.edn`.
-- **Checks**, as `atlas.source/load!` would refuse them:
-  `:entity-without-type`, an entity no source gives an `:atlas/type`
-  (error), and `:entity-without-impl`, an execution function given only by
-  registry files with no var carrying `:atlas.source/id` (error).
+- **Checks**, as `atlas.source/load!` would refuse them (errors):
+  `:entity-without-type`, an entity no source gives an `:atlas/type`;
+  `:entity-without-impl`, an execution function given only by registry files
+  with no var carrying `:atlas.source/id`; and `:var-without-entity`, a var
+  carrying `:atlas.source/id` for an id no source defines, at the var.
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
   meta-source fills from it what no file says (entities a generator, a loop

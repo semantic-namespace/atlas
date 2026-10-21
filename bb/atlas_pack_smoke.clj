@@ -17,7 +17,8 @@
   (when-not ok? (swap! failures inc)))
 
 (defn- build [opts]
-  (index/build (merge {:registry [] :src [] :id-key :atlas.source/id
+  ;; no :id-key: the pack declares :atlas.source/id
+  (index/build (merge {:registry [] :src []
                        :packs {'atlas.meta-source/pack {}}}
                       opts)))
 
@@ -131,6 +132,18 @@
            (= [[:fn/untyped :error]] (map (juxt :dev-id :severity) (problems idx :entity-without-type))))
     (check "an execution function from EDN alone, with no var carrying the meta key, is an error"
            (= [[:fn/unimplemented :error]] (map (juxt :dev-id :severity) (problems idx :entity-without-impl)))))
+
+  ;; ---- a var carrying :atlas.source/id for an entity no source defines
+  (let [root (project {"registry/r.edn" "{:fn/known {:atlas/type :atlas/execution-function :atlas/aspects #{:tier/service}}}"
+                       "src/app/core.clj" (str "(ns app.core)\n"
+                                               "(defn ^{:atlas.source/id :fn/known} known [x] x)\n"
+                                               "(defn ^{:atlas.source/id :fn/orphan} orphan [x] x)\n")})
+        idx (build {:root root :registry ["registry"] :src ["src"]})]
+    (check "the pack's meta key links a defn to its entity, with no :id-key configured"
+           (= 'app.core/known (:var (:impl (index/where idx :fn/known)))))
+    (check "a var carrying the meta key for an entity no source defines is an error, at the var"
+           (and (= [[:fn/orphan :error 3]] (map (juxt :dev-id :severity (comp :line :impl)) (problems idx :var-without-entity)))
+                (empty? (problems idx :binding-only)))))
 
   ;; ---- the runtime half: what this process registered, written where meta-source reads it
   (let [root (project {"registry/functions.edn" (slurp "test/app/cart_registry/functions.edn")})]
