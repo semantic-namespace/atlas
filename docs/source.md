@@ -158,6 +158,8 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   declaring `:dataflow/context-key` and `:dataflow/response-key`, as
   atlas's own do: the pack reads them from the ontologies it reads, with no
   `:dataflow` line in `meta-source.edn`.
+
+  ![An atlas project's own ontology gives meta-source its dataflow, in Emacs](images/atlas-meta-source-dataflow.gif)
 - **Checks**, as `atlas.source/load!` would refuse them (errors):
   `:entity-without-type`, an entity no source gives an `:atlas/type`;
   `:entity-without-impl`, an execution function given only by registry files
