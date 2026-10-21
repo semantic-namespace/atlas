@@ -174,8 +174,9 @@
   (let [failing (edn/read-string (second (re-find #"(?s)\(def failing\s+\"[^\"]*\"\s+(\{.*?\})\)"
                                                    (slurp "test/fixtures/invariant_rules/entities.clj"))))
         idx (build {:root "." :src ["core/src/atlas/ontology" "test/fixtures/invariant_rules"]})
+        ;; the fixtures only: atlas's own ontologies have findings of their own
         found (reduce (fn [m {:keys [rule dev-id]}] (update m rule (fnil conj #{}) dev-id))
-                      {} (problems idx :rule-violated))]
+                      {} (filter #(= "fixture" (namespace (:dev-id %))) (problems idx :rule-violated)))]
     (check "each invariant carrying :invariant/rule fails the fixtures its fn fails, located at the invariant"
            (and (= failing (select-keys found (keys failing)))
                 (every? #(re-find #"core/src/atlas/ontology/" (get-in % [:rule-at :file] ""))

@@ -114,7 +114,13 @@
  :invariant/llm-prompt-deps-exist
  :atlas/invariant
  #{:meta/llm-prompt-deps-check}
- {:invariant/fn
+ {:invariant/rule {:doc "A prompt's :llm-prompt/mcp-deps exist"
+                   :severity :warning
+                   :when {:or [{:= {:atlas/type :atlas/llm-prompt}} {:= {:atlas/aspects :atlas/llm-prompt}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :llm-prompt/mcp-deps}]}
+  :invariant/fn
   (fn []
     (let [violations (for [id  (entity/all-with-aspect :atlas/llm-prompt)
                            dep (:llm-prompt/mcp-deps (entity/props-for id))

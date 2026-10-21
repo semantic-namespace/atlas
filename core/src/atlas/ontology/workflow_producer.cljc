@@ -140,7 +140,13 @@
  :invariant/workflow-producer-ef-exists
  :atlas/invariant
  #{:meta/workflow-producer-ef-exists}
- {:invariant/fn
+ {:invariant/rule {:doc "A workflow producer's execution function exists"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/workflow-producer}} {:= {:atlas/aspects :atlas/workflow-producer}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :workflow-producer/execution-function}]}
+  :invariant/fn
   (fn []
     (let [producers (->> (entity/all-with-aspect :atlas/workflow-producer)
                          (remove #(entity/has-aspect? % :atlas/ontology)))

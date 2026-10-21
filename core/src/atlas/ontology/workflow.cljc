@@ -193,7 +193,13 @@
  :invariant/workflow-producers-exist
  :atlas/invariant
  #{:meta/workflow-producers-exist}
- {:invariant/fn
+ {:invariant/rule {:doc "A workflow's producers exist"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/workflow}} {:= {:atlas/aspects :atlas/workflow}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :workflow/producers}]}
+  :invariant/fn
   (fn []
     (let [workflows (->> (entity/all-with-aspect :atlas/workflow)
                          (remove #(entity/has-aspect? % :atlas/ontology)))

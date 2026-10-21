@@ -79,8 +79,20 @@
 (def builtin-rule-files
   "atlas's own ontologies whose invariants carry an :invariant/rule, read
    from the classpath: a project's source doesn't include them."
-  ["atlas/ontology/interface_endpoint.cljc" "atlas/ontology/structure_component.cljc"
-   "atlas/ontology/decision.cljc" "atlas/ontology/value_proposition.cljc"])
+  ["atlas/ontology/allium_rule.cljc"
+   "atlas/ontology/business_pattern.cljc"
+   "atlas/ontology/decision.cljc"
+   "atlas/ontology/deployment.cljc"
+   "atlas/ontology/execution_function.cljc"
+   "atlas/ontology/interface_endpoint.cljc"
+   "atlas/ontology/llm_prompt.cljc"
+   "atlas/ontology/shapeup.cljc"
+   "atlas/ontology/structure_component.cljc"
+   "atlas/ontology/system.cljc"
+   "atlas/ontology/test_case.cljc"
+   "atlas/ontology/value_proposition.cljc"
+   "atlas/ontology/workflow.cljc"
+   "atlas/ontology/workflow_producer.cljc"])
 
 (defn- rules-in
   "{invariant-id rule}: the :invariant/rule of each :atlas/invariant in `entries`."

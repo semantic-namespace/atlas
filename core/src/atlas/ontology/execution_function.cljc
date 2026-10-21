@@ -104,6 +104,14 @@
   "Functions marked :effect/pure should have no component dependencies — a pure
    function computes output solely from its inputs, so it should not depend on
    infrastructure components that have side effects."
+  :invariant/rule {:doc "A pure function depends on no component"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/execution-function}} {:= {:atlas/aspects :atlas/execution-function}}]
+                          := {:atlas/aspects :effect/pure}
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:refs {:execution-function/deps {:none {:or [{:= {:atlas/type :atlas/structure-component}}
+                                                                           {:= {:atlas/aspects :atlas/structure-component}}]}}}}]}
   :invariant/fn (fn []
                   "Functions marked :effect/pure should have no component dependencies.
 

@@ -175,13 +175,21 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   `:invariant/rule`: its check written as a [meta-source rule](https://github.com/semantic-namespace/meta-source/blob/main/docs/reference.md),
   beside the `:invariant/fn` that needs the running registry. The pack checks
   it from the files, with the project's own rules, at each entity it fails
-  on. atlas's own carry one where a rule says exactly what the fn does
-  (endpoints in `:tier/api`, components in `:tier/foundation`, a terminal
-  decision or revoked authority with its reason, an active decision with a
-  realization, a value proposition with its boundaries); the pack reads those
-  from the classpath (`atlas.meta-source/builtin-rule-files`), and a
-  project's own invariants from its files. A rule sees the aspects the code
-  declares, not those `compile!` inherits through deps.
+  on. atlas's own carry one where a rule says exactly what the fn does, 19
+  of them: tiers (endpoints in `:tier/api`, components in
+  `:tier/foundation`), reasons and realizations on decisions, what a value
+  proposition implements and which system delivers it, a pure function
+  depending on no component, and that what a deployment, system, allium
+  rule, test case, bet, scope, prompt, workflow or workflow producer names
+  exists (meta-source's `:resolves`, `:refs`, `:referenced-by`). The pack
+  reads atlas's from the classpath (`atlas.meta-source/builtin-rule-files`),
+  and a project's own invariants from its files. Limits: a rule sees the
+  aspects the code declares, not those `compile!` inherits through deps;
+  "exists" is an entity some source read defines, so an entity only made at
+  runtime is seen through `watch!`'s snapshot; `pure-has-no-deps` follows
+  `:execution-function/deps`, where its fn follows every ontology's deps key.
+
+  ![Invariants about what a property names, checked as rules in Emacs](images/atlas-meta-source-invariant-refs.gif)
 
   ![atlas's invariants checked from the files as rules, in Emacs](images/atlas-meta-source-invariant-rules.gif)
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps

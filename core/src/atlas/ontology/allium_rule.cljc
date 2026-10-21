@@ -80,7 +80,13 @@
  :invariant/allium-rule-implemented-by-exists
  :atlas/invariant
  #{:meta/allium-rule-implemented-by-check}
- {:invariant/fn
+ {:invariant/rule {:doc "An allium rule's :rule/implemented-by exists"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/allium-rule}} {:= {:atlas/aspects :atlas/allium-rule}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:resolves :rule/implemented-by}]}
+  :invariant/fn
   (fn []
     (let [violations (for [id    (rule-ids)
                            :let  [impl (:rule/implemented-by (entity/props-for id))]

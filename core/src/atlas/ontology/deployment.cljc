@@ -105,7 +105,12 @@
  :invariant/deployment-references-valid-system
  :atlas/invariant
  #{:meta/deployment-references-valid-system}
- {:invariant/fn
+ {:invariant/rule {:doc "A deployment names a :deployment/system that exists"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/deployment}}
+                   :require [{:not {:in {:deployment/system #{nil}}}}
+                             {:resolves :deployment/system}]}
+  :invariant/fn
   (fn []
     (let [violations (for [id    (all-deployments)
                            :let  [props  (entity/props-for id)

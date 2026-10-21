@@ -55,7 +55,11 @@
  :invariant/business-pattern-has-implementors
  :atlas/invariant
  #{:meta/business-pattern-invariant}
- {:invariant/fn
+ {:invariant/rule {:doc "A business pattern has a value proposition implementing it"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/business-pattern}}
+                   :require [{:referenced-by {:value-proposition/implements-pattern {:some {:= {:atlas/type :atlas/value-proposition}}}}}]}
+  :invariant/fn
   (fn []
     (let [implemented (set (keep #(:value-proposition/implements-pattern
                                    (entity/props-for %))
