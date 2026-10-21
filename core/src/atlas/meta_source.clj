@@ -23,6 +23,9 @@
      would generate. Props written as code (an inline fn) are left out, and
      listed as dropped;
    - :atlas/aspects is the union of every source's aspects;
+   - an atlas entity under another library's id (an integrant component's
+     key, a resolver's) describes that thing: it is one entity, its primary
+     definition the library's, not one id in two packs;
    - atlas's context and response keys are dataflow: what an execution
      function, an endpoint or a workflow consumes and produces;
    - check: an entity no source gives an :atlas/type, an execution
@@ -154,6 +157,9 @@
    :pack/id-key :atlas.source/id
    :pack/vocabulary #{"atlas"}
    :pack/data-keys? false
+   ;; atlas describes what other libraries declare: an entity under an
+   ;; integrant component's key, a resolver's, a spec's
+   :pack/describes? true
    :pack/merge {:atlas/aspects :union}
    :pack/dataflow dataflow
    :pack/find find-forms
