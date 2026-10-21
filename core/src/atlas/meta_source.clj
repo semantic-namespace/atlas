@@ -30,6 +30,9 @@
      function, an endpoint or a workflow consumes and produces, and what the
      project's own ontologies declare as theirs (:dataflow/context-key,
      :dataflow/response-key), with no :dataflow line in meta-source.edn;
+   - an invariant's :invariant/rule, its check written as a meta-source
+     rule, is checked with the project's own rules, at the entity it fails
+     on;
    - check: an entity no source gives an :atlas/type, an execution
      function from EDN alone with no var carrying :atlas.source/id, and a
      var carrying :atlas.source/id for an entity no source defines (errors):
@@ -70,6 +73,43 @@
                                         :when (qualified-keyword? x)]
                                     x))))]
     {:consumes (ks :dataflow/context-key) :produces (ks :dataflow/response-key)}))
+
+(declare registration)
+
+(def builtin-rule-files
+  "atlas's own ontologies whose invariants carry an :invariant/rule, read
+   from the classpath: a project's source doesn't include them."
+  ["atlas/ontology/interface_endpoint.cljc" "atlas/ontology/structure_component.cljc"
+   "atlas/ontology/decision.cljc" "atlas/ontology/value_proposition.cljc"])
+
+(defn- rules-in
+  "{invariant-id rule}: the :invariant/rule of each :atlas/invariant in `entries`."
+  [entries]
+  (into {} (for [[id e] entries
+                 :when (and (= :atlas/invariant (:atlas/type e)) (map? (:invariant/rule e)))]
+             [id (:invariant/rule e)])))
+
+(def ^:private builtin-rules
+  (delay
+    ;; edamame is babashka's, where meta-source runs the pack
+    (let [parse (requiring-resolve 'edamame.core/parse-string-all)]
+      (rules-in (into {} (for [f builtin-rule-files
+                               :let [r (io/resource f)]
+                               :when r
+                               form (parse (slurp r) {:all true :read-cond :allow :features #{:clj}
+                                                      :auto-resolve (fn [a] (if (= :current a) 'user a))})
+                               :when (and (seq? form) (= 'register! (some-> (first form) name symbol)))
+                               :let [{:keys [dev-id entry]} (registration form)]
+                               :when dev-id]
+                           [dev-id entry]))))))
+
+(defn- invariant-rules
+  "The rules invariants carry: an :atlas/invariant's :invariant/rule is its
+   check as a meta-source rule, checked from the files where its
+   :invariant/fn needs the running registry. atlas's own (see
+   `builtin-rule-files`), and those of the invariants read."
+  [entries]
+  (merge @builtin-rules (rules-in entries)))
 
 (defn- literal?
   "True when x is plain data: no symbols or lists (var references, calls,
@@ -196,6 +236,7 @@
    :pack/merge {:atlas/aspects :union}
    :pack/dataflow dataflow
    :pack/dataflow-of ontology-dataflow
+   :pack/rules-of invariant-rules
    :pack/find find-forms
    :pack/read read-forms
    :pack/checks checks

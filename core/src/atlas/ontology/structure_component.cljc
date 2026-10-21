@@ -82,6 +82,12 @@
   :invariant/docs
   "Structure components should live in :tier/foundation — infrastructure sits
    below the service and API tiers."
+  :invariant/rule {:doc "Structure components carry :tier/foundation"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/structure-component}} {:= {:atlas/aspects :atlas/structure-component}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:= {:atlas/aspects :tier/foundation}}]}
   :invariant/fn (fn []
                   ;; "Components should be :tier/foundation."
                   (let [components (entity/all-with-aspect :atlas/structure-component)

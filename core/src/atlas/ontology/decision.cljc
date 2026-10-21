@@ -236,6 +236,13 @@
    Institutional memory depends on it: a retired decision documents why the
    org stopped deciding this way, which is exactly the knowledge that
    evaporates otherwise."
+  :invariant/rule {:doc "A superseded or retired decision carries :decision/retirement-reason"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/decision}} {:= {:atlas/aspects :atlas/decision}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:or [{:not {:or [{:= {:atlas/aspects :status/superseded}} {:= {:atlas/aspects :status/retired}}]}}
+                                   {:matches {:decision/retirement-reason ""}}]}]}
   :invariant/fn
   (fn []
     (let [violations
@@ -262,6 +269,13 @@
   :invariant/docs
   "A revoked authority must carry :authority/revocation-reason — the policy
    half of the same institutional-memory discipline."
+  :invariant/rule {:doc "A revoked authority carries :authority/revocation-reason"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/decision-authority}} {:= {:atlas/aspects :atlas/decision-authority}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:or [{:not {:= {:atlas/aspects :status/revoked}}}
+                                   {:matches {:authority/revocation-reason ""}}]}]}
   :invariant/fn
   (fn []
     (let [violations
@@ -380,6 +394,13 @@
    :decision/realized-by target. A decision no engine executes is either
    :status/proposed (fine, say so) or dead vocabulary. Warning: aspirational
    registries are legitimate, silent ones drift."
+  :invariant/rule {:doc "An active decision is realized somewhere: :decision/realized-by"
+                   :severity :warning
+                   :when {:or [{:= {:atlas/type :atlas/decision}} {:= {:atlas/aspects :atlas/decision}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:or [{:not {:= {:atlas/aspects :status/active}}}
+                                   {:not {:in {:decision/realized-by #{nil "" [] #{} {}}}}}]}]}
   :invariant/fn
   (fn []
     (let [violations

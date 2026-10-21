@@ -105,7 +105,11 @@
  :invariant/value-proposition-has-external-boundaries
  :atlas/invariant
  #{:meta/value-proposition-has-external-boundaries}
- {:invariant/fn
+ {:invariant/rule {:doc "A value proposition names its external boundaries"
+                   :severity :error
+                   :when {:= {:atlas/type :atlas/value-proposition}}
+                   :require [{:not {:in {:value-proposition/external-boundaries #{nil "" [] #{} {}}}}}]}
+  :invariant/fn
   (fn []
     (let [violations (for [vp-id (all-value-propositions)
                            :let [props      (entity/props-for vp-id)

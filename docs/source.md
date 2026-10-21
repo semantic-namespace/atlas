@@ -171,6 +171,17 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   to the second's value: nothing fails until it is called.
 
   ![Two dev-ids with one compound identity, flagged at save in Emacs](images/atlas-meta-source-identity.gif)
+- **Invariants as rules.** An `:atlas/invariant` may carry
+  `:invariant/rule`: its check written as a [meta-source rule](https://github.com/semantic-namespace/meta-source/blob/main/docs/reference.md),
+  beside the `:invariant/fn` that needs the running registry. The pack checks
+  it from the files, with the project's own rules, at each entity it fails
+  on. atlas's own carry one where a rule says exactly what the fn does
+  (endpoints in `:tier/api`, components in `:tier/foundation`, a terminal
+  decision or revoked authority with its reason, an active decision with a
+  realization, a value proposition with its boundaries); the pack reads those
+  from the classpath (`atlas.meta-source/builtin-rule-files`), and a
+  project's own invariants from its files. A rule sees the aspects the code
+  declares, not those `compile!` inherits through deps.
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
   meta-source fills from it what no file says (entities a generator, a loop
