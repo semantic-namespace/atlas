@@ -236,7 +236,9 @@
 #?(:clj
    (defn snapshot
      "The registry as this process has it, as data: {:written :entities
-      {dev-id entry} :registered-by {dev-id ns} :ns-files {ns path}}. Each
+      {dev-id entry} :registered-by {dev-id ns} :ns-files {ns path}}.
+      atlas.meta-source/watch! keeps its :entities where meta-source reads
+      them. Each
       entry is the last registration of its dev-id: type, declared aspects and
       the props that are data (fns and vars are left out). :ns-files is where
       each registering namespace was loaded from, when that is a file."
@@ -259,36 +261,3 @@
         :ns-files (into (sorted-map) (for [n (distinct (keep :ns last-of))
                                            :let [f (ns-file n)] :when f]
                                        [n f]))})))
-
-#?(:clj
-   (defn- write-snapshot! [path]
-     (let [f (io/file path)
-           tmp (io/file (str path ".tmp"))]
-       (io/make-parents f)
-       (binding [*print-namespace-maps* false]
-         (spit tmp (pr-str (snapshot))))
-       (.renameTo tmp f))))
-
-#?(:clj
-   (defn watch!
-     "Keeps `path` holding this process's `snapshot`: written now, and again
-      a moment after each change to the registry. atlas.source.index reads it
-      to fill what no file says: entities a generator, a loop or a computed
-      register! call made at runtime. Returns `path`."
-     [path]
-     (let [pending (atom false)]
-       (write-snapshot! path)
-       (add-watch registry/registry ::snapshot
-                  (fn [_ _ old new]
-                    (when (and (not= old new) (compare-and-set! pending false true))
-                      (future
-                        (Thread/sleep 300)
-                        (reset! pending false)
-                        (try (write-snapshot! path) (catch Throwable _ nil))))))
-       path)))
-
-#?(:clj
-   (defn unwatch!
-     "Stops `watch!`."
-     []
-     (remove-watch registry/registry ::snapshot)))
