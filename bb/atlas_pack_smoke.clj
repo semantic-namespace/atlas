@@ -168,6 +168,17 @@
            (and (= [:widget/one] (map :dev-id (:consumers (index/data-key idx :user/id))))
                 (= [:widget/one] (map :dev-id (:producers (index/data-key idx :user/name)))))))
 
+  ;; ---- two dev-ids with one compound identity
+  (let [root (project {"src/app/two.clj"
+                       (str "(ns app.two (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :fn/a :atlas/execution-function #{:tier/service :domain/x} {})\n"
+                            "(registry/register! :fn/b :atlas/execution-function #{:domain/x :tier/service} {})\n"
+                            "(registry/register! :fn/c :atlas/execution-function #{:domain/x :tier/api} {})\n")})
+        idx (build {:root root :src ["src"]})]
+    (check "two dev-ids with the same type and aspects: an error at each, naming the other"
+           (= [[:fn/a [:fn/b] 2] [:fn/b [:fn/a] 3]]
+              (map (juxt :dev-id :shared-with (comp :line :definition)) (problems idx :compound-identity-shared)))))
+
   ;; ---- the runtime half: what this process registered, written where meta-source reads it
   (let [root (project {"registry/functions.edn" (slurp "test/app/cart_registry/functions.edn")})]
     (registry/register! :tool/generated :atlas/execution-function #{:tier/service} {:execution-function/context [:x/y]})

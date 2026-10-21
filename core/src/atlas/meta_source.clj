@@ -33,7 +33,9 @@
    - check: an entity no source gives an :atlas/type, an execution
      function from EDN alone with no var carrying :atlas.source/id, and a
      var carrying :atlas.source/id for an entity no source defines (errors):
-     atlas.source/load! would refuse all three;
+     atlas.source/load! would refuse all three; and two dev-ids sharing one
+     compound identity (error), which the registry would let one replace
+     the other under;
    - its runtime half: `watch!` keeps the snapshot meta-source reads, the
      registry as this process has it, so entities registered by a generator,
      a loop or a computed call are seen, and where the code and the running
@@ -128,7 +130,10 @@
      no var carrying the meta key. A register! call gives its impl inline,
      the running process at runtime;
    - :var-without-entity (error): a var carrying :atlas.source/id for an
-     id no source defines."
+     id no source defines;
+   - :compound-identity-shared (error): two dev-ids with the same compound
+     identity (type and aspects). The registry keys entities by it, so one
+     silently replaces the other, and calling the replaced one fails."
   [{:keys [entities data-key? loc impl linked-by]}]
   (let [atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))]
     (concat
@@ -143,7 +148,17 @@
        {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)})
      (for [[id e] (sort-by key entities)
            :when (and (every? #(= :binding (:kind %)) (:definitions e)) (= :atlas (linked-by id)))]
-       {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)}))))
+       {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)})
+     (for [[identity ids] (sort-by (comp pr-str key)
+                                   (group-by #(let [{:atlas/keys [type aspects]} (get-in entities [% :entry])]
+                                                (when (and type (seq aspects)) (conj (set aspects) type)))
+                                             (keys entities)))
+           :when (and identity (> (count ids) 1))
+           :let [ids (vec (sort ids))]
+           id ids]
+       {:severity :error :problem :compound-identity-shared :dev-id id
+        :shared-with (vec (remove #{id} ids)) :identity (vec (sort identity))
+        :definition (loc (get entities id))}))))
 
 (defn- describe [entry]
   (when-let [t (:atlas/type entry)]
