@@ -189,6 +189,8 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   runtime is seen through `watch!`'s snapshot; `pure-has-no-deps` follows
   `:execution-function/deps`, where its fn follows every ontology's deps key.
 
+  ![Invariants about what a property names, checked as rules in Emacs](images/atlas-meta-source-invariant-refs.gif)
+
   ![atlas's invariants checked from the files as rules, in Emacs](images/atlas-meta-source-invariant-rules.gif)
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
