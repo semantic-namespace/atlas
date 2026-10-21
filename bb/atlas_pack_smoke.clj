@@ -4,6 +4,7 @@
    register! calls read as sources, their merge with EDN, atlas's checks,
    and the runtime snapshot. Nothing is loaded from the projects read."
   (:require [atlas.meta-source :as atlas-pack]
+            [clojure.edn :as edn]
             [atlas.registry :as registry]
             [babashka.fs :as fs]
             [clojure.string :as str]
@@ -167,6 +168,33 @@
     (check "an ontology's :dataflow/context-key and :dataflow/response-key are dataflow, with no :dataflow configured"
            (and (= [:widget/one] (map :dev-id (:consumers (index/data-key idx :user/id))))
                 (= [:widget/one] (map :dev-id (:producers (index/data-key idx :user/name)))))))
+
+  ;; ---- invariants' rules: the same failures as their fns
+  ;; (atlas.invariant-rules-test runs the fns on the same file)
+  (let [failing (edn/read-string (second (re-find #"(?s)\(def failing\s+\"[^\"]*\"\s+(\{.*?\})\)"
+                                                   (slurp "test/fixtures/invariant_rules/entities.clj"))))
+        idx (build {:root "." :src ["core/src/atlas/ontology" "test/fixtures/invariant_rules"]})
+        found (reduce (fn [m {:keys [rule dev-id]}] (update m rule (fnil conj #{}) dev-id))
+                      {} (problems idx :rule-violated))]
+    (check "each invariant carrying :invariant/rule fails the fixtures its fn fails, located at the invariant"
+           (and (= failing (select-keys found (keys failing)))
+                (every? #(re-find #"core/src/atlas/ontology/" (get-in % [:rule-at :file] ""))
+                        (filter (comp (set (keys failing)) :rule) (problems idx :rule-violated))))))
+
+  ;; ---- atlas's own invariants' rules, in a project that doesn't include atlas's source
+  (let [root (project {"src/app/api.clj"
+                       (str "(ns app.api (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :endpoint/a :atlas/interface-endpoint #{:domain/x :tier/service} {})\n"
+                            "(registry/register! :endpoint/b :atlas/interface-endpoint #{:domain/x :tier/api} {})\n")})
+        idx (build {:root root :src ["src"]})]
+    (check "atlas's built-in invariant rules are read from the classpath: an endpoint outside :tier/api fails"
+           (= [[:endpoint/a :invariant/endpoints-are-api-tier :error]]
+              (map (juxt :dev-id :rule :severity) (problems idx :rule-violated))))
+    (check "every ontology file carrying an :invariant/rule is in builtin-rule-files"
+           (= (set (for [f (fs/glob "core/src" "atlas/ontology/*.cljc")
+                         :when (str/includes? (slurp (str f)) ":invariant/rule")]
+                     (str (fs/relativize "core/src" f))))
+              (set atlas-pack/builtin-rule-files))))
 
   ;; ---- two dev-ids with one compound identity
   (let [root (project {"src/app/two.clj"

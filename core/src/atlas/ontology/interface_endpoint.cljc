@@ -107,6 +107,12 @@
   :invariant/docs
   "Interface endpoints should carry :tier/api — the API layer is where the
    system's surface lives."
+  :invariant/rule {:doc "Interface endpoints carry :tier/api"
+                   :severity :error
+                   :when {:or [{:= {:atlas/type :atlas/interface-endpoint}} {:= {:atlas/aspects :atlas/interface-endpoint}}]
+                          :not {:or [{:= {:atlas/type :atlas/ontology}} {:= {:atlas/aspects :atlas/ontology}}
+                                     {:= {:atlas/type :atlas/type}} {:= {:atlas/aspects :atlas/type}}]}}
+                   :require [{:= {:atlas/aspects :tier/api}}]}
   :invariant/fn (fn []
                   (let [endpoints (->> (entity/all-with-aspect :atlas/interface-endpoint)
                                        (remove #(or (entity/has-aspect? % :atlas/ontology)
