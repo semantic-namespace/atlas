@@ -169,6 +169,8 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   aspects, at each. The registry keys entities by compound identity, so the
   second `register!` replaces the first, and the first dev-id then resolves
   to the second's value: nothing fails until it is called.
+
+  ![Two dev-ids with one compound identity, flagged at save in Emacs](images/atlas-meta-source-identity.gif)
 - **The running registry.** `(atlas.meta-source/watch!)` in the REPL keeps
   `.meta-source/packs/atlas.edn` holding the registry as the process has it.
   meta-source fills from it what no file says (entities a generator, a loop
