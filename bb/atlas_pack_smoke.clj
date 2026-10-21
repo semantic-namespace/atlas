@@ -156,6 +156,18 @@
                 (= :integrant (:pack (:definition (index/where idx :app/db))))
                 (= :atlas/structure-component (get-in (index/where idx :app/db) [:entry :atlas/type])))))
 
+  ;; ---- a project's own ontology declares its dataflow keys
+  (let [root (project {"src/app/ont.clj"
+                       (str "(ns app.ont (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :atlas/widget :atlas/ontology #{:atlas/ontology}\n"
+                            "  {:ontology/for :atlas/widget :dataflow/context-key :widget/takes :dataflow/response-key [:widget/gives]})\n"
+                            "(registry/register! :widget/one :atlas/widget #{:tier/service}\n"
+                            "  {:widget/takes [:user/id] :widget/gives [:user/name]})\n")})
+        idx (build {:root root :src ["src"]})]
+    (check "an ontology's :dataflow/context-key and :dataflow/response-key are dataflow, with no :dataflow configured"
+           (and (= [:widget/one] (map :dev-id (:consumers (index/data-key idx :user/id))))
+                (= [:widget/one] (map :dev-id (:producers (index/data-key idx :user/name)))))))
+
   ;; ---- the runtime half: what this process registered, written where meta-source reads it
   (let [root (project {"registry/functions.edn" (slurp "test/app/cart_registry/functions.edn")})]
     (registry/register! :tool/generated :atlas/execution-function #{:tier/service} {:execution-function/context [:x/y]})
