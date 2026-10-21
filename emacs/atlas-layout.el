@@ -186,25 +186,26 @@ Returns nil if the entity is not found or the REPL is unavailable."
       (when (and result (not (string-empty-p result)))
         result))))
 
-(defvar atlas-layout--nrepl-root-cache nil
-  "Cached nREPL working directory for resolving relative source paths.")
+(defvar atlas-layout--nrepl-root-cache (make-hash-table :test 'eq :weakness 'key)
+  "nREPL working directory per REPL buffer, for resolving relative source paths.
+Per connection: a directory cached from one REPL is wrong for another.")
 
 (defvar atlas-layout--dataflow-cache (make-hash-table :test 'equal)
   "Cache of entity-type string → has-dataflow-p boolean.
 Ontology is stable per session so one lookup per type suffices.")
 
 (defun atlas-layout--nrepl-root ()
-  "Return the nREPL process working directory (cached per session).
+  "Return the current REPL's process working directory, cached per REPL.
 Uses cider-nrepl-sync-request:eval directly to avoid the atlas.ide qualifier
 wrapping that atlas--eval applies, which breaks Java interop forms."
-  (or atlas-layout--nrepl-root-cache
-      (setq atlas-layout--nrepl-root-cache
-            (let* ((result (cider-nrepl-sync-request:eval
-                            "(System/getProperty \"user.dir\")"))
-                   (value (nrepl-dict-get result "value")))
-              (when value
-                ;; nREPL returns Clojure printed string e.g. "\"/path\""
-                (string-trim value "\"" "\""))))))
+  (when-let* ((repl (cider-current-repl)))
+    (or (gethash repl atlas-layout--nrepl-root-cache)
+        (when-let* ((value (nrepl-dict-get
+                            (cider-nrepl-sync-request:eval
+                             "(System/getProperty \"user.dir\")" repl)
+                            "value")))
+          ;; nREPL returns Clojure printed string e.g. "\"/path\""
+          (puthash repl (string-trim value "\"" "\"") atlas-layout--nrepl-root-cache)))))
 
 (defun atlas-layout--has-dataflow-p (etype)
   "Return non-nil if ETYPE's ontology declares dataflow context or response verbs.
@@ -462,7 +463,7 @@ the client side; REPLs started outside this Emacs keep running."
     (dolist (r others) (cider-quit r))
     (if same
         (if others "switched (closed other REPL connections)" "already-connected")
-      (setq atlas-layout--nrepl-root-cache nil)
+      (clrhash atlas-layout--nrepl-root-cache)
       (clrhash atlas-layout--dataflow-cache)
       (let ((default-directory (file-name-as-directory project-dir))
             (cider-repl-pop-to-buffer-on-connect nil))

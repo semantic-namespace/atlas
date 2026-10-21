@@ -167,34 +167,27 @@ lookup finds nothing."
         (list loc))
       (atlas--find-register-locations keyword-str)))
 
+(defun atlas--registered-keyword-at-point ()
+  "The keyword at point when this buffer's REPL has it registered, or nil.
+Without a REPL for this buffer (another project's file, no connection), nil."
+  (when-let* ((kw (atlas--keyword-at-point))
+              ((cider-current-repl)))
+    (when (atlas--eval-safe (format "(registered-entity? %s)" kw))
+      kw)))
+
 (defun atlas-xref-backend ()
-  "Atlas xref backend identifier."
-  (message "[atlas-xref] backend function called, returning 'atlas")
-  'atlas)
+  "Atlas xref backend: `atlas' on a keyword this buffer's REPL has registered.
+Elsewhere nil, so the next backend (CIDER, LSP) answers."
+  (when (atlas--registered-keyword-at-point)
+    'atlas))
 
 (cl-defmethod xref-backend-identifier-at-point ((_backend (eql atlas)))
-  "Return keyword at point if it looks like an Atlas dev-id."
-  (message "[atlas-xref] identifier-at-point called")
-  (let ((kw (atlas--keyword-at-point)))
-    (message "[atlas-xref] keyword-at-point returned: %s" kw)
-    (when kw
-      (let ((connected (cider-connected-p)))
-        (message "[atlas-xref] cider-connected-p: %s" connected)
-        (if (not connected)
-            (progn (message "[atlas-xref] CIDER not connected, skipping") nil)
-          (let ((registered (atlas--eval-safe (format "(registered-entity? %s)" kw))))
-            (message "[atlas-xref] registered-entity? %s => %s" kw registered)
-            (when registered kw)))))))
+  "Return keyword at point if it is a registered Atlas dev-id."
+  (atlas--registered-keyword-at-point))
 
 (cl-defmethod xref-backend-definitions ((_backend (eql atlas)) identifier)
   "Find register! definition for Atlas keyword IDENTIFIER."
-  (message "[atlas-xref] definitions called for: %s" identifier)
-  (let* ((root (atlas--project-root))
-         (_ (message "[atlas-xref] project root: %s" root))
-         (locations (atlas--definition-locations identifier)))
-    (message "[atlas-xref] found %d locations" (length locations))
-    (dolist (loc locations)
-      (message "[atlas-xref]   location: %s:%d" (nth 0 loc) (nth 1 loc)))
+  (let ((locations (atlas--definition-locations identifier)))
     (mapcar (lambda (loc)
               (xref-make identifier
                          (xref-make-file-location (nth 0 loc) (nth 1 loc) 0)))
@@ -215,9 +208,7 @@ Ensures atlas is first by removing and re-adding at the front."
   (when (local-variable-p 'xref-backend-functions)
     (setq-local xref-backend-functions
                 (cons 'atlas-xref-backend
-                      (remq 'atlas-xref-backend xref-backend-functions))))
-  (message "[atlas-xref] setup complete, xref-backend-functions: %s"
-           xref-backend-functions))
+                      (remq 'atlas-xref-backend xref-backend-functions)))))
 
 ;;; Clojure spec helpers
 
