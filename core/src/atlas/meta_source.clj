@@ -5,18 +5,18 @@
    integrant's, spec's, Pathom's, re-frame's...
 
    `pack` is a meta-source pack. A project names it in its meta-source.edn,
-   with atlas on the classpath and atlas's meta key:
+   with atlas on the classpath:
 
      {:registry [\"registry\"] :src [\"src\"]
-      :id-key :atlas.source/id
       :packs {atlas.meta-source/pack {}}
       :deps {io.github.semantic-namespace/atlas
              {:git/url \"https://github.com/semantic-namespace/atlas\"
               :git/sha \"...\" :deps/root \"core\"}}}
 
-   What it adds to what meta-source reads by itself (EDN registry files,
-   vars carrying the meta key):
+   What it adds to what meta-source reads by itself (EDN registry files):
 
+   - :atlas.source/id is the meta key linking a defn to its entity, with
+     no :id-key to configure;
    - each atlas.registry/register! (or atlas.core/register!) call whose
      dev-id, type and aspects are written as data is a source of that
      entity, as an EDN entry is; a 3-argument call gets the dev-id register!
@@ -25,9 +25,10 @@
    - :atlas/aspects is the union of every source's aspects;
    - atlas's context and response keys are dataflow: what an execution
      function, an endpoint or a workflow consumes and produces;
-   - check: an entity no source gives an :atlas/type (error), and an
-     execution function from EDN alone with no var carrying the meta key
-     (error): atlas.source/load! would refuse both;
+   - check: an entity no source gives an :atlas/type, an execution
+     function from EDN alone with no var carrying :atlas.source/id, and a
+     var carrying :atlas.source/id for an entity no source defines (errors):
+     atlas.source/load! would refuse all three;
    - its runtime half: `watch!` keeps the snapshot meta-source reads, the
      registry as this process has it, so entities registered by a generator,
      a loop or a computed call are seen, and where the code and the running
@@ -107,8 +108,10 @@
    - :entity-without-impl (error): an entity of one of atlas.source's
      impl-types (an execution function) given only by registry files, with
      no var carrying the meta key. A register! call gives its impl inline,
-     the running process at runtime."
-  [{:keys [entities data-key? loc impl]}]
+     the running process at runtime;
+   - :var-without-entity (error): a var carrying :atlas.source/id for an
+     id no source defines."
+  [{:keys [entities data-key? loc impl linked-by]}]
   (let [atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))]
     (concat
      (for [[id e] (sort-by key entities)
@@ -119,7 +122,10 @@
            :let [type (get-in e [:entry :atlas/type])]
            :when (and (source/impl-types type) (every? #(= :edn (:kind %)) (:definitions e))
                       (not (impl id)))]
-       {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)}))))
+       {:severity :error :problem :entity-without-impl :dev-id id :type type :definition (loc e)})
+     (for [[id e] (sort-by key entities)
+           :when (and (every? #(= :binding (:kind %)) (:definitions e)) (= :atlas (linked-by id)))]
+       {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)}))))
 
 (defn- describe [entry]
   (when-let [t (:atlas/type entry)]
@@ -145,6 +151,7 @@
 (def pack
   {:pack/id :atlas
    :pack/kinds #{kind}
+   :pack/id-key :atlas.source/id
    :pack/vocabulary #{"atlas"}
    :pack/data-keys? false
    :pack/merge {:atlas/aspects :union}
