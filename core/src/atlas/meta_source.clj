@@ -156,9 +156,12 @@
            :when (and identity (> (count ids) 1))
            :let [ids (vec (sort ids))]
            id ids]
-       {:severity :error :problem :compound-identity-shared :dev-id id
-        :shared-with (vec (remove #{id} ids)) :identity (vec (sort identity))
-        :definition (loc (get entities id))}))))
+       (let [others (vec (remove #{id} ids))]
+         {:severity :error :problem :compound-identity-shared :dev-id id
+          :shared-with others :identity (vec (sort identity))
+          :message (str "same type and aspects as " (str/join ", " others)
+                        ": the registry keeps one entity for both")
+          :definition (loc (get entities id))})))))
 
 (defn- describe [entry]
   (when-let [t (:atlas/type entry)]
