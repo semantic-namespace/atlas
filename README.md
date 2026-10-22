@@ -24,16 +24,22 @@ What if identity was determined by **semantics** - what something means and how 
 Atlas offers a semantic registry and tooling layer for software architecture: you describe any system entities,  like components, functions, endpoints, protocols,  business concepts ...  as **compound identities** (sets of aspects) plus structured properties - without thinking about implementation details.
 
 ```clojure
-;; A function's identity IS its semantic meaning
-(registry/register!
-  :fn/validate-token                    ; dev-id (for humans)
-  :atlas/execution-function             ; entity type
-  #{:domain/auth                        ; semantic aspects
-    :operation/validate
-    :tier/service}
-  {:execution-function/context [:auth/token]
-   :execution-function/response [:auth/valid? :auth/user-id]
-   :execution-function/deps #{:component/oauth-provider}})
+;; registry/functions.edn: what the function is, as data
+{:fn/validate-token                         ; dev-id (for humans)
+ {:atlas/type :atlas/execution-function     ; entity type
+  :atlas/aspects #{:domain/auth             ; semantic aspects
+                   :operation/validate
+                   :tier/service}
+  :execution-function/context [:auth/token]
+  :execution-function/response [:auth/valid? :auth/user-id]
+  :execution-function/deps #{:component/oauth-provider}}}
+```
+
+```clojure
+;; src/app/auth.clj: the code stays a plain defn, naming its entity
+(defn ^{:atlas.source/id :fn/validate-token} validate-token
+  [{:auth/keys [token]}]
+  ...)
 ```
 
 From this registry, Atlas can:
@@ -55,6 +61,54 @@ Atlas embraces Clojure namespaced keywords (like `clojure.spec`) and depends on 
 
 Every identity and relation lives in a global registry that can be translated into a graph database, queryable via Datalog.
 
+## Defining a System
+
+The way to define a system with atlas: **each entity is an entry in an EDN
+registry file, and the code that implements it is a plain function that
+names it.**
+
+- **`registry/*.edn`** holds the entries: a map of dev-id to entry, with
+  `:atlas/type`, `:atlas/aspects` and the entity's properties. People and
+  LLMs write them; several files may describe the same entity, and they merge
+  (see [Sources](docs/source.md)).
+- **The code** names the entity it implements with one metadata key,
+  `^{:atlas.source/id :fn/validate-token}`. Nothing else in it changes, and
+  nothing in it requires atlas: clj-kondo, clojure-lsp, docstrings and the
+  REPL work as before.
+- **At startup**, `atlas.source/load!` reads the files, finds the vars that
+  name entities, and registers each with its var. It refuses a registry that
+  doesn't hold together: conflicting files, a var naming an entity no file
+  defines, a function with no var.
+
+```clojure
+(atlas.source/load! ["registry/functions.edn" "registry/endpoints.edn"]
+                    '[app.auth app.cart])   ; namespaces already loaded
+```
+
+- **Without running anything**, [meta-source](https://github.com/semantic-namespace/meta-source)
+  reads the same files and code: in the editor (hover, `M-.` to an entry or
+  its function, `M-?` for what uses it, problems as you type) and in CI
+  (`meta-source check --fail-on error`). atlas's registry is one of the
+  registries it reads, through `atlas.meta-source/pack`.
+
+![Defining a system: an EDN entry, the defn that names it, meta-source checking both](docs/images/atlas-the-way.gif)
+
+*An execution function with an entry and no defn naming it is marked; naming
+it in the defn clears the mark; the describe buffer shows its entry, its
+function, what it reads, returns and depends on, and what uses it.*
+
+The same works for **JavaScript and TypeScript** code that implements or
+calls entities: a declaration names its id in its JSDoc,
+`/** @atlas.source/id :endpoint-call/order */`, and meta-source's JavaScript
+reader indexes it. atlas's JS module adds a pack checking a service's calls
+against the endpoints of another service's registry
+([js/README.md](js/README.md#meta-source-pack-endpoint-calls)).
+
+![VS Code: one registry, a Clojure and a TypeScript implementation](https://github.com/semantic-namespace/meta-source/blob/main/docs/images/vscode-polyglot.gif?raw=true)
+
+`registry/register!` stays the registry's own API, for the REPL, for tests,
+and for code that generates entities. A project defines its system in files.
+
 ## Quick Start
 
 ### Installation
@@ -63,44 +117,68 @@ Add to your `deps.edn`:
 
 
 ```clojure
-{:deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.11-SNAPSHOT"}}}
+{:deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.15"}}}
 ```
 
 
 ### Basic Usage
 
 ```clojure
-(require '[atlas.registry :as registry])
-(require '[atlas.query :as query])
-(require '[atlas.ontology :as ont])
+;; registry/system.edn
+{:component/database
+ {:atlas/type :atlas/structure-component
+  :atlas/aspects #{:tier/foundation :domain/storage}
+  :component/provides [:db/query :db/transact]}
 
-;; Register entity types first
+ :fn/get-user
+ {:atlas/type :atlas/execution-function
+  :atlas/aspects #{:domain/users :tier/service}
+  :execution-function/context [:user/id]
+  :execution-function/response [:user/data]
+  :execution-function/deps #{:component/database}}
+
+ :endpoint/get-user
+ {:atlas/type :atlas/interface-endpoint
+  :atlas/aspects #{:domain/users :tier/api :http/get}
+  :interface-endpoint/context [:http/path-params]
+  :interface-endpoint/response [:http/response]
+  :interface-endpoint/deps #{:fn/get-user}}}
+```
+
+```clojure
+;; src/app/users.clj
+(ns app.users)
+
+(defn ^{:atlas.source/id :fn/get-user} get-user
+  [{:user/keys [id]}]
+  {:user/data {:id id}})
+```
+
+```clojure
+(require '[atlas.ontology :as ont]
+         '[atlas.source :as source]
+         '[atlas.registry :as registry]
+         '[atlas.query :as query]
+         'app.users)
+
 (ont/register-entity-types!)
+(source/load! ["registry/system.edn"] '[app.users])
+```
 
-;; Register a component
-(registry/register!
-  :component/database
-  :atlas/structure-component
-  #{:tier/foundation :domain/storage}
-  {:component/provides [:db/query :db/transact]})
+And, with no REPL, in the editor and in CI:
 
-;; Register a function that uses it
-(registry/register!
-  :fn/get-user
-  :atlas/execution-function
-  #{:domain/users :tier/service}
-  {:execution-function/context [:user/id]
-   :execution-function/response [:user/data]
-   :execution-function/deps #{:component/database}})
+```sh
+bbin install io.github.semantic-namespace/meta-source
+meta-source check --brief       # where the files and the code disagree
+meta-source uses :fn/get-user   # what names it, and what calls its var
+```
 
-;; Register an API endpoint
-(registry/register!
-  :endpoint/get-user
-  :atlas/interface-endpoint
-  #{:domain/users :tier/api :http/get}
-  {:endpoint/context [:http/path-params]
-   :endpoint/response [:http/response]
-   :endpoint/deps #{:fn/get-user}})
+```clojure
+;; meta-source.edn
+{:registry ["registry"]
+ :src ["src"]
+ :packs {atlas.meta-source/pack {}}
+ :deps {io.github.semantic-namespace/atlas {:mvn/version "0.1.15"}}}
 ```
 
 ### Querying
@@ -176,6 +254,18 @@ Atlas enforces tier boundaries (services can't skip to foundation, etc.).
 
 ## Tooling
 
+### meta-source: the editor and CI
+
+[meta-source](https://github.com/semantic-namespace/meta-source) is how a
+project works with its registry day to day: an indexer of the ids a codebase
+shares with its registry, for editors and CI. It shows hover, go to
+definition, find references and diagnostics over the architecture's graph
+(entities, data keys, rules, the boundaries between services), not over the
+language's symbols. Emacs (`meta-source.el`) and VS Code use it; CI runs
+`meta-source check --fail-on error`. See [Defining a System](#defining-a-system)
+and [docs/source.md](docs/source.md).
+
+
 ### POC Visual Explorer
 
 Two interactive visualization modes for exploring semantic registries. Start from REPL or use shadow-cljs for development:
@@ -226,6 +316,7 @@ Features: entity browsing, data flow tracing, invariant checking, completion.
 - [Core Concepts](docs/concepts.md) - Detailed concept explanations
 - [API Reference](docs/api-reference.md) - Function reference
 - [Examples](docs/examples.md) - Annotated example registries
+- [Sources](docs/source.md) - Defining a system: registry files, `^{:atlas.source/id …}`, meta-source
 - [Emacs Integration](docs/emacs-integration.md) - IDE support via CIDER
 - [Visual Explorer](docs/visual-explorer.md) - Browser-based graph UI
 

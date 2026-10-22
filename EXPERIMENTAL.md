@@ -14,6 +14,11 @@ of Atlas and the intended public surface:
 - `atlas.ontology` — entity types, data-flow resolution
 - `atlas.invariant` (+ `atlas.invariant.dsl.*`) — architectural validation
 - `atlas.datalog` — Datascript projection & graph queries
+- `atlas.source` — **the way to define a system**: entries in EDN registry
+  files, functions naming theirs with `^{:atlas.source/id …}`, loaded with
+  `load!`; and `atlas.meta-source/pack`, atlas's registry for
+  [meta-source](https://github.com/semantic-namespace/meta-source) in the
+  editor and CI. See [docs/source.md](docs/source.md).
 
 APIs may still change before 1.0, but these are exercised by the test suite and
 the example apps in `test/app/`.
@@ -52,14 +57,6 @@ Higher-level vocabularies beyond the built-in entity types:
 - `atlas.ide` + `atlas.ide.narrative`, `atlas.ide.trace` — IDE-facing tools
 
 `atlas.ide` and `atlas.llm-ide` overlap and are a consolidation candidate.
-
-### Sources — `atlas.source`, `atlas.meta-source`
-The registry as the merge of EDN files and generators, with plain `defn`s
-linked by `^{:atlas.source/id …}`. Reading those sources without running
-anything (`bb source`, `check`, the Emacs package) is
-[meta-source](https://github.com/semantic-namespace/meta-source)'s, with
-atlas's registry read by `atlas.meta-source/pack`. The file format, the merge
-rules and the pack may change. See [docs/source.md](docs/source.md).
 
 ### Upgrade check — `bb upgrade-check`
 Builds a project's registry with two atlas versions and diffs the registries

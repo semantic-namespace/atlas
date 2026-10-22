@@ -12,6 +12,7 @@ single queryable graph.
 | Doc | What |
 |---|---|
 | [Getting Started](getting-started.md) | 5-minute tutorial |
+| [Sources](source.md) | **Defining a system:** registry in EDN files, plain `defn`s with `^{:atlas.source/id …}`, meta-source in the editor and CI |
 | [Core Concepts](concepts.md) | Compound identities, tiers, data flow |
 | [API Reference](api-reference.md) | Function reference |
 | [Examples](examples.md) | Annotated example registries |
@@ -21,7 +22,6 @@ single queryable graph.
 | Doc | What |
 |---|---|
 | [Authoring Guide](authoring-guide.md) | Building entity definitions interactively |
-| [Sources](source.md) | Registry in EDN files, plain `defn`s with `^{:atlas.source/id …}`, `bb source`, Emacs hover (experimental) |
 | [Compound-ID Refactoring](compound-id-refactor.md) | Reviewing/improving compound-ids to avoid drift |
 | [Dependency Traversal](dependency-traversal.md) | Forward/reverse recursive dependency analysis |
 | [Semantic Aggregation](semantic-aggregation.md) | Rolling aspects up the dependency graph |
