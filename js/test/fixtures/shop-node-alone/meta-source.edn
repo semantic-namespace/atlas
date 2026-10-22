@@ -1,0 +1,7 @@
+;; the same node service, with no checkout of the shop: the endpoints are
+;; located in the JSON export
+{:registry ["../shop-node/atlas/registry"]
+ :src ["../shop-node/src"]
+ :id-key :atlas.source/id
+ :js {:packs {"../../../meta-source/endpoint-call.cjs"
+              {:upstream {:name "shop" :endpoints "../shop-node/atlas/upstream/shop.endpoints.json"}}}}}

@@ -1,0 +1,9 @@
+{
+  "endpoints": {
+    "endpoint/order":         { "method": "get",  "path": "/shop/users/:user-id/orders/:order-id", "aspects": [], "input": ["shop.user/id", "shop.order/id"], "output": ["shop/order"] },
+    "endpoint/orders":        { "method": "get",  "path": "/shop/users/:user-id/orders", "aspects": [], "input": ["shop.user/id"], "output": ["shop/orders"] },
+    "endpoint.post/orders":   { "method": "post", "path": "/shop/users/:user-id/orders", "aspects": [], "input": ["shop.user/id"], "output": ["shop/order"] },
+    "endpoint/cart":          { "method": "get",  "path": "/shop/users/:user-id/cart", "aspects": [], "input": ["shop.user/id"], "output": ["shop/cart"] },
+    "endpoint.post/refund":   { "method": "post", "path": "/shop/orders/:order-id/refund", "aspects": [], "input": ["shop.order/id"], "output": [] }
+  }
+}

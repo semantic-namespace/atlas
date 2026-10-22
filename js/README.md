@@ -55,6 +55,65 @@ console.log(summary());
 console.log(findByAspect("domain/auth"));
 ```
 
+## meta-source pack: endpoint calls
+
+EXPERIMENTAL. `@semantic-namespace/atlas/meta-source/endpoint-call` is a
+[meta-source](https://github.com/semantic-namespace/meta-source) pack for a
+JavaScript/TypeScript service that calls another service's endpoints, the
+other service being described by an atlas registry.
+
+Each call is a registry entry naming the endpoint it reaches. The property
+of the service's endpoints table that builds the call's path carries the
+entry's id:
+
+```clojure
+{:endpoint-call/order {:atlas/type :atlas/endpoint-call
+                       :endpoint-call/endpoint :endpoint/order}}
+```
+
+```ts
+export const SHOP_ENDPOINTS = {
+  /** @atlas.source/id :endpoint-call/order */
+  order: (u: string, o: string) => `/resource/shop.users.${u}.orders/${o}`,
+};
+```
+
+The upstream's endpoints come from a JSON export of its registry (method,
+path, input, output). They become entities of the service's index, so
+`where`, `uses` and `deps` connect a call to its endpoint. With a checkout
+of the upstream (`:root`), each endpoint is also located there: its registry
+entry, and the var carrying its id. `check` reports:
+
+| problem | severity | |
+|---|---|---|
+| `path-drift` | error | a tagged property builds a path other than its endpoint's |
+| `method-drift` | error | a caller passes it to a client method (`get`, `post`, …) other than its endpoint's |
+| `unknown-endpoint` | error | an entry names an endpoint the upstream doesn't have |
+| `entry-without-tag` | warning | an entry no code is tagged with |
+| `untagged-match` | info | an untagged property of a tagged table builds exactly one endpoint's path |
+| `not-in-registry` | info | an untagged property builds a path no upstream endpoint declares |
+
+```clojure
+;; meta-source.edn
+{:registry ["atlas/registry"]
+ :src ["src"]
+ :id-key :atlas.source/id
+ :js {:packs {"@semantic-namespace/atlas/meta-source/endpoint-call"
+              {:entry-type :atlas/endpoint-call            ; default
+               :reference-key :endpoint-call/endpoint      ; default
+               :upstream {:name "shop"
+                          :endpoints "atlas/upstream/shop.endpoints.json"
+                          :root "../shop"                  ; optional: a checkout
+                          :registry ["resources/registry"]
+                          :src ["src"]}}}}}
+```
+
+```sh
+npx -p github:semantic-namespace/meta-source -p @semantic-namespace/atlas meta-source-js check --fail-on error
+```
+
+Tests: `npm run test:pack` (fixtures in `test/fixtures/`).
+
 ## Translating from Clojure
 
 The Clojure docs use keywords and sets. In JS, replace them with strings and arrays:
