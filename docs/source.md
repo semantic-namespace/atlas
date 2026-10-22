@@ -1,15 +1,16 @@
 # Sources: registry in data, code stays plain
 
-> **Experimental** — see [EXPERIMENTAL.md](../EXPERIMENTAL.md). Namespaces:
-> `atlas.source` (loading sources into the registry) and `atlas.meta-source`
-> (atlas's pack for [meta-source](https://github.com/semantic-namespace/meta-source),
-> which reads the sources without running anything: the CLI, `check`, the
-> Emacs package).
+> The way to define a system with atlas. Namespaces: `atlas.source`
+> (loading sources into the registry) and `atlas.meta-source` (atlas's pack
+> for [meta-source](https://github.com/semantic-namespace/meta-source), which
+> reads the sources without running anything: the CLI, `check`, the editor).
+> Like the rest of atlas before 1.0, the file format and merge rules may
+> still change.
 
-The usual way to use atlas puts the definition next to the code, as a
-`register!` call. This page describes a second way. The code stays ordinary
-Clojure, and each function carries one metadata key naming its entity. The
-definitions live in EDN files.
+This is the way to define a system with atlas. The definitions live in EDN
+files, and the code stays ordinary Clojure: each function carries one
+metadata key naming its entity. `register!` remains the registry's own API,
+for the REPL, tests, and code that generates entities.
 
 ```clojure
 ;; src/app/cart_impl.clj — nothing here requires atlas
