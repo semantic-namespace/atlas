@@ -78,8 +78,12 @@ export const SHOP_ENDPOINTS = {
 };
 ```
 
-The upstream's endpoints come from a JSON export of its registry (method,
-path, input, output). They become entities of the service's index, so
+The upstream's endpoints come from its published atlas store (`:store`,
+the directory of one EDN file per entity type that atlas-store writes), or
+from a JSON export of them (`:endpoints`: method, path, input, output). In a
+store, endpoints are the entities of `:endpoint-type`, and an endpoint's
+path is its `:endpoint/path`, or, with `:path-via {:key k :url u}`, the url
+of the entity its `k` names. They become entities of the service's index, so
 `where`, `uses` and `deps` connect a call to its endpoint. With a checkout
 of the upstream (`:root`), each endpoint is also located there: its registry
 entry, and the var carrying its id. `check` reports:
@@ -102,7 +106,9 @@ entry, and the var carrying its id. `check` reports:
               {:entry-type :atlas/endpoint-call            ; default
                :reference-key :endpoint-call/endpoint      ; default
                :upstream {:name "shop"
-                          :endpoints "atlas/upstream/shop.endpoints.json"
+                          :store "../shop-registry/entities" ; or :endpoints "shop.endpoints.json"
+                          :endpoint-type :atlas/endpoint
+                          :path-via {:key :endpoint/serialisation :url :serialisation/url}
                           :root "../shop"                  ; optional: a checkout
                           :registry ["resources/registry"]
                           :src ["src"]}}}}}

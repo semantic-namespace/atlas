@@ -1,0 +1,12 @@
+[#{:atlas/serialisation}
+ {:atlas/dev-id :serial/orders
+  :atlas/type :atlas/serialisation
+  :serialisation/url ["shop" "users" :shop.user/id "orders"]}]
+[#{:atlas/serialisation}
+ {:atlas/dev-id :serial/cart
+  :atlas/type :atlas/serialisation
+  :serialisation/url ["shop" "users" :shop.user/id "cart"]}]
+[#{:atlas/serialisation}
+ {:atlas/dev-id :serial/refund
+  :atlas/type :atlas/serialisation
+  :serialisation/url ["shop" "orders" :shop.order/id "refund"]}]

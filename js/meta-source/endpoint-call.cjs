@@ -16,8 +16,9 @@
 //     order: (u: string, o: string) => `/resource/shop.users.${u}.orders/${o}`,
 //   };
 //
-// The upstream's endpoints (a JSON export of its registry: method, path,
-// input, output) become entities here, so `where`, `uses` and `deps` connect
+// The upstream's endpoints become entities here, read from its published
+// atlas store (:store, one EDN file per entity type) or from a JSON export
+// of them (:endpoints: method, path, input, output), so `where`, `uses` and `deps` connect
 // a call to its endpoint. With a checkout of the upstream (:upstream :root),
 // each endpoint is also located in it: its registry entry, and the var
 // carrying its id. Options, under the pack in meta-source.edn:
@@ -25,7 +26,11 @@
 //   {:entry-type :atlas/endpoint-call        ; the calls' :atlas/type
 //    :reference-key :endpoint-call/endpoint  ; the key naming the endpoint
 //    :upstream {:name "shop"
-//               :endpoints "atlas/upstream/shop.endpoints.json"
+//               :store "../shop-registry/entities"   ; or :endpoints "shop.endpoints.json"
+//               :endpoint-type :atlas/endpoint       ; the store's endpoint entities
+//               :path-via {:key :endpoint/serialisation :url :serialisation/url}
+//                                                    ; the path: the url of the entity
+//                                                    ; it names (else :endpoint/path)
 //               :root "../shop" :registry ["resources/registry"] :src ["src"]
 //               :id-key :atlas.source/id}}
 //
@@ -59,6 +64,9 @@ function options(ctx) {
     upstream: {
       name: str(up, ':name', 'upstream'),
       endpoints: up.get(kw(':endpoints')) == null ? null : path.resolve(ctx.root, String(up.get(kw(':endpoints')))),
+      store: up.get(kw(':store')) == null ? null : path.resolve(ctx.root, String(up.get(kw(':store')))),
+      endpointType: kwOf(up, ':endpoint-type', ':atlas/endpoint'),
+      pathVia: up.get(kw(':path-via')) instanceof Map ? up.get(kw(':path-via')) : null,
       root: up.get(kw(':root')) == null ? null : path.resolve(ctx.root, String(up.get(kw(':root')))),
       registry: strs(up, ':registry', ['registry']),
       src: strs(up, ':src', ['src']),
@@ -69,19 +77,88 @@ function options(ctx) {
 
 const cache = new Map(); // what reading the upstream gave, by its files' mtimes
 
-/** {id-text -> endpoint} from the upstream's JSON export, with where each is written. */
+/** The text of a url: ["co" "yorba" :co.yorba.domain/user-id] -> "/co/yorba/:user-id". */
+function urlPath(ctx, url) {
+  if (typeof url === 'string') return url;
+  const segs = ctx.edn.itemsOf(url);
+  if (!segs.length) return null;
+  return '/' + segs.map((s) => (s instanceof ctx.edn.Keyword ? ':' + s.name : String(s))).join('/');
+}
+
+/**
+ * {id-text -> {method, path, input, output, sources}} from an atlas store
+ * (one EDN file per entity type, each a sequence of [aspects props]): the
+ * entities of :endpoint-type, the path being their :endpoint/path, or, with
+ * :path-via {:key k :url u}, the :u of the entity their :k names.
+ */
+function fromStore(ctx, u) {
+  const { kw, edn } = ctx;
+  const byId = new Map();
+  const where = new Map();
+  for (const f of filesUnder(u.store, ['.'], '.edn')) {
+    const text = fs.readFileSync(f, 'utf8');
+    let rows;
+    try {
+      rows = edn.itemsOf(edn.readString('[' + text + '\n]'));
+    } catch (e) {
+      throw new Error(`${ctx.relative(f)}: ${e.message}`);
+    }
+    const lines = text.split('\n');
+    for (const row of rows) {
+      const props = edn.itemsOf(row)[1];
+      const id = props instanceof Map && props.get(kw(':atlas/dev-id'));
+      if (!id) continue;
+      byId.set(id.text, props);
+      const at = new RegExp(':atlas/dev-id ' + escape(id.text) + '(?![\\w.\\-*+!?<>=/])');
+      const n = lines.findIndex((l) => at.test(l));
+      where.set(id.text, { file: f, line: n + 1 || 1 });
+    }
+  }
+  const via = u.pathVia && { key: u.pathVia.get(kw(':key')), url: u.pathVia.get(kw(':url')) };
+  const endpoints = new Map();
+  for (const [id, p] of byId) {
+    if (p.get(kw(':atlas/type')) !== u.endpointType) continue;
+    let path = p.get(kw(':endpoint/path'));
+    if (path == null && via && via.key) {
+      const target = p.get(via.key);
+      const t = target && byId.get(target.text);
+      path = t && t.get(via.url);
+    }
+    const method = p.get(kw(':endpoint/method'));
+    endpoints.set(id, {
+      method: method ? method.name : 'get',
+      path: path == null ? null : urlPath(ctx, path),
+      input: edn.itemsOf(p.get(kw(':endpoint/input'))).map((k) => k.text.slice(1)),
+      output: edn.itemsOf(p.get(kw(':endpoint/output'))).map((k) => k.text.slice(1)),
+      sources: [where.get(id)],
+    });
+  }
+  return endpoints;
+}
+
+/** {id-text -> endpoint} from the upstream's store or JSON export, with where each is written. */
 function upstream(ctx, o) {
   const u = o.upstream;
-  if (!u.endpoints || !fs.existsSync(u.endpoints)) return { endpoints: new Map(), problem: u.endpoints && `${ctx.relative(u.endpoints)} is not there` };
-  const key = [u.endpoints, fs.statSync(u.endpoints).mtimeMs, u.root].join('|');
+  const src = u.store || u.endpoints;
+  if (!src || !fs.existsSync(src)) return { endpoints: new Map(), problem: src && `${ctx.relative(src)} is not there` };
+  const stamp = u.store ? filesUnder(u.store, ['.'], '.edn').map((f) => fs.statSync(f).mtimeMs).join(',') : fs.statSync(src).mtimeMs;
+  const key = [src, stamp, u.root].join('|');
   if (cache.has(key)) return cache.get(key);
-  const text = fs.readFileSync(u.endpoints, 'utf8');
-  const json = JSON.parse(text);
-  const lines = text.split('\n');
-  const endpoints = new Map();
-  for (const [id, e] of Object.entries(json.endpoints || {})) {
-    const line = lines.findIndex((l) => l.includes(JSON.stringify(id) + ':') || l.includes(JSON.stringify(id) + ' :')) + 1;
-    endpoints.set(':' + id, { ...e, sources: [{ file: u.endpoints, line: line || 1 }] });
+  let endpoints = new Map();
+  if (u.store) {
+    try {
+      endpoints = fromStore(ctx, u);
+    } catch (e) {
+      return { endpoints, problem: e.message };
+    }
+  } else {
+    const text = fs.readFileSync(u.endpoints, 'utf8');
+    const json = JSON.parse(text);
+    const lines = text.split('\n');
+    for (const [id, e] of Object.entries(json.endpoints || {})) {
+      const line = lines.findIndex((l) => l.includes(JSON.stringify(id) + ':') || l.includes(JSON.stringify(id) + ' :')) + 1;
+      endpoints.set(':' + id, { ...e, sources: [{ file: u.endpoints, line: line || 1 }] });
+    }
   }
   // in a checkout of the upstream: its registry entry, and the var carrying its id
   if (u.root && fs.existsSync(u.root)) {

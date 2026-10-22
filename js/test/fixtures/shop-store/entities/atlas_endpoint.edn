@@ -1,0 +1,31 @@
+[#{:atlas/endpoint :domain/orders}
+ {:atlas/dev-id :endpoint/order
+  :atlas/type :atlas/endpoint
+  :endpoint/method :get
+  :endpoint/path "/shop/users/:user-id/orders/:order-id"
+  :endpoint/input [:shop.user/id :shop.order/id]
+  :endpoint/output [:shop/order]}]
+[#{:atlas/endpoint :domain/orders}
+ {:atlas/dev-id :endpoint/orders
+  :atlas/type :atlas/endpoint
+  :endpoint/method :get
+  :endpoint/serialisation :serial/orders
+  :endpoint/input [:shop.user/id]
+  :endpoint/output [:shop/orders]}]
+[#{:atlas/endpoint :domain/orders}
+ {:atlas/dev-id :endpoint.post/orders
+  :atlas/type :atlas/endpoint
+  :endpoint/method :post
+  :endpoint/serialisation :serial/orders
+  :endpoint/input [:shop.user/id]
+  :endpoint/output [:shop/order]}]
+[#{:atlas/endpoint :domain/cart}
+ {:atlas/dev-id :endpoint/cart
+  :atlas/type :atlas/endpoint
+  :endpoint/method :get
+  :endpoint/serialisation :serial/cart}]
+[#{:atlas/endpoint :domain/orders}
+ {:atlas/dev-id :endpoint.post/refund
+  :atlas/type :atlas/endpoint
+  :endpoint/method :post
+  :endpoint/serialisation :serial/refund}]

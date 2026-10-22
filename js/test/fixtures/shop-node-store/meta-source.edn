@@ -1,0 +1,11 @@
+;; the same node service, checked against the shop's published atlas store
+;; (one EDN file per entity type) instead of a JSON export: an endpoint's
+;; path is its :endpoint/path, or the url of the serialisation it names
+{:registry ["../shop-node/atlas/registry"]
+ :src ["../shop-node/src"]
+ :id-key :atlas.source/id
+ :js {:packs {"../../../meta-source/endpoint-call.cjs"
+              {:upstream {:name "shop"
+                          :store "../shop-store/entities"
+                          :endpoint-type :atlas/endpoint
+                          :path-via {:key :endpoint/serialisation :url :serialisation/url}}}}}}
