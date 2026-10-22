@@ -1,6 +1,6 @@
 {
   "name": "@semantic-namespace/atlas",
-  "version": "0.1.2-alpha",
+  "version": "0.1.3-alpha",
   "description": "Atlas semantic registry for JavaScript \u2014 query, analyze, and reason about software architecture",
   "type": "module",
   "main": "dist/atlas.js",
@@ -36,6 +36,6 @@
   "devDependencies": {
     "shadow-cljs": "^2.27.5",
     "js-qualified-keywords": "^0.1.1",
-    "meta-source": "github:semantic-namespace/meta-source#eb030149636ae6d9f3cc0724dd783d26a4af8e91"
+    "meta-source": "github:semantic-namespace/meta-source#b08abe10939407a13a35652fc539cb7151214583"
   }
 }

@@ -70,3 +70,12 @@ test('paths: a resource namespace splits on dots; a :param takes anything, a ${â
   assert.deepStrictEqual(compare(['shop', PARAM, 'orders'], '/shop/users/orders'), { ok: true, weak: true });
   assert.strictEqual(compare(['shop', 'carts'], '/shop/orders').ok, false);
 });
+
+test('from a published atlas store: the same problems, an endpoint located in the store', () => {
+  const store = build('shop-node-store');
+  const ps = toJson(index.check(store)).map((p) => [p.problem, p['dev-id'] || p.message.split(' ')[0]]);
+  assert.deepStrictEqual(ps, toJson(index.check(build('shop-node-alone'))).map((p) => [p.problem, p['dev-id'] || p.message.split(' ')[0]]));
+  const w = toJson(index.where(store, kw(':endpoint/orders')));
+  assert.deepStrictEqual([w.definition.file, w.definition.line], ['../shop-store/entities/atlas_endpoint.edn', 9]);
+  assert.strictEqual(w.entry['endpoint/path'], '/shop/users/:id/orders');
+});
