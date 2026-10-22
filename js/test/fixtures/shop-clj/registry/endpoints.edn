@@ -1,0 +1,7 @@
+{:endpoint/order
+ {:atlas/type :atlas/yorba-endpoint
+  :endpoint/method :get}
+
+ :endpoint.post/orders
+ {:atlas/type :atlas/yorba-endpoint
+  :endpoint/method :post}}

@@ -1,17 +1,19 @@
 {
   "name": "@semantic-namespace/atlas",
-  "version": "0.1.1-alpha",
-  "description": "Atlas semantic registry for JavaScript — query, analyze, and reason about software architecture",
+  "version": "0.1.2-alpha",
+  "description": "Atlas semantic registry for JavaScript \u2014 query, analyze, and reason about software architecture",
   "type": "module",
   "main": "dist/atlas.js",
   "module": "dist/atlas.js",
   "exports": {
     ".": "./dist/atlas.js",
-    "./slim": "./dist-slim/atlas.js"
+    "./slim": "./dist-slim/atlas.js",
+    "./meta-source/endpoint-call": "./meta-source/endpoint-call.cjs"
   },
   "files": [
     "dist/",
-    "dist-slim/"
+    "dist-slim/",
+    "meta-source/"
   ],
   "scripts": {
     "build": "npx shadow-cljs release atlas-js",
@@ -20,7 +22,8 @@
     "dev": "npx shadow-cljs watch atlas-js-dev",
     "dev:slim": "npx shadow-cljs watch atlas-js-slim-dev",
     "clean": "rm -rf dist dist-dev dist-slim dist-slim-dev",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "test:pack": "node --test test/*.test.cjs"
   },
   "keywords": [
     "atlas",
@@ -32,6 +35,7 @@
   "license": "MIT",
   "devDependencies": {
     "shadow-cljs": "^2.27.5",
-    "js-qualified-keywords": "^0.1.1"
+    "js-qualified-keywords": "^0.1.1",
+    "meta-source": "github:semantic-namespace/meta-source#eb030149636ae6d9f3cc0724dd783d26a4af8e91"
   }
 }

@@ -1,0 +1,17 @@
+;; one entry per kind of problem
+{:endpoint-call/order
+ {:atlas/type :atlas/endpoint-call
+  :atlas/aspects #{:domain/orders}
+  :endpoint-call/endpoint :endpoint/order}
+
+ :endpoint-call/place-order
+ {:atlas/type :atlas/endpoint-call
+  :endpoint-call/endpoint :endpoint.post/orders}
+
+ :endpoint-call/refund
+ {:atlas/type :atlas/endpoint-call
+  :endpoint-call/endpoint :endpoint.post/refund}
+
+ :endpoint-call/gone
+ {:atlas/type :atlas/endpoint-call
+  :endpoint-call/endpoint :endpoint/gone}}

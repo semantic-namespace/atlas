@@ -1,0 +1,12 @@
+;; a node service calling the shop's Clojure API: each call is an entry
+;; naming the shop endpoint it reaches, and the code building its path is
+;; tagged with the entry's id
+{:registry ["atlas/registry"]
+ :src ["src"]
+ :id-key :atlas.source/id
+ :js {:packs {"../../../meta-source/endpoint-call.cjs"
+              {:upstream {:name "shop"
+                          :endpoints "atlas/upstream/shop.endpoints.json"
+                          :root "../shop-clj"
+                          :registry ["registry"]
+                          :src ["src"]}}}}}
