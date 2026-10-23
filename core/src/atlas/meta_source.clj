@@ -160,13 +160,25 @@
   [analysis _opts]
   (for [u (:var-usages analysis)
         :when (and ('#{atlas.registry atlas.core} (:to u)) (= 'register! (:name u)))]
-    (select-keys u [:filename :row :name-row :name-col])))
+    (select-keys u [:filename :row :end-row :name-row :name-col])))
 
-(defn- read-forms [sites {:keys [form-at]} _opts]
-  (vec (for [{:keys [row name-row name-col]} sites
-             :let [{:keys [dropped] :as r} (registration (form-at name-row name-col))]]
+(defn- fn-form? [x]
+  (and (seq? x) (symbol? (first x)) (#{"fn" "fn*"} (name (first x)))))
+
+(defn- read-forms
+  "One result per register! call. A call whose props hold an inline fn (its
+   :execution-function/impl, an endpoint's handler) is implemented by its own
+   rows: :impl-range tells meta-source to read the calls and keys there as
+   the entity's, as it does a var carrying the meta key."
+  [sites {:keys [form-at]} _opts]
+  (vec (for [{:keys [row end-row name-row name-col]} sites
+             :let [form (form-at name-row name-col)
+                   {:keys [dropped] :as r} (registration form)
+                   props (when (seq? form) (last form))]]
          (cond-> (assoc (dissoc r :dropped) :row row :kind kind)
-           (seq dropped) (assoc :dropped dropped)))))
+           (seq dropped) (assoc :dropped dropped)
+           (and (:dev-id r) end-row (map? props) (some fn-form? (vals props)))
+           (assoc :impl-range {:row row :end-row end-row})))))
 
 ;; =============================================================================
 ;; Checks, the hover, the runtime half
