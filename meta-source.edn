@@ -1,0 +1,9 @@
+;; meta-source (https://github.com/semantic-namespace/meta-source) on atlas
+;; itself: the ontologies and invariants in core/src and the example apps in
+;; test/app, read with atlas's own pack from this checkout's core.
+;;
+;;   meta-source check --brief
+{:registry ["test/app/cart_registry"]
+ :src ["core/src" "test/app"]
+ :packs {atlas.meta-source/pack {}}
+ :deps {io.github.semantic-namespace/atlas {:local/root "core"}}}
