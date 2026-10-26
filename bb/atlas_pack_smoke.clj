@@ -238,5 +238,29 @@
              (some #(and (= :fn/get-cart (:dev-id %)) (= :warning (:severity %)))
                    (problems idx :runtime-disagrees)))))
 
+;; ---- types from the library declaring an entity (meta-source's :pack/derive)
+  (let [root (project {"src/app/routes.clj" (str "(ns app.routes (:require [reitit.ring :as ring]))\n"
+                                                 "(def routes [[\"/charge\" {:name :api.billing/charge :post {:handler identity}}]\n"
+                                                 "             [\"/health\" {:name :api/health :get {:handler identity}}]])\n")
+                       "resources/system.edn" "{:app/billing {} :app/db {}}\n"
+                       "registry/system.edn" (str "{:api.billing/charge {:atlas/aspects #{:domain/billing}}\n"
+                                                  " :app/billing {:atlas/aspects #{:domain/billing :tier/service}}\n"
+                                                  " :app/db {:atlas/aspects #{:tier/foundation} :atlas/type :atlas/data-store}}\n")})
+        packs {'atlas.meta-source/pack {} :reitit {} :integrant {:configs ["resources"]}}
+        idx (build {:root root :registry ["registry"] :src ["src"] :packs packs})
+        typed (build {:root root :registry ["registry"] :src ["src"]
+                      :packs (assoc packs 'atlas.meta-source/pack {:types {:integrant :atlas/structure-component}})})
+        type-of (fn [idx id] (get-in idx [:entities id :entry :atlas/type]))]
+    (check "a route atlas describes is an interface endpoint, so atlas's invariants apply to it"
+           (and (= :atlas/interface-endpoint (type-of idx :api.billing/charge))
+                (some #(and (= :api.billing/charge (:dev-id %)) (re-find #"tier/api" (str (:doc %))))
+                      (problems idx :rule-violated))))
+    (check "a route atlas doesn't describe, and a component with no :types for its library, get no type"
+           (and (nil? (type-of idx :api/health)) (nil? (type-of idx :app/billing))))
+    (check ":types adds a library's, never over a type a source gives"
+           (and (= :atlas/structure-component (type-of typed :app/billing))
+                (= :atlas/data-store (type-of typed :app/db))
+                (empty? (problems typed :conflicting-values)))))
+
   (println (if (zero? @failures) "atlas-pack-smoke: all checks passed" (str "atlas-pack-smoke: " @failures " failed")))
   (System/exit (if (zero? @failures) 0 1)))

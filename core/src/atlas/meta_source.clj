@@ -39,6 +39,10 @@
      atlas.source/load! would refuse all three; and two dev-ids sharing one
      compound identity (error), which the registry would let one replace
      the other under;
+   - an entity atlas describes with no :atlas/type gets one from the
+     library declaring it (meta-source's :pack/derive): a reitit route is
+     an :atlas/interface-endpoint, and the pack's :types option adds a
+     project's own ({:integrant :atlas/structure-component});
    - its runtime half: `watch!` keeps the snapshot meta-source reads, the
      registry as this process has it, so entities registered by a generator,
      a loop or a computed call are seen, and where the code and the running
@@ -235,6 +239,27 @@
                         ": the registry keeps one entity for both")
           :definition (loc (get entities id))})))))
 
+(def default-types
+  "The atlas type an entity described here gets from the library that
+   declares it, when no source gives it one: a reitit route is an
+   interface endpoint. A project adds its own under the pack's :types
+   option ({:types {:integrant :atlas/structure-component}}): atlas's
+   structure components carry :tier/foundation, so whether every integrant
+   component is one is the project's to say."
+  {:reitit :atlas/interface-endpoint})
+
+(defn- derive-types
+  "{id {:atlas/type t}} for each entity atlas describes (its aspects, from
+   EDN or register!) that has no type, by the kind of the source that
+   declares it: :types in the pack's options over `default-types`."
+  [entities opts]
+  (let [types (merge default-types (:types (get opts 'atlas.meta-source/pack)))]
+    (into {} (for [[id {:keys [entry kinds]}] entities
+                   :when (and (seq (:atlas/aspects entry)) (not (:atlas/type entry)))
+                   :let [t (some types (sort kinds))]
+                   :when t]
+               [id {:atlas/type t}]))))
+
 (defn- describe [entry]
   (when-let [t (:atlas/type entry)]
     (str (name t) (when-let [as (seq (:atlas/aspects entry))] (str "  " (str/join " " (sort as)))))))
@@ -269,6 +294,8 @@
    :pack/dataflow dataflow
    :pack/dataflow-of ontology-dataflow
    :pack/rules-of invariant-rules
+   ;; a route described in EDN is an interface endpoint
+   :pack/derive derive-types
    :pack/find find-forms
    :pack/read read-forms
    :pack/checks checks
