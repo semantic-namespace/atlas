@@ -1,7 +1,7 @@
 {:paths ["bb" "core/src" "store/src" "review/src"]
  :deps {org.clojure/data.json {:mvn/version "2.4.0"}
         io.github.semantic-namespace/diff {:git/url "https://github.com/semantic-namespace/diff"
-                                           :git/sha "fc5c5bd880a20a24103f8cf019b93c2b11e716ee"}
+                                           :git/sha "f8aa005764a8d8c51cdcdc534728139b30ff4b8e"}
         ;; bb source: atlas's registry read by meta-source, with atlas.meta-source/pack
         io.github.semantic-namespace/meta-source {:git/url "https://github.com/semantic-namespace/meta-source"
                                                   :git/sha "c19154622ffe0c9190aed5ab75fbebd347969166"}}
