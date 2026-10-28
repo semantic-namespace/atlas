@@ -168,6 +168,22 @@ commit `bb.edn` pins: `bb source check --root <project>`.
   checks that too.
 
   ![An EDN endpoint, its handler linked by its meta id, in Emacs](images/atlas-meta-source-impl-key.gif)
+- **Types from another library's vocabulary.** An ontology may say which
+  facts, in another library's vocabulary, its entities have:
+  `:ontology/from {:overarch/el :command}`. An entity atlas's facts describe
+  (it has `:atlas/aspects`) and no source types gets the type of the one
+  ontology covering it, so a registry file says only what it adds to that
+  library's entity. Two ontologies covering it is `:type-ambiguous`
+  (warning), and it gets neither. Only described entities are typed: one no
+  atlas fact gives aspects to would share its identity (the type alone) with
+  every other.
+  `atlas.meta-source/registry-of` turns the merged entities into atlas's
+  registry, every source's facts as props, so atlas's own questions
+  (`bb registry`) answer across both. Overarch's banking example, its ids
+  given meaning in EDN:
+  [semantic-namespace/overarch, `examples/banking-atlas`](https://github.com/semantic-namespace/overarch/tree/atlas-banking/examples/banking-atlas).
+
+  ![Overarch's banking example with atlas facts on its ids, in Emacs](images/atlas-meta-source-ontology-from.gif)
 - **Checks**, as `atlas.source/load!` would refuse them (errors):
   `:entity-without-type`, an entity no source gives an `:atlas/type`;
   `:entity-without-impl`, an execution function given only by registry files

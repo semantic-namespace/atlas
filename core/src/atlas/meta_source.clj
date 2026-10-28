@@ -33,6 +33,13 @@
    - an invariant's :invariant/rule, its check written as a meta-source
      rule, is checked with the project's own rules, at the entity it fails
      on;
+   - an entity atlas's facts describe (it has :atlas/aspects) and no
+     source gives an :atlas/type has the type of the one ontology whose
+     :ontology/from it has: facts in another library's vocabulary
+     ({:overarch/el :command} for an Overarch command), so a registry file
+     says only what it adds to that library's entity;
+   - `registry-of` is atlas's registry for the merged entities, with what
+     every source says of each as its props;
    - check: an entity no source gives an :atlas/type, an execution
      function from EDN alone with no var carrying :atlas.source/id, and a
      var carrying :atlas.source/id for an entity no source defines (errors):
@@ -184,6 +191,50 @@
 ;; Checks, the hover, the runtime half
 ;; =============================================================================
 
+(defn- covers?
+  "True when `entry` has each fact `from` names: that value, or a
+   collection holding it."
+  [from entry]
+  (every? (fn [[k v]] (let [x (get entry k)] (or (= x v) (and (coll? x) (some #{v} x))))) from))
+
+(defn- from-ontologies
+  "(fn [entry]) → the types whose ontology's :ontology/from `entry` has,
+   for an entry atlas's facts describe (it has :atlas/aspects), among
+   `entries` ({id entry})."
+  [entries]
+  (let [onts (vec (for [[_ e] entries
+                        :let [from (:ontology/from e)]
+                        :when (and (= :atlas/ontology (:atlas/type e)) (:ontology/for e) (map? from) (seq from))]
+                    [(:ontology/for e) from]))]
+    (fn [entry]
+      (when (seq (:atlas/aspects entry))
+        (vec (sort (distinct (for [[t from] onts :when (covers? from entry)] t))))))))
+
+(defn- derive-types
+  "{id {:atlas/type t}}: for each entity atlas's facts describe and no
+   source types, the type of the one ontology covering it."
+  [entities _opts]
+  (let [covering (from-ontologies (update-vals entities :entry))]
+    (into {} (for [[id {:keys [entry]}] entities
+                   :when (not (:atlas/type entry))
+                   :let [ts (covering entry)]
+                   :when (= 1 (count ts))]
+               [id {:atlas/type (first ts)}]))))
+
+(defn registry-of
+  "atlas's registry for meta-source's merged entities, {id entry} (an
+   index's entities' :entry): each entity with an :atlas/type under its
+   compound identity, its type and aspects, its props what every source
+   said of it (another library's facts, :overarch/el, among them) and
+   :atlas/dev-id its id. The ontologies and type-refs among the entities
+   say which props are edges. Two ids sharing an identity is the pack's
+   :compound-identity-shared error; the one sorting last is kept."
+  [entries]
+  (into {} (for [[id e] (sort-by (comp str key) entries)
+                 :let [t (:atlas/type e)]
+                 :when t]
+             [(conj (set (:atlas/aspects e)) t) (assoc e :atlas/dev-id id)])))
+
 (defn- checks
   "- :entity-without-type (error): an entity from registry files or
      register! calls that no source gives an :atlas/type. A data key, and
@@ -198,9 +249,12 @@
      id no source defines;
    - :compound-identity-shared (error): two dev-ids with the same compound
      identity (type and aspects). The registry keys entities by it, so one
-     silently replaces the other, and calling the replaced one fails."
+     silently replaces the other, and calling the replaced one fails;
+   - :type-ambiguous (warning): an entity with aspects and no type that
+     several ontologies' :ontology/from cover: it gets none of them."
   [{:keys [entities data-key? loc impl linked-by]}]
-  (let [atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))
+  (let [covering (from-ontologies (update-vals entities :entry))
+        atlas-only? (fn [e] (every? #(#{:edn :binding kind} (:kind %)) (:definitions e)))
         ;; the types whose ontology, read here, keeps an impl under its own key
         keyed (set (for [[_ e] entities :when (get-in e [:entry :ontology/impl-key])] (get-in e [:entry :ontology/for])))]
     (concat
@@ -221,6 +275,11 @@
      (for [[id e] (sort-by key entities)
            :when (and (every? #(= :binding (:kind %)) (:definitions e)) (= :atlas (linked-by id)))]
        {:severity :error :problem :var-without-entity :dev-id id :impl (impl id)})
+     (for [[id e] (sort-by key entities)
+           :let [ts (covering (:entry e))]
+           :when (and (not (get-in e [:entry :atlas/type])) (> (count ts) 1))]
+       {:severity :warning :problem :type-ambiguous :dev-id id :types ts :definition (loc e)
+        :message (str "no type: the ontologies of " (str/join ", " (map pr-str ts)) " all cover it")})
      (for [[identity ids] (sort-by (comp pr-str key)
                                    (group-by #(let [{:atlas/keys [type aspects]} (get-in entities [% :entry])]
                                                 (when (and type (seq aspects)) (conj (set aspects) type)))
@@ -269,6 +328,7 @@
    :pack/dataflow dataflow
    :pack/dataflow-of ontology-dataflow
    :pack/rules-of invariant-rules
+   :pack/derive derive-types
    :pack/find find-forms
    :pack/read read-forms
    :pack/checks checks
