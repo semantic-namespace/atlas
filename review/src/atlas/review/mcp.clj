@@ -24,10 +24,10 @@
    "entity_detail" {:cmd "entity-detail" :args ["dev_id"] :doc "An entity: its type, aspects, props, and what it depends on and is depended on by"}
    "producers_of" {:cmd "producers-of" :args ["data_key"] :doc "The entities producing a data key"}
    "consumers_of" {:cmd "consumers-of" :args ["data_key"] :doc "The entities consuming a data key"}
-   "dependencies" {:cmd "dependencies" :args ["dev_id"] :doc "What an entity depends on"}
-   "dependents" {:cmd "dependents" :args ["dev_id"] :doc "What depends on an entity"}
-   "blast_radius" {:cmd "blast-radius" :args ["dev_id"] :doc "Everything that depends on an entity, transitively, by hops: what a change to it reaches"}
-   "trace_causes" {:cmd "trace-causes" :args ["dev_id"] :doc "Everything an entity depends on, transitively, by hops: where a failure in it may come from"}
+   "dependencies" {:cmd "dependencies" :args ["dev_id"] :doc "What an entity depends on, effectively: what it declares, and the producers of the data it consumes"}
+   "dependents" {:cmd "dependents" :args ["dev_id"] :doc "What depends on an entity, effectively: what declares a dependency on it, and the consumers of the data it produces"}
+   "blast_radius" {:cmd "blast-radius" :args ["dev_id"] :doc "Everything that depends on an entity, transitively, by hops, through declared dependencies and data (what consumes what it produces): what a change to it reaches"}
+   "trace_causes" {:cmd "trace-causes" :args ["dev_id"] :doc "Everything an entity depends on, transitively, by hops, through declared dependencies and data (what produces what it consumes): where a failure in it may come from"}
    "overview" {:cmd "overview" :args [] :doc "The registry's entity types, aspects and counts"}})
 
 (defn- schema [{:keys [args]}]
