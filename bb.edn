@@ -26,6 +26,9 @@
          registry {:doc "Registry questions from a git store checkout, no JVM. bb registry <command> <store-dir> [args] [--prefix p] [--json]. Commands: diff <old-ref> <new-ref>; timeline <from-ref> <to-ref> [dev-id]; provenance <dev-id> [--from ref] [--to ref]; blast-radius|trace-causes <ref> <dev-id>... [--hops n]; producers-of|consumers-of <ref> <data-key>; dependents|dependencies <ref> <dev-id>; gaps <ref> [--min-similarity x] [--max n]; review analyses: overview, by-aspect, entities-by-type, entity-detail, entity-position, consumer-pattern, near-intent, suggest-placement, aspect-anomalies, aspect-signature, aspect-lifecycle, bottlenecks, islands, orphans (run with no command for their arguments). From another repo: bb --config <atlas-checkout>/bb.edn registry ..."
                    :requires ([atlas.review.cli :as cli])
                    :task (apply cli/-main *command-line-args*)}
+         registry-mcp {:doc "The registry questions as an MCP server over stdio, for a store checkout, no JVM. bb registry-mcp <store-dir> [--prefix p]. Tools: by_aspect, entity_detail, producers_of, consumers_of, dependencies, dependents, blast_radius, trace_causes, overview"
+                       :requires ([atlas.review.mcp :as mcp])
+                       :task (apply mcp/-main *command-line-args*)}
          store-cli-smoke {:doc "Builds a throwaway git store from test/app examples and runs every registry command against it"
                           :requires ([store-cli-smoke])
                           :task (store-cli-smoke/-main)}}}

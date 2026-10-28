@@ -296,7 +296,9 @@
    "consumer-pattern" 2 "near-intent" 2 "suggest-placement" 2 "aspect-anomalies" 1
    "aspect-signature" 2 "aspect-lifecycle" 3 "bottlenecks" 1 "islands" 1 "orphans" 1})
 
-(defn- jsonable [x]
+(defn jsonable
+  "`x` as JSON-ready data: keywords as strings, sets sorted."
+  [x]
   (walk/postwalk #(cond (keyword? %) (subs (str %) 1)
                         (set? %) (sorted %)
                         :else %)
