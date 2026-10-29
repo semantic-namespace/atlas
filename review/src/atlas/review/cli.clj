@@ -234,18 +234,40 @@
            (sort-by :snap/version (map second (get-in db [:dev-ids dev-id]))))))
 
 (defn- lineage-events
+  "`dev-id`'s events, and back through every dev-id it was renamed from. Any
+  appearance may be a rename, the first or a later one (a name that goes and
+  comes back): it becomes :renamed :from the old dev-id, whose events before
+  it come first. A deletion that is a rename away is :renamed-away :to the
+  new dev-id, left out where the :renamed it leads to already says so."
   [db versions dev-id]
-  (loop [dev-id dev-id, renamed-at nil, later [], seen #{}]
-    (let [events (cond->> (entity-events db dev-id)
-                   renamed-at (remove #(and (= :deleted (:event %)) (= renamed-at (:version %)))))
-          [first-seen & more] events
-          old (when (= :first-seen (:event first-seen)) (renamed-from db versions first-seen))]
-      (if (and old (not (seen old)))
-        (recur old
-               (:version first-seen)
-               (into (vec (cons (assoc first-seen :event :renamed :from old) more)) later)
-               (conj seen dev-id))
-        (into (vec events) later)))))
+  (letfn [(renamed-to [id version]
+            (when-let [prev (last (take-while #(neg? (compare % version)) versions))]
+              (:to (first (filter #(= id (:from %)) (renames db prev version))))))
+          (walk [id before seen]
+            (mapcat (fn [{:keys [event version] :as e}]
+                      (case event
+                        (:first-seen :re-added)
+                        (let [old (renamed-from db versions e)]
+                          (if (and old (not (seen [old version])))
+                            (concat (walk old version (conj seen [old version]))
+                                    [(assoc e :event :renamed :from old)])
+                            [e]))
+                        :deleted (if-let [to (renamed-to id version)]
+                                   [(assoc e :event :renamed-away :to to)]
+                                   [e])
+                        [e]))
+                    (cond->> (entity-events db id)
+                      before (filter #(neg? (compare (:version %) before))))))]
+    (let [events (walk dev-id nil #{})
+          renamed (set (for [e events :when (= :renamed (:event e))] [(:from e) (:version e)]))]
+      ;; walking back from a later appearance can reach an earlier one of the
+      ;; same dev-id again: each event once, the one that names its rename if either does
+      (->> events
+           (remove #(and (= :renamed-away (:event %)) (renamed [(:dev-id %) (:version %)])))
+           (group-by (juxt :version :dev-id))
+           (map (fn [[_ es]] (or (first (filter #(= :renamed (:event %)) es)) (first es))))
+           (sort-by (juxt :version #(if (= :renamed (:event %)) 1 0)))
+           vec))))
 
 (defn provenance
   [dir dev-id {:keys [from to]}]

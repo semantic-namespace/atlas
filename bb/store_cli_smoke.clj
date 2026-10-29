@@ -188,7 +188,15 @@
                  (and (= [:fn/list-user-calendar-events :fn/list-calendar-events :fn/list-user-calendar-events]
                          (mapv :snap/dev-id r))
                       (= [nil :fn/list-user-calendar-events :fn/list-calendar-events] (mapv :snap/prev-dev-id r))
-                      (not-any? :snap/deleted r))))
+                      (not-any? :snap/deleted r)))
+          (store/configure! (str dir) prefix nil)
+          (let [p (cli/provenance (str dir) ":fn/list-user-calendar-events" {:from a :to c})
+                q (cli/provenance (str dir) ":fn/list-calendar-events" {:from a :to c})]
+            (check "provenance follows a name that goes and comes back"
+                   (= [[:first-seen nil] [:renamed :fn/list-user-calendar-events] [:renamed :fn/list-calendar-events]]
+                      (mapv (juxt :event :from) (:events p))))
+            (check "provenance says a name was renamed away, not deleted"
+                   (= [:first-seen :renamed :renamed-away] (mapv :event (:events q))))))
         (finally (fs/delete-tree dir))))
     (if (pos? @failures)
       (do (println @failures "failed") (System/exit 1))
