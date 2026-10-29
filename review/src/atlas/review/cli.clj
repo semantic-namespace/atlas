@@ -142,21 +142,49 @@
     (:from (first (filter #(= dev-id (:to %)) (renames db prev version))))))
 
 (defn- lineage-timeline
-  "`dev-id`'s snapshots, then back through every dev-id it was renamed from:
-  the first snapshot under a new name carries :snap/prev-dev-id and no
-  :snap/added, and the old name's deletion at the rename is left out."
+  "`dev-id`'s snapshots, and back through every dev-id it was renamed from.
+  Each stretch of versions the dev-id is present in may start with a rename,
+  the first stretch or a later one (a name that goes and comes back): the
+  older name's snapshots before it are included, and so on back. The first
+  snapshot under a new name carries :snap/prev-dev-id and no :snap/added; a
+  deletion carries :snap/deleted, and a rename away is not a deletion."
   [db versions dev-id]
-  (loop [dev-id dev-id, renamed-at nil, acc [], seen #{}]
-    (let [snaps (cond->> (hf/entity-timeline db dev-id)
-                  renamed-at (remove #(and (= renamed-at (:snap/version %)) (nil? (:snap/aspect %)))))
-          first-snap (first snaps)
-          old (when first-snap (renamed-from db versions {:version (:snap/version first-snap) :dev-id dev-id}))]
-      (if (and old (not (seen old)))
-        (recur old (:snap/version first-snap)
-               ;; a rename keeps every aspect: nothing was added under the new name
-               (into acc (cons (-> first-snap (assoc :snap/prev-dev-id old) (dissoc :snap/added)) (rest snaps)))
-               (conj seen dev-id))
-        (vec (sort-by :snap/version (into acc snaps)))))))
+  (letfn [(renamed-away? [id version]
+            (when-let [prev (last (take-while #(neg? (compare % version)) versions))]
+              (some #(= id (:from %)) (renames db prev version))))
+          (snaps-before [id before]
+            (let [deleted (set (for [[_ s] (get-in db [:dev-ids id]) :when (:snap/deleted s)] (:snap/version s)))]
+              (for [s (hf/entity-timeline db id)
+                    :let [v (:snap/version s)]
+                    :when (or (nil? before) (neg? (compare v before)))]
+                (cond-> s
+                  ;; renamed away, not deleted: it ends a stretch, and the new name's stretch says so
+                  (deleted v) (assoc (if (renamed-away? id v) ::renamed-away :snap/deleted) true)))))
+          (stretches [snaps]
+            ;; split after each deletion: each part is one stretch of presence
+            (reduce (fn [acc s] (if (some #(get (peek (peek acc)) %) [:snap/deleted ::renamed-away])
+                                  (conj acc [s])
+                                  (conj (pop acc) (conj (peek acc) s))))
+                    [[]] snaps))
+          (walk [id before seen]
+            (mapcat (fn [[start & more :as stretch]]
+                      (let [old (when (and start (not (:snap/deleted start)))
+                                  (renamed-from db versions {:version (:snap/version start) :dev-id id}))
+                            k [old (:snap/version start)]]
+                        (if (and old (not (seen k)))
+                          (concat (walk old (:snap/version start) (conj seen k))
+                                  ;; a rename keeps every aspect: nothing was added under the new name
+                                  (cons (-> start (assoc :snap/prev-dev-id old) (dissoc :snap/added)) more))
+                          stretch)))
+                    (stretches (vec (snaps-before id before)))))]
+    ;; walking back from a later stretch can reach an earlier stretch of the same
+    ;; dev-id again: each snapshot once, the one that names its rename if either does
+    (->> (walk dev-id nil #{})
+         (remove ::renamed-away)
+         (group-by (juxt :snap/version :snap/dev-id))
+         (map (fn [[_ ss]] (or (first (filter :snap/prev-dev-id ss)) (first ss))))
+         (sort-by :snap/version)
+         vec)))
 
 (defn timeline
   ([dir from to] (timeline dir from to nil))

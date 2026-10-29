@@ -170,6 +170,26 @@
                       (not (str/includes? (:err broken) "Stack trace"))))
           (check "an unknown command prints usage" (and (= 1 (:exit misuse)) (str/includes? (:err misuse) "usage:")))))
       (finally (fs/delete-tree dir)))
+    ;; a name that goes and comes back: renamed away in v2, renamed back in v3
+    (let [dir (fs/create-temp-dir {:prefix "atlas-store-smoke"})]
+      (try
+        (git dir "init" "-q")
+        (git dir "config" "user.email" "smoke@example.invalid")
+        (git dir "config" "user.name" "smoke")
+        (let [v1 (example-registry)
+              v2 (next-version v1)
+              [k e] (entry v2 :fn/list-calendar-events)
+              v3 (assoc v2 k (assoc e :atlas/dev-id :fn/list-user-calendar-events))
+              a (commit! dir v1 "registry: v1")
+              _ (commit! dir v2 "registry: v2")
+              c (commit! dir v3 "registry: v3")
+              r (:timeline (run dir "timeline" a c ":fn/list-user-calendar-events"))]
+          (check "entity timeline follows a name that goes and comes back, without a deletion"
+                 (and (= [:fn/list-user-calendar-events :fn/list-calendar-events :fn/list-user-calendar-events]
+                         (mapv :snap/dev-id r))
+                      (= [nil :fn/list-user-calendar-events :fn/list-calendar-events] (mapv :snap/prev-dev-id r))
+                      (not-any? :snap/deleted r))))
+        (finally (fs/delete-tree dir))))
     (if (pos? @failures)
       (do (println @failures "failed") (System/exit 1))
       (println "OK store CLI smoke"))))
