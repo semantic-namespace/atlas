@@ -86,7 +86,11 @@
               e (run dir "timeline" a b ":fn/check-user-availability")]
           (check "timeline skips and lists the unreadable commit" (= 1 (count (:unreadable t))))
           (check "timeline has one step per readable version" (= 1 (count (:timeline t))))
-          (check "entity timeline covers both versions" (= 2 (count (:timeline e)))))
+          (check "entity timeline covers both versions" (= 2 (count (:timeline e))))
+          (let [r (:timeline (run dir "timeline" a b ":fn/list-calendar-events"))]
+            (check "entity timeline follows a rename back to the old dev-id"
+                   (and (= [:fn/list-user-calendar-events :fn/list-calendar-events] (mapv :snap/dev-id r))
+                        (= :fn/list-user-calendar-events (:snap/prev-dev-id (second r)))))))
         (let [grown (run dir "provenance" ":fn/check-user-availability")
               renamed (run dir "provenance" ":fn/list-calendar-events")
               dropped (run dir "provenance" ":endpoint/admin-delete-user")

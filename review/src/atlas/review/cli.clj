@@ -137,6 +137,27 @@
         between (set (str/split-lines (git dir "rev-list" (str a ".." b))))]
     (into [a] (comp (map :commit) (filter between)) (reverse (store/versions b)))))
 
+(defn- renamed-from [db versions {:keys [version dev-id]}]
+  (when-let [prev (last (take-while #(neg? (compare % version)) versions))]
+    (:from (first (filter #(= dev-id (:to %)) (renames db prev version))))))
+
+(defn- lineage-timeline
+  "`dev-id`'s snapshots, then back through every dev-id it was renamed from:
+  the first snapshot under a new name carries :snap/prev-dev-id and no
+  :snap/added, and the old name's deletion at the rename is left out."
+  [db versions dev-id]
+  (loop [dev-id dev-id, renamed-at nil, acc [], seen #{}]
+    (let [snaps (cond->> (hf/entity-timeline db dev-id)
+                  renamed-at (remove #(and (= renamed-at (:snap/version %)) (nil? (:snap/aspect %)))))
+          first-snap (first snaps)
+          old (when first-snap (renamed-from db versions {:version (:snap/version first-snap) :dev-id dev-id}))]
+      (if (and old (not (seen old)))
+        (recur old (:snap/version first-snap)
+               ;; a rename keeps every aspect: nothing was added under the new name
+               (into acc (cons (-> first-snap (assoc :snap/prev-dev-id old) (dissoc :snap/added)) (rest snaps)))
+               (conj seen dev-id))
+        (vec (sort-by :snap/version (into acc snaps)))))))
+
 (defn timeline
   ([dir from to] (timeline dir from to nil))
   ([dir from to dev-id]
@@ -147,7 +168,7 @@
       :versions versions
       :unreadable unreadable
       :timeline (if dev-id
-                  (vec (hf/full-timeline db (kw dev-id)))
+                  (lineage-timeline db versions (kw dev-id))
                   (vec (for [[v-old v-new] (partition 2 1 versions)
                              :let [r (version-report db v-old v-new)]]
                          {:version v-new
@@ -183,10 +204,6 @@
                  :else acc)))
            {:live? false :events []}
            (sort-by :snap/version (map second (get-in db [:dev-ids dev-id]))))))
-
-(defn- renamed-from [db versions {:keys [version dev-id]}]
-  (when-let [prev (last (take-while #(neg? (compare % version)) versions))]
-    (:from (first (filter #(= dev-id (:to %)) (renames db prev version))))))
 
 (defn- lineage-events
   [db versions dev-id]
