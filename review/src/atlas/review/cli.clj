@@ -37,7 +37,12 @@
   aspect-lifecycle <from-ref> <to-ref> <aspect>
   bottlenecks <ref>
   islands <ref>
-  orphans <ref> [--exclude aspect]")
+  orphans <ref> [--exclude aspect]
+
+dependencies, dependents, blast-radius and trace-causes follow effective
+dependencies: what an entity declares it depends on, and the producers of
+the data it consumes. Its dependents are what declares a dependency on it,
+and the consumers of the data it produces.")
 
 (defn- fail [msg & [data]] (throw (ex-info msg (or data {}))))
 
