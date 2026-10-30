@@ -86,7 +86,11 @@
               e (run dir "timeline" a b ":fn/check-user-availability")]
           (check "timeline skips and lists the unreadable commit" (= 1 (count (:unreadable t))))
           (check "timeline has one step per readable version" (= 1 (count (:timeline t))))
-          (check "entity timeline covers both versions" (= 2 (count (:timeline e)))))
+          (check "entity timeline covers both versions" (= 2 (count (:timeline e))))
+          (let [r (:timeline (run dir "timeline" a b ":fn/list-calendar-events"))]
+            (check "entity timeline follows a rename back to the old dev-id"
+                   (and (= [:fn/list-user-calendar-events :fn/list-calendar-events] (mapv :snap/dev-id r))
+                        (= :fn/list-user-calendar-events (:snap/prev-dev-id (second r)))))))
         (let [grown (run dir "provenance" ":fn/check-user-availability")
               renamed (run dir "provenance" ":fn/list-calendar-events")
               dropped (run dir "provenance" ":endpoint/admin-delete-user")
@@ -166,6 +170,34 @@
                       (not (str/includes? (:err broken) "Stack trace"))))
           (check "an unknown command prints usage" (and (= 1 (:exit misuse)) (str/includes? (:err misuse) "usage:")))))
       (finally (fs/delete-tree dir)))
+    ;; a name that goes and comes back: renamed away in v2, renamed back in v3
+    (let [dir (fs/create-temp-dir {:prefix "atlas-store-smoke"})]
+      (try
+        (git dir "init" "-q")
+        (git dir "config" "user.email" "smoke@example.invalid")
+        (git dir "config" "user.name" "smoke")
+        (let [v1 (example-registry)
+              v2 (next-version v1)
+              [k e] (entry v2 :fn/list-calendar-events)
+              v3 (assoc v2 k (assoc e :atlas/dev-id :fn/list-user-calendar-events))
+              a (commit! dir v1 "registry: v1")
+              _ (commit! dir v2 "registry: v2")
+              c (commit! dir v3 "registry: v3")
+              r (:timeline (run dir "timeline" a c ":fn/list-user-calendar-events"))]
+          (check "entity timeline follows a name that goes and comes back, without a deletion"
+                 (and (= [:fn/list-user-calendar-events :fn/list-calendar-events :fn/list-user-calendar-events]
+                         (mapv :snap/dev-id r))
+                      (= [nil :fn/list-user-calendar-events :fn/list-calendar-events] (mapv :snap/prev-dev-id r))
+                      (not-any? :snap/deleted r)))
+          (store/configure! (str dir) prefix nil)
+          (let [p (cli/provenance (str dir) ":fn/list-user-calendar-events" {:from a :to c})
+                q (cli/provenance (str dir) ":fn/list-calendar-events" {:from a :to c})]
+            (check "provenance follows a name that goes and comes back"
+                   (= [[:first-seen nil] [:renamed :fn/list-user-calendar-events] [:renamed :fn/list-calendar-events]]
+                      (mapv (juxt :event :from) (:events p))))
+            (check "provenance says a name was renamed away, not deleted"
+                   (= [:first-seen :renamed :renamed-away] (mapv :event (:events q))))))
+        (finally (fs/delete-tree dir))))
     (if (pos? @failures)
       (do (println @failures "failed") (System/exit 1))
       (println "OK store CLI smoke"))))
