@@ -36,6 +36,6 @@
   "devDependencies": {
     "shadow-cljs": "^2.27.5",
     "js-qualified-keywords": "^0.1.1",
-    "meta-source": "github:semantic-namespace/meta-source#b08abe10939407a13a35652fc539cb7151214583"
+    "meta-source-js": "github:semantic-namespace/meta-source-js#0768926bb85d3a99c4e1f14a74c0aea90c3e301e"
   }
 }

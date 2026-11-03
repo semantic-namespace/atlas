@@ -58,8 +58,9 @@ console.log(findByAspect("domain/auth"));
 ## meta-source pack: endpoint calls
 
 EXPERIMENTAL. `@semantic-namespace/atlas/meta-source/endpoint-call` is a
-[meta-source](https://github.com/semantic-namespace/meta-source) pack for a
-JavaScript/TypeScript service that calls another service's endpoints, the
+[meta-source](https://github.com/semantic-namespace/meta-source) pack, run by
+its JavaScript reader [meta-source-js](https://github.com/semantic-namespace/meta-source-js),
+for a JavaScript/TypeScript service that calls another service's endpoints, the
 other service being described by an atlas registry.
 
 Each call is a registry entry naming the endpoint it reaches. The property
@@ -115,7 +116,7 @@ entry, and the var carrying its id. `check` reports:
 ```
 
 ```sh
-npx -p github:semantic-namespace/meta-source -p @semantic-namespace/atlas meta-source-js check --fail-on error
+npx -p github:semantic-namespace/meta-source-js -p @semantic-namespace/atlas meta-source-js check --fail-on error
 ```
 
 Tests: `npm run test:pack` (fixtures in `test/fixtures/`).
