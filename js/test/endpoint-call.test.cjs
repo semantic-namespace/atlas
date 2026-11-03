@@ -1,12 +1,12 @@
 'use strict';
-// The endpoint-call pack, run by meta-source's JavaScript reader on
+// The endpoint-call pack, run by meta-source-js on
 // fixtures/shop-node: a node service calling fixtures/shop-clj's endpoints.
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
-const index = require('meta-source/js/src/index');
-const hover = require('meta-source/js/src/hover');
-const { kw, toJson } = require('meta-source/js/src/edn');
+const index = require('meta-source-js/src/index');
+const hover = require('meta-source-js/src/hover');
+const { kw, toJson } = require('meta-source-js/src/edn');
 const { segments, compare, PARAM } = require('../meta-source/endpoint-call.cjs');
 
 const build = (dir) => index.build(index.config(path.join(__dirname, 'fixtures', dir)));
