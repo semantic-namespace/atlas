@@ -106,8 +106,10 @@
           (check "provenance of a deleted entity ends with its deletion"
                  (and (= [:first-seen :deleted] (mapv :event (:events dropped))) (not (:present dropped))))
           (check "--from narrows the range" (= b (:commit (:first-seen later)))))
-        (let [deps (run dir "dependencies" b ":endpoint/query-availability")
-              dents (run dir "dependents" b (str (first deps)))
+        (let [dep-edges (run dir "dependencies" b ":endpoint/query-availability")
+              deps (mapv :entity dep-edges)
+              dent-edges (run dir "dependents" b (str (first deps)))
+              dents (mapv :entity dent-edges)
               blast (run dir "blast-radius" b (str (first deps)))
               causes (run dir "trace-causes" b ":endpoint/query-availability" "--hops" "1")]
           (check "dependencies of an endpoint are found" (seq deps))
@@ -116,7 +118,12 @@
                  (some #(= :endpoint/query-availability (:entity %)) blast))
           (check "one-hop trace-causes equals the dependencies"
                  (= (set deps) (set (map :entity causes))))
-          (check "every one-hop cause is at hop 1" (every? #(= 1 (:hops %)) causes)))
+          (check "every one-hop cause is at hop 1" (every? #(= 1 (:hops %)) causes))
+          (check "findings, in a store no export wrote any into, is an empty list"
+                 (= [] (run dir "findings" b)))
+          (check "each dependency says how it goes: a declaring property, or [:data k ...]"
+                 (every? #(and (seq (:via %)) (or (= :data (first (:via %))) (every? keyword? (:via %))))
+                         (concat dep-edges dent-edges))))
         (let [k (first (keep #(first (:execution-function/context (val %))) v2))
               producers (run dir "producers-of" b (str k))
               consumers (run dir "consumers-of" b (str k))]

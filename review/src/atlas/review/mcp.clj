@@ -24,31 +24,37 @@
    "entity_detail" {:cmd "entity-detail" :args ["dev_id"] :doc "An entity: its type, aspects, props, and what it depends on and is depended on by"}
    "producers_of" {:cmd "producers-of" :args ["data_key"] :doc "The entities producing a data key"}
    "consumers_of" {:cmd "consumers-of" :args ["data_key"] :doc "The entities consuming a data key"}
-   "dependencies" {:cmd "dependencies" :args ["dev_id"] :doc "What an entity depends on, effectively: what it declares, and the producers of the data it consumes"}
-   "dependents" {:cmd "dependents" :args ["dev_id"] :doc "What depends on an entity, effectively: what declares a dependency on it, and the consumers of the data it produces"}
+   "dependencies" {:cmd "dependencies" :args ["dev_id"] :doc "What an entity depends on, effectively: what it declares, and the producers of the data it consumes. Each with :via, the property declaring the dependency, or [data k ...], the keys consumed that it produces"}
+   "dependents" {:cmd "dependents" :args ["dev_id"] :doc "What depends on an entity, effectively: what declares a dependency on it, and the consumers of the data it produces. Each with :via, the property of the dependent declaring it, or [data k ...]"}
+   "findings" {:cmd "findings" :args [] :opts ["severity" "problem" "rule" "about"]
+               :doc "What meta-source found (an export's :meta-source/finding entities), most severe first: each finding's severity, problem, rule, the entities it is about, where it is and its message. Optional filters: severity (error, warning, info), problem, rule (its name), about (a dev-id). Call with no filter to see them all"}
    "blast_radius" {:cmd "blast-radius" :args ["dev_id"] :doc "Everything that depends on an entity, transitively, by hops, through declared dependencies and data (what consumes what it produces): what a change to it reaches"}
    "trace_causes" {:cmd "trace-causes" :args ["dev_id"] :doc "Everything an entity depends on, transitively, by hops, through declared dependencies and data (what produces what it consumes): where a failure in it may come from"}
    "overview" {:cmd "overview" :args [] :doc "The registry's entity types, aspects and counts"}})
 
-(defn- schema [{:keys [args]}]
+(defn- schema [{:keys [args opts]}]
   {:type "object"
-   :properties (into {"ref" ref-prop}
-                     (for [a args] [a (case a
-                                        "aspect" (id-prop "the aspect")
-                                        "data_key" (id-prop "the data key")
-                                        (id-prop "the entity's dev-id"))]))
+   :properties (-> {"ref" ref-prop}
+                   (into (for [a args] [a (case a
+                                            "aspect" (id-prop "the aspect")
+                                            "data_key" (id-prop "the data key")
+                                            (id-prop "the entity's dev-id"))]))
+                   (into (for [o opts] [o {:type "string" :description (str "only findings with this " o)}])))
    :required args})
 
 (defn- call
   "The tool's answer as JSON text, or an error result."
   [dir name arguments]
-  (if-let [{:keys [cmd args]} (get tools name)]
+  (if-let [{:keys [cmd args opts]} (get tools name)]
     (try
       (let [ref (or (get arguments "ref") "HEAD")
             vals (for [a args] (get arguments a))]
         (when-let [missing (seq (filter #(str/blank? (get arguments %)) args))]
           (throw (ex-info (str "missing " (str/join ", " missing)) {})))
-        {:content [{:type "text" :text (json/generate-string (cli/jsonable (cli/run cmd dir (cons ref vals) {})))}]})
+        {:content [{:type "text" :text (json/generate-string
+                                         (cli/jsonable (cli/run cmd dir (cons ref vals)
+                                                                (into {} (for [o opts :let [v (get arguments o)] :when (not (str/blank? v))]
+                                                                           [(keyword o) v])))))}]})
       (catch Exception e
         {:content [{:type "text" :text (or (ex-message e) (str e))}] :isError true}))
     {:content [{:type "text" :text (str "unknown tool " name)}] :isError true}))
