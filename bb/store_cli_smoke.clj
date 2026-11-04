@@ -1,11 +1,13 @@
 (ns store-cli-smoke
   (:require [atlas.registry :as registry]
             [atlas.review.cli :as cli]
+            [atlas.review.mcp :as mcp]
             [atlas.review.registry :as store]
             [atlas.store.canonical :as canon]
             [babashka.classpath :as cp]
             [babashka.fs :as fs]
             [babashka.process :as p]
+            [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]))
 
@@ -108,8 +110,10 @@
           (check "provenance of a deleted entity ends with its deletion"
                  (and (= [:first-seen :deleted] (mapv :event (:events dropped))) (not (:present dropped))))
           (check "--from narrows the range" (= b (:commit (:first-seen later)))))
-        (let [deps (run dir "dependencies" b ":endpoint/query-availability")
-              dents (run dir "dependents" b (str (first deps)))
+        (let [dep-edges (run dir "dependencies" b ":endpoint/query-availability")
+              deps (mapv :entity dep-edges)
+              dent-edges (run dir "dependents" b (str (first deps)))
+              dents (mapv :entity dent-edges)
               blast (run dir "blast-radius" b (str (first deps)))
               causes (run dir "trace-causes" b ":endpoint/query-availability" "--hops" "1")]
           (check "dependencies of an endpoint are found" (seq deps))
@@ -118,7 +122,12 @@
                  (some #(= :endpoint/query-availability (:entity %)) blast))
           (check "one-hop trace-causes equals the dependencies"
                  (= (set deps) (set (map :entity causes))))
-          (check "every one-hop cause is at hop 1" (every? #(= 1 (:hops %)) causes)))
+          (check "every one-hop cause is at hop 1" (every? #(= 1 (:hops %)) causes))
+          (check "findings, in a store no export wrote any into, is an empty list"
+                 (= [] (run dir "findings" b)))
+          (check "each dependency says how it goes: a declaring property, or [:data k ...]"
+                 (every? #(and (seq (:via %)) (or (= :data (first (:via %))) (every? keyword? (:via %))))
+                         (concat dep-edges dent-edges))))
         (let [k (first (keep #(first (:execution-function/context (val %))) v2))
               producers (run dir "producers-of" b (str k))
               consumers (run dir "consumers-of" b (str k))]
@@ -159,6 +168,26 @@
                  (and (vector? (:bottlenecks (run dir "bottlenecks" b)))
                       (pos? (:count (run dir "islands" b)))
                       (pos? (:count (run dir "orphans" b))))))
+        (let [in (str/join "\n" (map json/generate-string
+                                      [{:jsonrpc "2.0" :id 1 :method "initialize" :params {}}
+                                       {:jsonrpc "2.0" :method "notifications/initialized"}
+                                       {:jsonrpc "2.0" :id 2 :method "tools/list"}
+                                       {:jsonrpc "2.0" :id 3 :method "tools/call"
+                                        :params {:name "by_aspect" :arguments {:ref b :aspect ":tier/cached"}}}
+                                       {:jsonrpc "2.0" :id 4 :method "tools/call" :params {:name "by_aspect" :arguments {}}}]))
+              out (java.io.StringWriter.)
+              _ (store/configure! (str dir) prefix nil)
+              _ (mcp/serve (str dir) (java.io.BufferedReader. (java.io.StringReader. in)) out)
+              replies (mapv json/parse-string (str/split-lines (str out)))]
+          (check "the MCP server answers each request and no notification"
+                 (= [1 2 3 4] (mapv #(get % "id") replies)))
+          (check "the MCP server lists the registry tools"
+                 (contains? (set (map #(get % "name") (get-in replies [1 "result" "tools"]))) "blast_radius"))
+          (check "an MCP tool call answers as bb registry does"
+                 (= {"entities" ["fn/check-user-availability"]}
+                    (json/parse-string (get-in replies [2 "result" "content" 0 "text"]))))
+          (check "an MCP tool call missing an argument is a tool error"
+                 (true? (get-in replies [3 "result" "isError"]))))
         (let [ok (bb-registry dir "diff" "." (subs a 0 7) (subs b 0 7))
               broken (bb-registry dir "diff" "." b "HEAD")
               misuse (bb-registry dir "nonsense" ".")]

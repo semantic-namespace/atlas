@@ -23,6 +23,7 @@
   consumers-of <ref> <data-key>
   dependents <ref> <dev-id>
   dependencies <ref> <dev-id>
+  findings <ref> [--severity s] [--problem p] [--rule r] [--about dev-id]
   gaps <ref> [--min-similarity x] [--max n]
   overview <ref>
   by-aspect <ref> <aspect>
@@ -52,7 +53,8 @@ and the consumers of the data it produces.")
   (if (keyword? s) s (keyword (cond-> s (str/starts-with? s ":") (subs 1)))))
 
 (def ^:private flags #{"--prefix" "--hops" "--min-similarity" "--max" "--from" "--to"
-                        "--k" "--min-cosine" "--consumes" "--produces" "--exclude"})
+                        "--k" "--min-cosine" "--consumes" "--produces" "--exclude"
+                        "--severity" "--problem" "--rule" "--about"})
 
 (defn parse-args [args]
   (loop [[a & more :as args] args, pos [], opts {}]
@@ -310,6 +312,59 @@ and the consumers of the data it produces.")
 
 (defn- ids [xs] (vec (sort xs)))
 
+(defn- by-dev-id [reg] (into {} (for [[_ e] reg :when (:atlas/dev-id e)] [(:atlas/dev-id e) e])))
+
+(defn- names? [v id] (or (= v id) (and (coll? v) (some #{id} v))))
+
+(defn- via
+  "How `from` depends on `to`: the properties of `from`'s entry whose value
+   names `to` (a declared dependency, through whichever property declares
+   it), else [:data k ...], the keys `from` consumes that `to` produces."
+  [g entries from to]
+  (let [props (sort (for [[k v] (get entries from)
+                          :when (and (not= k :atlas/dev-id) (names? v to))]
+                      k))]
+    (if (seq props)
+      (vec props)
+      (into [:data] (sort (filter (graph/produces g to) (graph/consumes g from)))))))
+
+(defn- with-via
+  "Each of `others` (dependencies of `id` when `dir` is :dependencies, its
+   dependents when :dependents) with the way the dependency goes."
+  [g entries id others dir]
+  (vec (for [o (sort others)]
+         {:entity o :via (if (= dir :dependencies) (via g entries id o) (via g entries o id))})))
+
+(def ^:private severity-rank {:error 0 :warning 1 :info 2})
+
+(defn- aspect-in [aspects ns] (some #(when (= ns (namespace %)) (keyword (name %))) aspects))
+
+(defn findings
+  "What meta-source found, as an export records it (entities of type
+   :meta-source/finding): each with its severity, problem, rule, the
+   entities it is about, where it is and what it says, most severe first.
+   Filtered by --severity, --problem, --rule (its name after the last dot)
+   or --about (a dev-id)."
+  [dir ref {:keys [severity problem rule about]}]
+  (let [reg (registry-at (commit-of dir ref))]
+    (->> (for [[_ e] reg
+               :when (= :meta-source/finding (:atlas/type e))
+               :let [as (set (:atlas/aspects e))
+                     f {:finding (:atlas/dev-id e)
+                        :severity (aspect-in as "severity")
+                        :problem (aspect-in as "problem")
+                        :rule (some #(when (= "rule" (namespace %)) (name %)) as)
+                        :about (vec (:finding/about e))
+                        :at (:finding/at e)
+                        :message (:finding/message e)}]
+               :when (and (or (nil? severity) (= (kw severity) (:severity f)))
+                          (or (nil? problem) (= (kw problem) (:problem f)))
+                          (or (nil? rule) (some-> (:rule f) (str/ends-with? (str/replace (str rule) #"^:" ""))))
+                          (or (nil? about) (some #{(kw about)} (:about f))))]
+           (into {} (remove (comp nil? val)) f))
+         (sort-by (juxt #(severity-rank (:severity %) 3) #(str (:problem %)) #(str (:at %))))
+         vec)))
+
 (defn- at
   "Calls `f` with the registry recorded at `ref` bound as the current registry."
   [dir ref f]
@@ -333,8 +388,11 @@ and the consumers of the data it produces.")
     "trace-causes" (by-hops (graph/upstream-closure (graph-at dir (first args)) (set (map kw (rest args))) (hops opts)))
     "producers-of" (ids (graph/producers-of (graph-at dir (first args)) (kw (second args))))
     "consumers-of" (ids (graph/consumers-of (graph-at dir (first args)) (kw (second args))))
-    "dependents" (ids (graph/effective-dependents (graph-at dir (first args)) (kw (second args))))
-    "dependencies" (ids (graph/effective-dependencies (graph-at dir (first args)) (kw (second args))))
+    "dependents" (let [reg (registry-at (commit-of dir (first args))) g (graph/from-registry reg) id (kw (second args))]
+                   (with-via g (by-dev-id reg) id (graph/effective-dependents g id) :dependents))
+    "dependencies" (let [reg (registry-at (commit-of dir (first args))) g (graph/from-registry reg) id (kw (second args))]
+                     (with-via g (by-dev-id reg) id (graph/effective-dependencies g id) :dependencies))
+    "findings" (findings dir (first args) opts)
     "gaps" (graph/structural-gaps (graph-at dir (first args))
                                   (or (some-> (:min-similarity opts) parse-double) 0.5)
                                   (or (some-> (:max opts) parse-long) 20))
@@ -363,12 +421,14 @@ and the consumers of the data it produces.")
 
 (def ^:private arity
   {"diff" 2 "timeline" 2 "provenance" 1 "blast-radius" 2 "trace-causes" 2 "producers-of" 2
-   "consumers-of" 2 "dependents" 2 "dependencies" 2 "gaps" 1
+   "consumers-of" 2 "dependents" 2 "dependencies" 2 "findings" 1 "gaps" 1
    "overview" 1 "by-aspect" 2 "entities-by-type" 2 "entity-detail" 2 "entity-position" 2
    "consumer-pattern" 2 "near-intent" 2 "suggest-placement" 2 "aspect-anomalies" 1
    "aspect-signature" 2 "aspect-lifecycle" 3 "bottlenecks" 1 "islands" 1 "orphans" 1})
 
-(defn- jsonable [x]
+(defn jsonable
+  "`x` as JSON-ready data: keywords as strings, sets sorted."
+  [x]
   (walk/postwalk #(cond (keyword? %) (subs (str %) 1)
                         (set? %) (sorted %)
                         :else %)
