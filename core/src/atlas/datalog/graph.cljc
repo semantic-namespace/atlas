@@ -63,12 +63,18 @@
 (defn producers-of [g k] (holders g :entity/produces k))
 (defn consumers-of [g k] (holders g :entity/consumes k))
 
-(defn effective-dependencies [g id]
+(defn effective-dependencies
+  "What `id` declares it depends on, and the producers of the data it
+   consumes: an entity reading a key depends on whatever writes it."
+  [g id]
   (-> (dependencies g id)
       (into (mapcat #(producers-of g %) (consumes g id)))
       (disj id)))
 
-(defn effective-dependents [g id]
+(defn effective-dependents
+  "What declares a dependency on `id`, and the consumers of the data it
+   produces."
+  [g id]
   (-> (reverse-dependencies g id)
       (into (mapcat #(consumers-of g %) (produces g id)))
       (disj id)))
