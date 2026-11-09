@@ -96,6 +96,36 @@ throws leaves the registry as it was. It returns
 `{:added [...] :removed [...] :changed [...]}`. `forget-loads!` clears the
 remembered loads, beside `atlas.registry/reset-all!` in test fixtures.
 
+### Test cases
+
+A test case's target and the parts of its fixture that are data go in the
+file. What isn't data (an exception in the fixture, a mock fn, the
+expectations' predicates) comes from a var of no args carrying the case's
+dev-id. `load!` puts it under `:test-case/impl`, and a test case from a file
+without one is an error, as an execution function without one is.
+
+```clojure
+;; registry/test_cases.edn
+{:test/parse-order--malformed
+ {:atlas/type :atlas/test-case
+  :atlas/aspects #{:test/orders :test/orders-malformed}
+  :test-case/target :fn/parse-order
+  :test-case/fixture {:order/raw "{not json"}}}
+```
+
+```clojure
+(defn ^{:atlas.source/id :test/parse-order--malformed} malformed []
+  {:test-case/expectations
+   [{:expectation/kind :result
+     :expectation/pred #(= :malformed (:order/error %))
+     :expectation/docs "unparseable input is a :malformed error"}]})
+```
+
+`atlas.ontology.test-case/case-of` is the case the runner runs: the file's
+props with the var's return merged in, the two fixtures by key. A key both
+give with different values throws. A test case registered with `register!`
+runs as before.
+
 ## Reading the sources without running them: meta-source
 
 The tooling that reads a project's sources from its files, with no JVM and

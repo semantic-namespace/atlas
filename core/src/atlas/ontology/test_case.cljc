@@ -9,6 +9,11 @@
    - Optional mocks (component overrides)
    - Expectations (predicates over the result, trace, or post-call state)
 
+   From registry files (atlas.source), the parts that aren't data (host
+   objects in the fixture, mock fns, expectation predicates) come from a var
+   of no args carrying :atlas.source/id: load! puts it under :test-case/impl
+   and `case-of` merges what it returns into the case.
+
    Usage:
      (require '[atlas.ontology.test-case])"
   (:require [atlas.registry :as registry]
@@ -36,6 +41,7 @@
 (s/def :test-case/fixture map?)
 (s/def :test-case/mocks (s/nilable map?))
 (s/def :test-case/expectations (s/coll-of :test-case/expectation))
+(s/def :test-case/impl ifn?)
 
 ;; =============================================================================
 ;; ONTOLOGY
@@ -49,8 +55,10 @@
   :ontology/keys [:test-case/target
                   :test-case/fixture
                   :test-case/mocks
-                  :test-case/expectations]
-  :ontology/not-serialisable-keys [:test-case/mocks :test-case/expectations]
+                  :test-case/expectations
+                  :test-case/impl]
+  :ontology/impl-key :test-case/impl
+  :ontology/not-serialisable-keys [:test-case/mocks :test-case/expectations :test-case/impl]
   :dataflow/deps-key :test-case/target})
 
 ;; Type-ref: test-case → target entity (the entity being tested)
@@ -100,6 +108,38 @@
   (->> (entity/all-with-aspect :atlas/test-case)
        (filter #(= :atlas/test-case (:atlas/type (entity/props-for %))))))
 
+(defn case-of
+  "The test case `dev-id` as the runner sees it: its registered props, with
+   what its :test-case/impl returns merged in. The two fixtures merge by key;
+   any other key, or a fixture key, given by both with different values
+   throws, as a conflict between atlas.source sources does."
+  [dev-id]
+  (let [props (entity/props-for dev-id)
+        impl (:test-case/impl props)]
+    (if-not impl
+      props
+      (let [given (impl)
+            _ (when-not (map? given)
+                (throw (ex-info "A test case's :test-case/impl must return a map"
+                                {:test-case dev-id :returned given})))
+            fixture-clash (for [[k v] (:test-case/fixture given)
+                                :when (contains? (:test-case/fixture props) k)
+                                :when (not= v (get-in props [:test-case/fixture k]))]
+                            k)
+            clash (for [[k v] (dissoc given :test-case/fixture)
+                        :when (contains? props k)
+                        :when (not= v (get props k))]
+                    k)]
+        (when (or (seq clash) (seq fixture-clash))
+          (throw (ex-info "A test case's props and its :test-case/impl disagree"
+                          {:test-case dev-id
+                           :keys (vec clash)
+                           :fixture-keys (vec fixture-clash)})))
+        (cond-> (merge props (dissoc given :test-case/fixture))
+          (or (:test-case/fixture props) (:test-case/fixture given))
+          (assoc :test-case/fixture (merge (:test-case/fixture props)
+                                           (:test-case/fixture given))))))))
+
 (registry/register!
  :invariant/test-case-target-exists
  :atlas/invariant
@@ -133,8 +173,7 @@
   (fn []
     (let [test-cases (user-test-cases)
           violations (for [tc-id test-cases
-                          :let [props (entity/props-for tc-id)
-                                expectations (:test-case/expectations props)]
+                          :let [expectations (:test-case/expectations (case-of tc-id))]
                           :when (empty? expectations)]
                       tc-id)]
       (when (seq violations)
@@ -152,8 +191,7 @@
   (fn []
     (let [test-cases (user-test-cases)
           violations (for [tc-id test-cases
-                          :let [expectations (:test-case/expectations
-                                              (entity/props-for tc-id))]
+                          :let [expectations (:test-case/expectations (case-of tc-id))]
                           exp expectations
                           :when (:expectation/pred exp)
                           :when (not (:expectation/docs exp))]
