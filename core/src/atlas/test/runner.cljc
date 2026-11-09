@@ -13,6 +13,7 @@
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
             [atlas.ontology :as o]
+            [atlas.ontology.test-case :as test-case]
             [atlas.ontology.execution-function.executor :as executor]
             [atlas.ontology.execution-function.history :as h]
             [atlas.adapter.integrant :as ig-adapter]
@@ -212,7 +213,7 @@
   ;; Ensure history is enabled so trace expectations work
   (when-not (h/enabled?) (h/enable!))
   (let [{:test-case/keys [target fixture mocks expectations]}
-        (entity/props-for case-dev-id)
+        (test-case/case-of case-dev-id)
 
         ;; fn-dep mocks stay in context; only component mocks affect ig subsystem
         component-mocks (into {} (remove (fn [[k _]] (entity/has-aspect? k :atlas/execution-function))
