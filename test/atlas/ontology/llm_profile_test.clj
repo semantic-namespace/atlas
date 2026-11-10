@@ -16,6 +16,16 @@
           (contains? aspects :effect/send) :authz/external-write
           (contains? aspects :effect/read) :authz/read)))
 
+;; What a surface serves, as a domain would say it: served name and registry id.
+(defn served [{:surface/keys [scope]}]
+  (case scope
+    :mcp-scope/system-observer [{:name "list_fees" :dev-id :tool/list-fees}
+                                {:name "delete_fee" :dev-id :tool/delete-fee}
+                                {:name "orphan_tool" :dev-id nil}]
+    :mcp-scope/dev [{:name "list_fees" :dev-id :tool/list-fees}
+                    {:name "unsubscribe" :dev-id :tool/unsubscribe}]
+    []))
+
 (use-fixtures :each
   (fn [f]
     (registry/reset-all!)
@@ -35,7 +45,8 @@
   (registry/register!
    :classifier/test-authz :atlas/tool-classifier #{:classifier/test}
    {:classifier/classes #{:authz/read :authz/mutate :authz/external-write}
-    :classifier/fn 'atlas.ontology.llm-profile-test/classify})
+    :classifier/fn 'atlas.ontology.llm-profile-test/classify
+    :classifier/served-fn 'atlas.ontology.llm-profile-test/served})
   (registry/register!
    :prompt/review-fees :atlas/llm-prompt #{:domain/fees :intent/read}
    {:llm-prompt/summary "Review fees" :llm-prompt/file "review.md" :llm-prompt/mcp-deps [:tool/list-fees]})
@@ -129,3 +140,14 @@
     :llm-profile/classifier :classifier/test-authz
     :llm-profile/class-policy {:authz/read :allow :authz/mutate :ask :authz/external-write :ask}})
   (is (some #(= :cycle (:problem %)) (:details (first (violations-of :llm-profile-extends-resolves))))))
+
+(deftest export-decides-every-served-tool
+  (seed!)
+  (let [x (profile/export)]
+    (is (= [{:surface/env :env/production :surface/scope :mcp-scope/system-observer
+             :tools {"delete_fee" :deny "list_fees" :allow "orphan_tool" :deny}}]
+           (get-in x [:llm-profile/prod-observe :surfaces]))
+        "a served tool with no registry id is denied")
+    (is (= {"list_fees" :allow "unsubscribe" :ask}
+           (get-in x [:llm-profile/developer-base :surfaces 0 :tools])))
+    (is (= ["psql *prod*" "kubectl * delete *"] (get-in x [:llm-profile/prod-observe :commands :deny])))))

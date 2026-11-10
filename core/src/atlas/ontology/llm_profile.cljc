@@ -51,6 +51,9 @@
 
 (s/def :classifier/classes (s/coll-of qualified-keyword? :kind set? :min-count 1))
 (s/def :classifier/fn qualified-symbol?)
+;; optional: (fn [surface]) -> [{:name served-name :dev-id kw-or-nil}], the
+;; tools a surface serves, so `export` can decide every one by its served name
+(s/def :classifier/served-fn qualified-symbol?)
 
 ;; ---------------------------------------------------------------------------
 ;; :atlas/llm-profile and :atlas/tool-classifier
@@ -126,10 +129,16 @@
           {}
           (map entity/props-for (reverse (chain id)))))
 
-(defn- classifier-fn [classifier-id]
-  (when-let [sym (:classifier/fn (entity/props-for classifier-id))]
+(defn- resolve-sym [sym]
+  (when sym
     #?(:clj (try (requiring-resolve sym) (catch Exception _ nil))
        :cljs nil)))
+
+(defn- classifier-fn [classifier-id]
+  (resolve-sym (:classifier/fn (entity/props-for classifier-id))))
+
+(defn- served-fn [classifier-id]
+  (resolve-sym (:classifier/served-fn (entity/props-for classifier-id))))
 
 (defn class-of
   "The class a profile's classifier gives a tool, or nil when it can't."
@@ -193,6 +202,8 @@
                                 {:problem :classifier-not-registered :classifier cid}
                                 #?(:clj (nil? (classifier-fn cid)) :cljs false)
                                 {:problem :classifier-fn-unresolved :classifier cid :fn (:classifier/fn c)}
+                                #?(:clj (and (:classifier/served-fn c) (nil? (served-fn cid))) :cljs false)
+                                {:problem :classifier-served-fn-unresolved :classifier cid :fn (:classifier/served-fn c)}
                                 (not= classes named)
                                 {:problem :policy-incomplete
                                  :undecided (vec (sort (set/difference classes named)))
@@ -229,3 +240,31 @@
             :details   (vec violations)
             :severity  :error
             :message   "Every tool a hosted prompt depends on is allowed or asked for by the profile: the prompt can run under it"})))}))
+
+;; ---------------------------------------------------------------------------
+;; Export: each profile, decided for every tool its surfaces serve
+;; ---------------------------------------------------------------------------
+
+(defn export
+  "Every profile, effective, with each surface's tools decided by served
+   name, for an adapter to turn into an agent's rules (atlas.adapter.claude-code):
+
+     {profile-id {:summary :commands :network :prompts
+                  :surfaces [{:surface/env :surface/scope :tools {served-name decision}}]}}
+
+   A surface's tools come from the classifier's :classifier/served-fn; a
+   served tool with no registry id is denied. Without a served-fn, :tools is
+   empty: the system hasn't said what its surfaces serve."
+  []
+  (into (sorted-map)
+        (for [id (profiles)
+              :let [p (effective id)
+                    served (served-fn (:llm-profile/classifier p))]]
+          [id {:summary (:llm-profile/summary p)
+               :commands (:llm-profile/commands p)
+               :network (:llm-profile/network p)
+               :prompts (:llm-profile/prompts p)
+               :surfaces (vec (for [s (sort-by (juxt :surface/env :surface/scope) (:llm-profile/surfaces p))]
+                                (assoc s :tools (into (sorted-map)
+                                                      (for [{:keys [name dev-id]} (when served (served s))]
+                                                        [name (if dev-id (decision id dev-id) :deny)])))))}])))
