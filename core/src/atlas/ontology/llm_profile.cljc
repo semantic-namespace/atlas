@@ -12,6 +12,10 @@
    - the prompts meant to run under it;
    - a base profile it extends.
 
+   A profile's references (prompts, base, classifier) are properties, not
+   type-refs: a profile isn't made of them, so it inherits none of their
+   aspects.
+
    The decision for a tool is never stored: it is the tool's class, from the
    domain's classifier, looked up in the profile's policy. A tool the
    classifier can't class is denied. So a new tool is decided by its class,
@@ -24,7 +28,6 @@
      (require '[atlas.ontology.llm-profile])"
   (:require [atlas.registry :as registry]
             [atlas.registry.lookup :as entity]
-            [atlas.ontology.type-ref :as type-ref]
             [clojure.set :as set]
             [clojure.spec.alpha :as s]))
 
@@ -71,44 +74,13 @@
   :ontology/keys [:classifier/classes
                   :classifier/fn]})
 
-;; Type-refs use :entity/depends, so dependents-of and blast radius reach a
-;; profile from the prompts it hosts, the profile it extends, and its classifier.
-
-(registry/register!
- :type-ref/llm-profile-prompts
- :atlas/type-ref
- #{:meta/ref-llm-profile-prompts}
- {:type-ref/source       :atlas/llm-profile
-  :type-ref/property     :llm-profile/prompts
-  :type-ref/datalog-verb :entity/depends
-  :type-ref/cardinality  :db.cardinality/many})
-
-(registry/register!
- :type-ref/llm-profile-extends
- :atlas/type-ref
- #{:meta/ref-llm-profile-extends}
- {:type-ref/source       :atlas/llm-profile
-  :type-ref/property     :llm-profile/extends
-  :type-ref/datalog-verb :entity/depends
-  :type-ref/cardinality  :db.cardinality/one})
-
-(registry/register!
- :type-ref/llm-profile-classifier
- :atlas/type-ref
- #{:meta/ref-llm-profile-classifier}
- {:type-ref/source       :atlas/llm-profile
-  :type-ref/property     :llm-profile/classifier
-  :type-ref/datalog-verb :entity/depends
-  :type-ref/cardinality  :db.cardinality/one})
-
-(registry/register!
- :datalog-extractor/llm-profile
- :atlas/datalog-extractor
- #{:meta/llm-profile-extractor}
- {:datalog-extractor/fn
-  (fn [compound-id props]
-    (when (contains? compound-id :atlas/llm-profile)
-      (type-ref/extract-reference-facts :atlas/llm-profile compound-id props)))})
+;; No type-refs. A type-ref says an entity is made of what it points at, and
+;; compile! folds the target's aspects into the entity's identity. A profile
+;; hosts prompts, extends a base and uses a classifier; it isn't made of them.
+;; As type-refs, a profile carried its prompts' aspects (:atlas/llm-prompt,
+;; :tier/mcp) and was served as a prompt, and a production profile inherited
+;; its base's :env/dev. The references stay properties, checked by the
+;; invariants below, and found by hosting-profiles and extending-profiles.
 
 ;; ---------------------------------------------------------------------------
 ;; Reading a profile
@@ -120,6 +92,16 @@
   (sort (for [id (entity/all-with-aspect :atlas/llm-profile)
               :when (not (contains? (entity/identity-for id) :atlas/ontology))]
           id)))
+
+(defn hosting-profiles
+  "The profiles that host a prompt."
+  [prompt-id]
+  (filter #(contains? (set (:llm-profile/prompts (entity/props-for %))) prompt-id) (profiles)))
+
+(defn extending-profiles
+  "The profiles that extend a profile directly."
+  [profile-id]
+  (filter #(= profile-id (:llm-profile/extends (entity/props-for %))) (profiles)))
 
 (defn- chain
   "The profile and the ones it extends, base last; stops at a cycle."

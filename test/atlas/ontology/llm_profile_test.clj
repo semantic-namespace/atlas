@@ -4,7 +4,6 @@
    [atlas.registry :as registry]
    [atlas.registry.lookup :as lookup]
    [atlas.datalog :as datalog]
-   [atlas.ide :as ide]
    [atlas.invariant :as inv]
    [atlas.ontology.llm-profile :as profile]))
 
@@ -79,10 +78,15 @@
         "surfaces are restated, never widened by inheritance")
     (is (= :classifier/test-authz (:llm-profile/classifier p)) "inherited when not restated")))
 
-(deftest a-profile-depends-on-what-it-hosts-and-extends
+(deftest a-profile-is-not-made-of-what-it-references
   (seed!)
-  (is (contains? (set (ide/dependents-of :prompt/review-fees)) :llm-profile/prod-observe))
-  (is (contains? (set (ide/dependents-of :llm-profile/developer-base)) :llm-profile/prod-observe)))
+  (registry/compile!)
+  (testing "its identity stays its own after compile: no prompt, base or classifier aspects"
+    (is (= #{:atlas/llm-profile :role/developer :env/production :intent/observe}
+           (lookup/identity-for :llm-profile/prod-observe))))
+  (testing "the references are found by lookup instead"
+    (is (= [:llm-profile/prod-observe] (profile/hosting-profiles :prompt/review-fees)))
+    (is (= [:llm-profile/prod-observe] (profile/extending-profiles :llm-profile/developer-base)))))
 
 (deftest the-policy-is-total
   (seed!)
