@@ -204,6 +204,14 @@
         (is (= #{"/pr?ref=owner%2Frepo%237&against=deployed%2Fdev" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links plain)))
         (is (= #{"/pr?ref=owner%2Frepo%237" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links on-dev)))))))
 
+(deftest a-def-names-its-entity-in-metadata
+  (is (= :fn.brandfetch/get-brand
+         (decorate/declared-id {:id ["defn" "^{:atlas.source/id :fn.brandfetch/get-brand} get-brand"]})))
+  (is (= :fn/x (decorate/declared-id {:id ["defn" "^{:meta-source/id :fn/x} x"]})))
+  (is (= :fn/y (decorate/declared-id {:id ["s.atlas/register!" ":fn/y"]})))
+  (is (nil? (decorate/declared-id {:id ["defn" "^:private helper"]})))
+  (is (nil? (decorate/declared-id {:id ["defn" "plain"]}))))
+
 (def src4 (sha "4"))
 (def src5 (sha "5"))
 
