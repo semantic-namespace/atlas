@@ -31,28 +31,49 @@
 
 (defn- a-or-an [word] (str (if (re-find #"(?i)^[aeiou]" (str word)) "an " "a ") word))
 
-(defn- choose-base
+(defn- choose-base*
+  [line report {:keys [registry built-on run-at]}]
+  (let [ancestry (candidate/ancestry (get-in report [:pr :repo]))
+        choice (cond
+                 (:base-sha built-on) (assoc (reg/base-for line (:base-sha built-on) ancestry) :sha (:base-sha built-on) :of :ci)
+                 (and registry run-at) (assoc (reg/base-recorded-by line run-at) :run-at run-at)
+                 :else (assoc (reg/base-for line (:base report) ancestry) :sha (:base report) :of :merge-base))]
+    (assoc choice :recorded-past? (boolean (seq (reg/since line (:version choice)))))))
+
+(defn choose-base
   "The version on `line` the candidate is compared with: the newest recorded
   at or before the commit CI built it on, named by the artifact's sidecar;
   without one, the newest recorded by the time the run started; without a
-  candidate, the newest at or before the PR's merge base."
-  [line report {:keys [registry built-on run-at]}]
-  (let [ancestry (candidate/ancestry (get-in report [:pr :repo]))]
-    (cond
-      (:base-sha built-on) (assoc (reg/base-for line (:base-sha built-on) ancestry) :sha (:base-sha built-on) :of :ci)
-      (and registry run-at) (assoc (reg/base-recorded-by line run-at) :run-at run-at)
-      :else (assoc (reg/base-for line (:base report) ancestry) :sha (:base report) :of :merge-base))))
+  candidate, the newest at or before the PR's merge base. When the store has
+  no version built from that commit itself, it is fetched (at most once per
+  the store's fetch interval) and the choice made again, so a checkout that
+  has not caught up is not read as a registry that did not change.
+  `:recorded-past?` is whether the store holds a version recorded after the
+  one chosen: only then does it say the commits in between left the registry
+  as it was."
+  [line report cand]
+  (let [choice (choose-base* line report cand)]
+    (if (and (not= :exact (:how choice)) (reg/refresh! line))
+      (choose-base* line report cand)
+      choice)))
 
 (defn- base-note
   "How the base version was chosen, after its label."
-  [{:keys [version how sha of run-at]}]
+  [{:keys [version how sha of run-at recorded-past?]}]
   (let [whose (if (= :ci of) "the PR's base" "this PR's merge base")
         built (short-sha (or (:source-sha version) (:source version) (:commit version)))
-        inferred (when run-at (str " (inferred from the CI run's start " run-at ")"))]
+        inferred (when run-at (str " (inferred from the CI run's start " run-at ")"))
+        not-yet (fn [to] (list " " [:span.tag.tag-ext "the store has recorded nothing after " built
+                                     ", so it cannot tell whether the registry changed from there to " to
+                                     "; this base may be missing changes"]))]
     (case how
       :exact (str " · " whose)
-      (:ancestor :committed) (str " · registry unchanged from " built " to " whose " " (short-sha sha) (when (= :committed how) ", by commit time"))
-      :run-time (str " · registry unchanged from " built " to the PR's base" inferred)
+      (:ancestor :committed) (if recorded-past?
+                               (str " · registry unchanged from " built " to " whose " " (short-sha sha) (when (= :committed how) ", by commit time"))
+                               (not-yet (str whose " " (short-sha sha))))
+      :run-time (if recorded-past?
+                  (str " · registry unchanged from " built " to the PR's base" inferred)
+                  (list (not-yet "the PR's base") inferred))
       :oldest (list " " [:span.tag.tag-ext "the store has no version as old as this PR's base; comparing with the oldest one"] inferred)
       :latest (str " · " whose " could not be placed in the store; comparing with the newest"))))
 

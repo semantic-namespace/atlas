@@ -203,3 +203,27 @@
         (is (= "compare with: main · dev · staging" (d/hiccup->text plain)))
         (is (= #{"/pr?ref=owner%2Frepo%237&against=deployed%2Fdev" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links plain)))
         (is (= #{"/pr?ref=owner%2Frepo%237" "/pr?ref=owner%2Frepo%237&against=deployed%2Fstaging"} (links on-dev)))))))
+
+(def src4 (sha "4"))
+(def src5 (sha "5"))
+
+(deftest a-store-that-has-not-caught-up-is-not-read-as-an-unchanged-registry
+  (let [report (assoc report :base src4)
+        header (fn [] (with-candidate #(str/join "\n" (map d/hiccup->text (decorate/registry-header (decorate/context report) report)))))]
+    (with-redefs [atlas.review.candidate/ancestor? (fn [_ a b] (or (= a b) (= [a b] [src2 src4]) (= [a b] [src1 src4]) (= [a b] [src1 src2])))]
+      (testing "nothing recorded after the version it falls back to"
+        (swap! reg/config assoc :fetch-ttl-ms 600000)
+        (reg/refresh! (:branch @reg/config))
+        (let [h (header)]
+          (is (str/includes? h "recorded nothing after 2222222, so it cannot tell whether the registry changed from there to this PR's merge base 4444444"))
+          (is (not (str/includes? h "registry unchanged")))))
+      (testing "the store records a later version: the commits in between left it as it was"
+        (git! *origin* "commit" "-q" "--allow-empty" "-m" (str "registry: " (subs src5 0 7)) "-m" (str "Source-Sha: " src5))
+        (swap! reg/config assoc :fetch-ttl-ms 0)
+        (is (str/includes? (header) "registry unchanged from 2222222 to this PR's merge base 4444444")))
+      (testing "a base the remote has recorded is fetched before the page is read"
+        (record! *origin* head (str "registry: " (subs src4 0 7)) src4)
+        (swap! reg/config assoc :fetch-ttl-ms 600000)
+        (swap! @#'reg/fetched empty)
+        (let [h (header)]
+          (is (re-find #"base main @ \w+ \(4444444\) · this PR's merge base" h) h))))))
