@@ -26,12 +26,14 @@
    - an atlas entity under another library's id (an integrant component's
      key, a resolver's) describes that thing: it is one entity, its primary
      definition the library's, not one id in two packs;
-   - atlas's type-refs say what an entry key's ids are: :entity/depends a
-     dependency, :entity/consumes and :entity/produces dataflow, any other
-     verb a relation of its own (a decision's :decision/mitigates), which
-     reach doesn't follow and rules follow with :related; an entity's type
-     and aspects, and what an ontology or a type-ref is for, are relations
-     too, not dependencies; an invariant's :invariant/rule names nothing;
+   - what an entry key's ids are is what atlas's datalog draws from it
+     (`atlas-relations`): an ontology's :dataflow/deps-key and a type-ref's
+     :entity/depends are dependencies; a type-ref's other verbs (a
+     decision's :decision/mitigates), and an ontology key atlas draws no
+     edge from, are relations of their own, which reach doesn't follow and
+     rules follow with :related; an entity's type and aspects, and what an
+     ontology or a type-ref is for, are relations too; an invariant's
+     :invariant/rule names nothing;
    - atlas's context and response keys are dataflow: what an execution
      function, an endpoint or a workflow consumes and produces, and what the
      project's own ontologies declare as theirs (:dataflow/context-key,
@@ -93,9 +95,9 @@
 ;; Relations: what an entry key's ids are
 ;; =============================================================================
 
-(def builtin-type-ref-files
-  "atlas's own ontologies registering type-refs, read from the classpath: a
-   project's source doesn't include them."
+(def builtin-ontology-files
+  "atlas's own ontologies, read from the classpath for their ontology and
+   type-ref entries: a project's source doesn't include them."
   ["atlas/ontology/allium_rule.cljc"
    "atlas/ontology/business_pattern.cljc"
    "atlas/ontology/data_schema.cljc"
@@ -108,12 +110,14 @@
    "atlas/ontology/identity_role.cljc"
    "atlas/ontology/interface_endpoint.cljc"
    "atlas/ontology/interface_protocol.cljc"
+   "atlas/ontology/llm_profile.cljc"
    "atlas/ontology/llm_prompt.cljc"
    "atlas/ontology/risk_failure_mode.cljc"
    "atlas/ontology/shapeup.cljc"
    "atlas/ontology/structure_component.cljc"
    "atlas/ontology/system.cljc"
    "atlas/ontology/test_case.cljc"
+   "atlas/ontology/type_ref.cljc"
    "atlas/ontology/value_proposition.cljc"
    "atlas/ontology/workflow.cljc"
    "atlas/ontology/workflow_producer.cljc"])
@@ -133,23 +137,47 @@
 
 (declare builtin-entries)
 
-(def ^:private builtin-type-refs
-  (delay (into {} (filter #(= :atlas/type-ref (:atlas/type (val %))))
-               (builtin-entries builtin-type-ref-files))))
+(def ^:private builtin-ontologies
+  "atlas's own ontology and type-ref entries."
+  (delay (into {} (filter #(#{:atlas/ontology :atlas/type-ref} (:atlas/type (val %))))
+               (builtin-entries builtin-ontology-files))))
 
-(defn type-ref-relations
-  "{property {:verb v}}: what each type-ref says its property's ids are,
-   atlas's own (see `builtin-type-ref-files`) and those of the entries read
-   (a project's own ontologies), its :type-ref/datalog-verb as meta-source's
-   verb: :entity/depends is :depends, :entity/consumes and :entity/produces
-   dataflow, any other a relation of its own."
+(defn- key-list [x]
+  (cond (nil? x) [] (sequential? x) (vec x) :else [x]))
+
+(defn atlas-relations
+  "{key {:verb v}}: what each entry key's ids are, from what atlas's own
+   datalog draws its edges from (atlas.datalog.facts): atlas's ontologies
+   and type-refs (see `builtin-ontology-files`) and those of the entries
+   read (a project's own), later ones winning:
+
+   - an ontology key with no verb at all: a relation by its own name, as
+     atlas draws no edge from it;
+   - an ontology's :dataflow/extra-verbs: their verb, unless the key is a
+     context or response key (dataflow, `ontology-dataflow`);
+   - a type-ref: its :type-ref/datalog-verb, :entity/depends being
+     :depends and :entity/consumes and :entity/produces dataflow;
+   - an ontology's :dataflow/deps-key: :depends, as atlas draws
+     :entity/depends from it next to any verb a type-ref gives the key (a
+     workflow's :workflow/producers is a dependency, and :workflow/has-producer)."
   [entries]
-  (into {} (for [[_ e] (merge @builtin-type-refs entries)
-                 :when (= :atlas/type-ref (:atlas/type e))
-                 :let [p (:type-ref/property e)
-                       v (:type-ref/datalog-verb e)]
-                 :when (and (qualified-keyword? p) (qualified-keyword? v))]
-             [p {:verb (get reserved-verb v v)}])))
+  (let [all (vals (merge @builtin-ontologies entries))
+        onts (filter #(= :atlas/ontology (:atlas/type %)) all)
+        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key %)) (key-list (:dataflow/response-key %))) onts))]
+    (merge
+     (into {} (for [o onts k (:ontology/keys o)
+                    :when (and (qualified-keyword? k) (not (dataflow-keys k)))]
+                [k {:verb k}]))
+     (into {} (for [o onts [k v] (:dataflow/extra-verbs o)
+                    :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
+                [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v)))}]))
+     (into {} (for [e all
+                    :when (= :atlas/type-ref (:atlas/type e))
+                    :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
+                    :when (and (qualified-keyword? p) (qualified-keyword? v))]
+                [p {:verb (get reserved-verb v v)}]))
+     (into {} (for [o onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)]
+                [k {:verb :depends}])))))
 
 (def builtin-rule-files
   "atlas's own ontologies whose invariants carry an :invariant/rule, read
@@ -401,7 +429,7 @@
    :pack/dataflow dataflow
    :pack/dataflow-of ontology-dataflow
    :pack/relations meta-relations
-   :pack/relations-of type-ref-relations
+   :pack/relations-of atlas-relations
    ;; a rule written as data names the types and keys it is about, not
    ;; entities the invariant depends on
    :pack/not-references #{:invariant/rule}
