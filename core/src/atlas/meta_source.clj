@@ -157,27 +157,34 @@
      context or response key (dataflow, `ontology-dataflow`);
    - a type-ref: its :type-ref/datalog-verb, :entity/depends being
      :depends and :entity/consumes and :entity/produces dataflow;
-   - an ontology's :dataflow/deps-key: :depends, as atlas draws
-     :entity/depends from it next to any verb a type-ref gives the key (a
-     workflow's :workflow/producers is a dependency, and :workflow/has-producer)."
+   - an ontology's :dataflow/deps-key: a dependency, as atlas draws
+     :entity/depends from it, keeping the verb a type-ref or extra verb gives
+     the key: a workflow's :workflow/producers is {:verb
+     :workflow/has-producer :depends true}, which reach follows and
+     {:related {:workflow/has-producer ...}} follows too."
   [entries]
   (let [all (vals (merge @builtin-ontologies entries))
         onts (filter #(= :atlas/ontology (:atlas/type %)) all)
-        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key %)) (key-list (:dataflow/response-key %))) onts))]
+        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key %)) (key-list (:dataflow/response-key %))) onts))
+        ;; the verbs atlas declares: extra verbs, then type-refs
+        declared (merge
+                  (into {} (for [o onts [k v] (:dataflow/extra-verbs o)
+                                 :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
+                             [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v)))}]))
+                  (into {} (for [e all
+                                 :when (= :atlas/type-ref (:atlas/type e))
+                                 :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
+                                 :when (and (qualified-keyword? p) (qualified-keyword? v))]
+                             [p {:verb (get reserved-verb v v)}])))]
     (merge
      (into {} (for [o onts k (:ontology/keys o)
                     :when (and (qualified-keyword? k) (not (dataflow-keys k)))]
                 [k {:verb k}]))
-     (into {} (for [o onts [k v] (:dataflow/extra-verbs o)
-                    :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
-                [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v)))}]))
-     (into {} (for [e all
-                    :when (= :atlas/type-ref (:atlas/type e))
-                    :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
-                    :when (and (qualified-keyword? p) (qualified-keyword? v))]
-                [p {:verb (get reserved-verb v v)}]))
-     (into {} (for [o onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)]
-                [k {:verb :depends}])))))
+     declared
+     (into {} (for [o onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)
+                    :let [v (:verb (get declared k))]]
+                ;; a verb of its own stays, and the key is a dependency too
+                [k (if (qualified-keyword? v) {:verb v :depends true} {:verb :depends})])))))
 
 (def builtin-rule-files
   "atlas's own ontologies whose invariants carry an :invariant/rule, read

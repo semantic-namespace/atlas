@@ -203,7 +203,7 @@
                 (= #{:fn/a :component/db} (reached :job/nightly))))
     (check "relations: what an invariant's :invariant/rule mentions is no reference"
            (not (contains? (set (map :dev-id (:referenced-by (index/uses idx :component/db)))) :invariant/db-has-deps)))
-    (check "relations: an ontology's :dataflow/deps-key is a dependency, though a type-ref gives the key a verb of its own (as atlas's datalog draws both)"
+    (check "relations: an ontology's :dataflow/deps-key is a dependency that keeps the verb a type-ref gives it (as atlas's datalog draws both)"
            (let [root (project {"src/app/w.clj"
                                 (str "(ns app.w (:require [atlas.registry :as registry]))\n"
                                      "(registry/register! :atlas/widget :atlas/ontology #{:atlas/ontology}\n"
@@ -215,10 +215,13 @@
                                      "(registry/register! :widget/three :atlas/widget #{:tier/service} {})\n")})
                  wi (build {:root root :src ["src"]})
                  vs (into {} (map (juxt :via :verb)) (:depends-on (index/dependencies wi :widget/one)))]
-             (and (= {:widget/parts :depends :widget/notes :widget/notes} (select-keys vs [:widget/parts :widget/notes]))
-                  (= #{:widget/two} (set (map :dev-id (:reaches (index/reach wi :widget/one))))))))
-    (check "relations: atlas's own workflow producers stay dependencies"
-           (= :depends (:verb (get (atlas-pack/atlas-relations {}) :workflow/producers)) (:verb (get (atlas-pack/atlas-relations {}) :test-case/target))))
+             (and (= {:widget/parts :widget/has-part :widget/notes :widget/notes} (select-keys vs [:widget/parts :widget/notes]))
+                  (= #{:widget/two} (set (map :dev-id (:reaches (index/reach wi :widget/one)))))
+                  ;; and :related follows its type-ref verb
+                  (true? (:depends (first (filter #(= :widget/parts (:via %)) (:depends-on (index/dependencies wi :widget/one)))))))))
+    (check "relations: atlas's own workflow producers and test targets stay dependencies, keeping their type-ref verbs"
+           (and (= {:verb :workflow/has-producer :depends true} (get (atlas-pack/atlas-relations {}) :workflow/producers))
+                (= {:verb :test/tests :depends true} (get (atlas-pack/atlas-relations {}) :test-case/target))))
     (check "relations: atlas's own type-refs and keys give no conflicting or unknown relation"
            (empty? (concat (problems idx :conflicting-relations) (problems idx :relation-not-understood)))))
 
