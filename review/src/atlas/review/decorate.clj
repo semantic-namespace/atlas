@@ -117,10 +117,19 @@
 
 (defn- source-name [{:keys [cand-v base-v]}] (str "registry store @" (or cand-v base-v)))
 
-(defn declared-id [form]
+(defn declared-id
+  "The registry id `form` declares: the keyword a register!/bind call names,
+  or the :atlas.source/id (or :meta-source/id) on the name of a def whose
+  entity lives in an EDN registry file."
+  [form]
   (let [[head arg] (:id form)]
-    (when (and arg (re-find #"register!|bind|def-.*tool|defmethod" (str head)) (str/starts-with? arg ":"))
-      (try (edn/read-string arg) (catch Exception _ nil)))))
+    (cond
+      (nil? arg) nil
+      (and (re-find #"register!|bind|def-.*tool|defmethod" (str head)) (str/starts-with? arg ":"))
+      (try (edn/read-string arg) (catch Exception _ nil))
+      (str/starts-with? arg "^")
+      (let [m (meta (try (edn/read-string arg) (catch Exception _ nil)))]
+        (or (:atlas.source/id m) (:meta-source/id m))))))
 
 (defn- delta [{:keys [base cand]} id]
   (when cand (diff/entity-delta base cand id)))
