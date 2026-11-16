@@ -4,7 +4,10 @@
                                            :git/sha "f8aa005764a8d8c51cdcdc534728139b30ff4b8e"}
         ;; bb source: atlas's registry read by meta-source, with atlas.meta-source/pack
         io.github.semantic-namespace/meta-source {:git/url "https://github.com/semantic-namespace/meta-source"
-                                                  :git/sha "c19154622ffe0c9190aed5ab75fbebd347969166"}}
+                                                  :git/sha "ac437c5ea26f46cee921bd89b275dc3f842b2ddb"}
+        ;; the packs for Clojure libraries (integrant's, in the smoke)
+        io.github.semantic-namespace/meta-source-packs {:git/url "https://github.com/semantic-namespace/meta-source-packs"
+                                                        :git/sha "b88c71a3b767283f7c5de48148660a2aa01c2056"}}
  :tasks {source {:doc "meta-source (https://github.com/semantic-namespace/meta-source) on this checkout, with atlas.meta-source/pack: the project's sources read from its files (EDN registry, register! calls, annotated vars), no JVM and no code loaded. bb source <where|uses|deps|data|check|summary|serve> [arg] [--root dir] [--json] [--brief]; settings in <root>/meta-source.edn. A project of its own installs meta-source with bbin and names the pack there (see atlas.meta-source)."
                  :requires ([meta-source.cli])
                  :task (apply meta-source.cli/-main *command-line-args*)}
