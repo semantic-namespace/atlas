@@ -26,6 +26,14 @@
    - an atlas entity under another library's id (an integrant component's
      key, a resolver's) describes that thing: it is one entity, its primary
      definition the library's, not one id in two packs;
+   - what an entry key's ids are is what atlas's datalog draws from it
+     (`atlas-relations`): an ontology's :dataflow/deps-key and a type-ref's
+     :entity/depends are dependencies; a type-ref's other verbs (a
+     decision's :decision/mitigates), and an ontology key atlas draws no
+     edge from, are relations of their own, which reach doesn't follow and
+     rules follow with :related; an entity's type and aspects, and what an
+     ontology or a type-ref is for, are relations too; an invariant's
+     :invariant/rule names nothing;
    - atlas's context and response keys are dataflow: what an execution
      function, an endpoint or a workflow consumes and produces, and what the
      project's own ontologies declare as theirs (:dataflow/context-key,
@@ -83,6 +91,94 @@
 
 (declare registration)
 
+;; =============================================================================
+;; Relations: what an entry key's ids are
+;; =============================================================================
+
+(def builtin-ontology-files
+  "atlas's own ontologies, read from the classpath for their ontology and
+   type-ref entries: a project's source doesn't include them."
+  ["atlas/ontology/allium_rule.cljc"
+   "atlas/ontology/business_pattern.cljc"
+   "atlas/ontology/data_schema.cljc"
+   "atlas/ontology/decision.cljc"
+   "atlas/ontology/deployment.cljc"
+   "atlas/ontology/execution_function.cljc"
+   "atlas/ontology/experience_journey.cljc"
+   "atlas/ontology/governance_constraint.cljc"
+   "atlas/ontology/grain.cljc"
+   "atlas/ontology/identity_role.cljc"
+   "atlas/ontology/interface_endpoint.cljc"
+   "atlas/ontology/interface_protocol.cljc"
+   "atlas/ontology/llm_profile.cljc"
+   "atlas/ontology/llm_prompt.cljc"
+   "atlas/ontology/risk_failure_mode.cljc"
+   "atlas/ontology/shapeup.cljc"
+   "atlas/ontology/structure_component.cljc"
+   "atlas/ontology/system.cljc"
+   "atlas/ontology/test_case.cljc"
+   "atlas/ontology/type_ref.cljc"
+   "atlas/ontology/value_proposition.cljc"
+   "atlas/ontology/workflow.cljc"
+   "atlas/ontology/workflow_producer.cljc"])
+
+(def meta-relations
+  "atlas's own keys naming entities that are no dependency of the entity:
+   its type and aspects, what an ontology or a type-ref is for. Relations,
+   each its key as verb: `uses` on a type still lists its entities."
+  {:atlas/type {:verb :atlas/type}
+   :atlas/aspects {:verb :atlas/aspects}
+   :ontology/for {:verb :ontology/for}
+   :type-ref/source {:verb :type-ref/source}})
+
+(def ^:private reserved-verb
+  "atlas's datalog verbs that are meta-source's own: a dependency, dataflow."
+  {:entity/depends :depends :entity/consumes :consumes :entity/produces :produces})
+
+(declare builtin-entries)
+
+(def ^:private builtin-ontologies
+  "atlas's own ontology and type-ref entries."
+  (delay (into {} (filter #(#{:atlas/ontology :atlas/type-ref} (:atlas/type (val %))))
+               (builtin-entries builtin-ontology-files))))
+
+(defn- key-list [x]
+  (cond (nil? x) [] (sequential? x) (vec x) :else [x]))
+
+(defn atlas-relations
+  "{key {:verb v}}: what each entry key's ids are, from what atlas's own
+   datalog draws its edges from (atlas.datalog.facts): atlas's ontologies
+   and type-refs (see `builtin-ontology-files`) and those of the entries
+   read (a project's own), later ones winning:
+
+   - an ontology key with no verb at all: a relation by its own name, as
+     atlas draws no edge from it;
+   - an ontology's :dataflow/extra-verbs: their verb, unless the key is a
+     context or response key (dataflow, `ontology-dataflow`);
+   - a type-ref: its :type-ref/datalog-verb, :entity/depends being
+     :depends and :entity/consumes and :entity/produces dataflow;
+   - an ontology's :dataflow/deps-key: :depends, as atlas draws
+     :entity/depends from it next to any verb a type-ref gives the key (a
+     workflow's :workflow/producers is a dependency, and :workflow/has-producer)."
+  [entries]
+  (let [all (vals (merge @builtin-ontologies entries))
+        onts (filter #(= :atlas/ontology (:atlas/type %)) all)
+        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key %)) (key-list (:dataflow/response-key %))) onts))]
+    (merge
+     (into {} (for [o onts k (:ontology/keys o)
+                    :when (and (qualified-keyword? k) (not (dataflow-keys k)))]
+                [k {:verb k}]))
+     (into {} (for [o onts [k v] (:dataflow/extra-verbs o)
+                    :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
+                [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v)))}]))
+     (into {} (for [e all
+                    :when (= :atlas/type-ref (:atlas/type e))
+                    :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
+                    :when (and (qualified-keyword? p) (qualified-keyword? v))]
+                [p {:verb (get reserved-verb v v)}]))
+     (into {} (for [o onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)]
+                [k {:verb :depends}])))))
+
 (def builtin-rule-files
   "atlas's own ontologies whose invariants carry an :invariant/rule, read
    from the classpath: a project's source doesn't include them."
@@ -108,19 +204,24 @@
                  :when (and (= :atlas/invariant (:atlas/type e)) (map? (:invariant/rule e)))]
              [id (:invariant/rule e)])))
 
+(defn- builtin-entries
+  "{dev-id entry} of the register! calls written as data in `files`, read
+   from the classpath."
+  [files]
+  ;; edamame is babashka's, where meta-source runs the pack
+  (let [parse (requiring-resolve 'edamame.core/parse-string-all)]
+    (into {} (for [f files
+                   :let [r (io/resource f)]
+                   :when r
+                   form (parse (slurp r) {:all true :read-cond :allow :features #{:clj}
+                                          :auto-resolve (fn [a] (if (= :current a) 'user a))})
+                   :when (and (seq? form) (= 'register! (some-> (first form) name symbol)))
+                   :let [{:keys [dev-id entry]} (registration form)]
+                   :when dev-id]
+               [dev-id entry]))))
+
 (def ^:private builtin-rules
-  (delay
-    ;; edamame is babashka's, where meta-source runs the pack
-    (let [parse (requiring-resolve 'edamame.core/parse-string-all)]
-      (rules-in (into {} (for [f builtin-rule-files
-                               :let [r (io/resource f)]
-                               :when r
-                               form (parse (slurp r) {:all true :read-cond :allow :features #{:clj}
-                                                      :auto-resolve (fn [a] (if (= :current a) 'user a))})
-                               :when (and (seq? form) (= 'register! (some-> (first form) name symbol)))
-                               :let [{:keys [dev-id entry]} (registration form)]
-                               :when dev-id]
-                           [dev-id entry]))))))
+  (delay (rules-in (builtin-entries builtin-rule-files))))
 
 (defn- invariant-rules
   "The rules invariants carry: an :atlas/invariant's :invariant/rule is its
@@ -327,6 +428,11 @@
    :pack/merge {:atlas/aspects :union}
    :pack/dataflow dataflow
    :pack/dataflow-of ontology-dataflow
+   :pack/relations meta-relations
+   :pack/relations-of atlas-relations
+   ;; a rule written as data names the types and keys it is about, not
+   ;; entities the invariant depends on
+   :pack/not-references #{:invariant/rule}
    :pack/rules-of invariant-rules
    :pack/derive derive-types
    :pack/find find-forms

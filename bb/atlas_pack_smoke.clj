@@ -74,7 +74,8 @@
              (and (= #{:fn/calculate-cart-subtotal :endpoint/cart-graph-api} (set (map :dev-id (:producers d))))
                   (= #{:fn/calculate-cart-tax :fn/calculate-cart-total} (set (map :dev-id (:consumers d)))))))
     (check "check: code and files agree; only notes on keys read outside a contract remain"
-           (let [ps (index/check idx)]
+           ;; :not-covered is about this repo's other languages, not the cart
+           (let [ps (remove #(= :not-covered (:problem %)) (index/check idx))]
              (and (every? #(= :info (:severity %)) ps)
                   (= #{:fn/merge-carts :fn/calculate-cart-subtotal} (set (map :dev-id ps))))))
     (check "the hover gives the type and aspects"
@@ -168,6 +169,58 @@
     (check "an ontology's :dataflow/context-key and :dataflow/response-key are dataflow, with no :dataflow configured"
            (and (= [:widget/one] (map :dev-id (:consumers (index/data-key idx :user/id))))
                 (= [:widget/one] (map :dev-id (:producers (index/data-key idx :user/name)))))))
+
+  ;; ---- relations: type-refs say what an entry key's ids are
+  (let [root (project {"src/app/rel.clj"
+                       (str "(ns app.rel (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :atlas/execution-function :atlas/ontology #{:atlas/ontology} {:ontology/for :atlas/execution-function})\n"
+                            "(registry/register! :fn/a :atlas/execution-function #{:tier/service} {:execution-function/deps #{:component/db}})\n"
+                            "(registry/register! :component/db :atlas/structure-component #{:tier/foundation} {:structure-component/deps #{}})\n"
+                            "(registry/register! :failure-mode/slow :atlas/risk-failure-mode #{:tier/service} {})\n"
+                            "(registry/register! :decision/cache :atlas/decision #{:tier/service}\n"
+                            "  {:decision/realized-by [:fn/a] :decision/mitigates [:failure-mode/slow]})\n"
+                            ";; the project's own type-ref, and a key no type-ref types\n"
+                            "(registry/register! :type-ref/job-needs :atlas/type-ref #{:meta/job-needs}\n"
+                            "  {:type-ref/source :app/job :type-ref/property :job/needs :type-ref/datalog-verb :entity/depends})\n"
+                            "(registry/register! :job/nightly :app/job #{:tier/service} {:job/needs [:fn/a] :job/notes [:component/db]})\n"
+                            "(registry/register! :invariant/db-has-deps :atlas/invariant #{:tier/service}\n"
+                            "  {:invariant/rule {:when {:id :component/db} :require [{:has :structure-component/deps}]}})\n")})
+        idx (build {:root root :src ["src"]})
+        reached (fn [id & via] (set (map :dev-id (:reaches (apply index/reach idx id via)))))
+        verbs (fn [id] (into {} (map (juxt :dev-id :verb)) (:depends-on (index/dependencies idx id))))]
+    (check "relations: :entity/depends is a dependency; a decision's own verbs are relations, which reach doesn't follow"
+           (and (= {:component/db :depends :atlas/execution-function :atlas/type} (select-keys (verbs :fn/a) [:component/db :atlas/execution-function]))
+                (= #{:component/db} (reached :fn/a))
+                (= {:fn/a :decision/realized-by :failure-mode/slow :decision/mitigates} (select-keys (verbs :decision/cache) [:fn/a :failure-mode/slow]))
+                (empty? (reached :decision/cache))))
+    (check "relations: reach follows a decision's verb when :via names it"
+           (= #{:fn/a :component/db} (reached :decision/cache [:deps :decision/realized-by])))
+    (check "relations: an entity's type is a relation, not a dependency: uses still lists its entities, and a decision realizing a fn doesn't reach the db"
+           (and (= #{:fn/a :job/nightly} (set (map :dev-id (:reached-by (index/reached-by idx :component/db)))))
+                (contains? (set (map :dev-id (:referenced-by (index/uses idx :atlas/execution-function)))) :fn/a)))
+    (check "relations: a project's own type-ref types its key; a key none types stays a dependency"
+           (and (= :depends (:job/needs (into {} (map (juxt :via :verb)) (:depends-on (index/dependencies idx :job/nightly)))))
+                (= #{:fn/a :component/db} (reached :job/nightly))))
+    (check "relations: what an invariant's :invariant/rule mentions is no reference"
+           (not (contains? (set (map :dev-id (:referenced-by (index/uses idx :component/db)))) :invariant/db-has-deps)))
+    (check "relations: an ontology's :dataflow/deps-key is a dependency, though a type-ref gives the key a verb of its own (as atlas's datalog draws both)"
+           (let [root (project {"src/app/w.clj"
+                                (str "(ns app.w (:require [atlas.registry :as registry]))\n"
+                                     "(registry/register! :atlas/widget :atlas/ontology #{:atlas/ontology}\n"
+                                     "  {:ontology/for :atlas/widget :ontology/keys [:widget/parts :widget/notes] :dataflow/deps-key :widget/parts})\n"
+                                     "(registry/register! :type-ref/widget-parts :atlas/type-ref #{:meta/widget-parts}\n"
+                                     "  {:type-ref/source :atlas/widget :type-ref/property :widget/parts :type-ref/datalog-verb :widget/has-part})\n"
+                                     "(registry/register! :widget/one :atlas/widget #{:tier/service} {:widget/parts [:widget/two] :widget/notes [:widget/three]})\n"
+                                     "(registry/register! :widget/two :atlas/widget #{:tier/service} {})\n"
+                                     "(registry/register! :widget/three :atlas/widget #{:tier/service} {})\n")})
+                 wi (build {:root root :src ["src"]})
+                 vs (into {} (map (juxt :via :verb)) (:depends-on (index/dependencies wi :widget/one)))]
+             (and (= {:widget/parts :depends :widget/notes :widget/notes} (select-keys vs [:widget/parts :widget/notes]))
+                  (= #{:widget/two} (set (map :dev-id (:reaches (index/reach wi :widget/one))))))))
+    (check "relations: atlas's own workflow producers stay dependencies"
+           (= :depends (:verb (get (atlas-pack/atlas-relations {}) :workflow/producers)) (:verb (get (atlas-pack/atlas-relations {}) :test-case/target))))
+    (check "relations: atlas's own type-refs and keys give no conflicting or unknown relation"
+           (empty? (concat (problems idx :conflicting-relations) (problems idx :relation-not-understood)))))
 
   ;; ---- invariants' rules: the same failures as their fns
   ;; (atlas.invariant-rules-test runs the fns on the same file)
