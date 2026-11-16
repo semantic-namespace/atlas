@@ -10,7 +10,13 @@
    - what the agent's own tools may run and reach: command patterns, network
      hosts;
    - the prompts meant to run under it;
-   - a base profile it extends.
+   - a base profile it extends;
+   - the classes no rule may loosen (:llm-profile/fixed).
+
+   It also registers :atlas/llm-rule, a remembered answer: a rule that narrows
+   one profile, for a person or a team. A rule may deny anything, and may allow
+   only what its profile asks about, outside the fixed classes. `decide` is a
+   profile's decision for one call under the rules that apply, and why.
 
    A profile's references (prompts, base, classifier) are properties, not
    type-refs: a profile isn't made of them, so it inherits none of their
@@ -48,6 +54,17 @@
 (s/def :llm-profile/network (s/coll-of string? :kind set?))
 (s/def :llm-profile/prompts (s/coll-of qualified-keyword? :kind set?))
 (s/def :llm-profile/extends qualified-keyword?)
+;; classes whose decision no rule may loosen: a remembered answer never allows them
+(s/def :llm-profile/fixed (s/coll-of qualified-keyword? :kind set?))
+
+(s/def :llm-rule/profile qualified-keyword?)
+(s/def :llm-rule/decision #{:allow :deny})
+(s/def :llm-rule/class qualified-keyword?)
+(s/def :llm-rule/tool qualified-keyword?)
+;; {fact-key #{values}}: the rule applies to a call whose facts hold one of the values
+(s/def :llm-rule/facts (s/map-of qualified-keyword? set?))
+(s/def :llm-rule/expires inst?)
+(s/def :llm-rule/summary string?)
 
 (s/def :classifier/classes (s/coll-of qualified-keyword? :kind set? :min-count 1))
 (s/def :classifier/fn qualified-symbol?)
@@ -68,6 +85,14 @@
                   :llm-profile/surfaces
                   :llm-profile/classifier
                   :llm-profile/class-policy]})
+
+(registry/register!
+ :atlas/llm-rule
+ :atlas/ontology
+ #{:atlas/llm-rule}
+ {:ontology/for  :atlas/llm-rule
+  :ontology/keys [:llm-rule/profile
+                  :llm-rule/decision]})
 
 (registry/register!
  :atlas/tool-classifier
@@ -117,13 +142,16 @@
 (defn effective
   "A profile's props merged over the profiles it extends: a key it sets
    replaces the base's, except :llm-profile/class-policy, merged class by
-   class, and :llm-profile/commands, whose patterns add up. A profile's
+   class, :llm-profile/commands, whose patterns add up, and
+   :llm-profile/fixed, which adds up too: a profile can't free a class its
+   base fixed. A profile's
    :llm-profile/surfaces and :llm-profile/network replace the base's, so a
    profile can only narrow them by restating."
   [id]
   (reduce (fn [acc props]
-            (-> (merge acc (dissoc props :llm-profile/class-policy :llm-profile/commands))
+            (-> (merge acc (dissoc props :llm-profile/class-policy :llm-profile/commands :llm-profile/fixed))
                 (update :llm-profile/class-policy merge (:llm-profile/class-policy props))
+                (update :llm-profile/fixed (fnil set/union #{}) (:llm-profile/fixed props))
                 (update :llm-profile/commands
                         (fn [c] (merge-with (comp vec distinct concat) c (:llm-profile/commands props))))))
           {}
@@ -157,6 +185,118 @@
   "A profile's decision for each of tools: {tool-dev-id decision}."
   [profile-id tools]
   (into (sorted-map) (for [t tools] [t (decision profile-id t)])))
+
+;; ---------------------------------------------------------------------------
+;; Rules: remembered answers that narrow a profile
+;; ---------------------------------------------------------------------------
+
+(defn rules
+  "Every registered rule, as its props with its dev-id under :llm-rule/id.
+   Registered for a person or a team, a rule carries their aspect
+   (:member/u1), so their rules are a query: entities of type :atlas/llm-rule
+   with that aspect."
+  []
+  (sort-by :llm-rule/id
+           (for [id (entity/all-with-aspect :atlas/llm-rule)
+                 :when (not (contains? (entity/identity-for id) :atlas/ontology))]
+             (assoc (entity/props-for id) :llm-rule/id id))))
+
+(defn rules-for
+  "The registered rules that narrow a profile."
+  [profile-id]
+  (filter #(= profile-id (:llm-rule/profile %)) (rules)))
+
+(defn- now-ms []
+  #?(:clj (System/currentTimeMillis) :cljs (.getTime (js/Date.))))
+
+(defn- active? [rule now]
+  (let [expires (:llm-rule/expires rule)]
+    (or (nil? expires) (< (inst-ms now) (inst-ms expires)))))
+
+(defn- applies?
+  "Whether a rule speaks about this call: same profile, its tool or its class,
+   every fact it names holding one of its values, and not expired."
+  [profile-id tool cls facts now rule]
+  (and (= profile-id (:llm-rule/profile rule))
+       (or (= tool (:llm-rule/tool rule))
+           (and cls (= cls (:llm-rule/class rule))))
+       (every? (fn [[k allowed]] (contains? allowed (get facts k))) (:llm-rule/facts rule))
+       (active? rule now)))
+
+(defn decide
+  "A profile's decision for one call, under the rules that narrow it, and why:
+
+     {:decision :allow|:ask|:deny, :base <the profile's>, :class <the tool's>,
+      :rule <the id of the rule that decided, if one did>}
+
+   A rule that applies and denies, denies: a person may always tighten. One
+   that allows decides only where the profile asks, and never for a class the
+   profile fixes. Otherwise the profile decides.
+
+   ctx: :rules (default: the registered rules for the profile), :facts about
+   the call ({fact-key value}, matched against a rule's :llm-rule/facts), and
+   :now (an inst; default the current time), against which a rule expires."
+  ([profile-id tool] (decide profile-id tool {}))
+  ([profile-id tool {:keys [facts now] :as ctx}]
+   (let [cls (class-of profile-id tool)
+         base (decision profile-id tool)
+         now (or now #?(:clj (java.util.Date. (long (now-ms))) :cljs (js/Date. (now-ms))))
+         fixed (set (:llm-profile/fixed (effective profile-id)))
+         applying (filter #(applies? profile-id tool cls facts now %)
+                          (get ctx :rules (rules-for profile-id)))
+         deny (first (filter #(= :deny (:llm-rule/decision %)) applying))
+         allow (when (and (= :ask base) cls (not (contains? fixed cls)))
+                 (first (filter #(= :allow (:llm-rule/decision %)) applying)))
+         by (or deny allow)]
+     (cond-> {:decision (cond deny :deny allow :allow :else base)
+              :base base
+              :class cls}
+       by (assoc :rule (:llm-rule/id by))))))
+
+(defn rule-problems
+  "Why a rule can't be kept, or nil: checked before a remembered answer is
+   saved, and over every registered rule by invariant/llm-rule-only-narrows."
+  [rule]
+  (let [{:llm-rule/keys [profile class tool]} rule
+        rule-decision (:llm-rule/decision rule)
+        known? (some #{profile} (profiles))
+        classes (when known?
+                  (set (:classifier/classes (entity/props-for (:llm-profile/classifier (effective profile))))))
+        target-class (or class (when (and known? tool) (class-of profile tool)))
+        base (when known?
+               (if class
+                 (get (:llm-profile/class-policy (effective profile)) class :deny)
+                 (when tool (decision profile tool))))
+        problem (fn [k & kvs] (apply assoc {:problem k :rule (:llm-rule/id rule)} kvs))]
+    (seq
+     (remove nil?
+             [(when-not known? (problem :profile-unknown :profile profile))
+              (when-not (or class tool) (problem :targets-nothing))
+              (when (and class tool) (problem :targets-both :class class :tool tool))
+              (when (and known? class (not (contains? classes class)))
+                (problem :class-unknown :class class))
+              (when (and known? (= :allow rule-decision) (or class tool) (not= :ask base))
+                (problem :allow-outside-ask :base base))
+              (when (and known? (= :allow rule-decision) target-class
+                         (contains? (set (:llm-profile/fixed (effective profile))) target-class))
+                (problem :class-fixed :class target-class))]))))
+
+(defn draft-rule
+  "A rule remembering the answer to one call, as narrow as asked: for the
+   call's tool, or (`:by :class`) for every tool of its class; and only while
+   the facts named in `:keep` are what they were in this call. Check it with
+   `rule-problems` before saving.
+
+   opts: :decision (:allow or :deny), :by (:tool, the default, or :class),
+   :keep (fact keys), :expires (an inst), :summary (what the person sees)."
+  [profile-id tool facts {:keys [decision by keep expires summary] :or {by :tool}}]
+  (cond-> {:llm-rule/profile profile-id
+           :llm-rule/decision decision
+           :llm-rule/facts (into {} (for [k keep :when (contains? facts k)] [k #{(get facts k)}]))}
+    (= :tool by) (assoc :llm-rule/tool tool)
+    (= :class by) (assoc :llm-rule/class (class-of profile-id tool))
+    expires (assoc :llm-rule/expires expires)
+    summary (assoc :llm-rule/summary summary)))
 
 ;; ---------------------------------------------------------------------------
 ;; Invariants
@@ -240,6 +380,20 @@
             :details   (vec violations)
             :severity  :error
             :message   "Every tool a hosted prompt depends on is allowed or asked for by the profile: the prompt can run under it"})))}))
+
+(registry/register!
+ :invariant/llm-rule-only-narrows
+ :atlas/invariant
+ #{:meta/llm-rule-check}
+ {:invariant/fn
+  (fn []
+    (let [violations (mapcat rule-problems (rules))]
+      (when (seq violations)
+        {:invariant :llm-rule-only-narrows
+         :violation :llm-rule-loosens
+         :details   (vec violations)
+         :severity  :error
+         :message   "A rule narrows its profile: it may deny anything, and allow only what the profile asks about, never a fixed class"})))})
 
 ;; ---------------------------------------------------------------------------
 ;; Export: each profile, decided for every tool its surfaces serve
