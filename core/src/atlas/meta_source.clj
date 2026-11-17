@@ -149,10 +149,10 @@
   (cond (nil? x) [] (sequential? x) (vec x) :else [x]))
 
 (defn atlas-relations
-  "{key {:verb v}}: what each entry key's ids are, from what atlas's own
+  "{key relation}: what each entry key's ids are, from what atlas's own
    datalog draws its edges from (atlas.datalog.facts): atlas's ontologies
    and type-refs (see `builtin-ontology-files`) and those of the entries
-   read (a project's own), later ones winning:
+   read (a project's own):
 
    - an ontology key with no verb at all: a relation by its own name, as
      atlas draws no edge from it;
@@ -164,30 +164,45 @@
      :entity/depends from it, keeping the verb a type-ref or extra verb gives
      the key: a workflow's :workflow/producers is {:verb
      :workflow/has-producer :depends true}, which reach follows and
-     {:related {:workflow/has-producer ...}} follows too."
+     {:related {:workflow/has-producer ...}} follows too.
+
+   atlas draws a type-ref's edge for its source type only, and an extra
+   verb's for its ontology's; meta-source gives a key one verb. So when the
+   type-refs and extra verbs naming a key agree, the key has that relation;
+   when they don't, it has each, [{:verb v :source id} ...], id the type-ref
+   or ontology giving it: meta-source reports :conflicting-relations naming
+   them, and picks none."
   [entries]
-  (let [all (vals (merge @builtin-ontologies entries))
-        onts (filter #(= :atlas/ontology (:atlas/type %)) all)
-        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key %)) (key-list (:dataflow/response-key %))) onts))
-        ;; the verbs atlas declares: extra verbs, then type-refs
-        declared (merge
-                  (into {} (for [o onts [k v] (:dataflow/extra-verbs o)
-                                 :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
-                             [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v)))}]))
-                  (into {} (for [e all
-                                 :when (= :atlas/type-ref (:atlas/type e))
-                                 :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
-                                 :when (and (qualified-keyword? p) (qualified-keyword? v))]
-                             [p {:verb (get reserved-verb v v)}])))]
+  (let [by-id (merge @builtin-ontologies entries)
+        onts (filter #(= :atlas/ontology (:atlas/type (val %))) by-id)
+        dataflow-keys (set (mapcat #(concat (key-list (:dataflow/context-key (val %))) (key-list (:dataflow/response-key (val %)))) onts))
+        ;; each verb atlas declares for a key, with where: extra verbs, type-refs
+        declared (group-by first
+                           (concat
+                            (for [[id o] onts [k v] (:dataflow/extra-verbs o)
+                                  :when (and (qualified-keyword? k) (keyword? v) (not (dataflow-keys k)))]
+                              [k {:verb (if (qualified-keyword? v) (get reserved-verb v v) (keyword "atlas" (name v))) :source id}])
+                            (for [[id e] by-id
+                                  :when (= :atlas/type-ref (:atlas/type e))
+                                  :let [p (:type-ref/property e) v (:type-ref/datalog-verb e)]
+                                  :when (and (qualified-keyword? p) (qualified-keyword? v))]
+                              [p {:verb (get reserved-verb v v) :source id}])))
+        ;; one relation when its sources agree, each of them when they don't
+        relation (fn [cs] (let [rs (distinct (map #(dissoc % :source) cs))]
+                            (if (= 1 (count rs)) (first rs) (vec (sort-by (comp str :source) cs)))))
+        deps-keys (set (for [[_ o] onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)] k))]
     (merge
-     (into {} (for [o onts k (:ontology/keys o)
+     (into {} (for [[_ o] onts k (:ontology/keys o)
                     :when (and (qualified-keyword? k) (not (dataflow-keys k)))]
                 [k {:verb k}]))
-     declared
-     (into {} (for [o onts k (key-list (:dataflow/deps-key o)) :when (qualified-keyword? k)
-                    :let [v (:verb (get declared k))]]
+     (into {} (for [[k kcs] declared :when (not (deps-keys k))] [k (relation (map second kcs))]))
+     (into {} (for [k deps-keys
+                    :let [cs (map second (get declared k))]]
                 ;; a verb of its own stays, and the key is a dependency too
-                [k (if (qualified-keyword? v) {:verb v :depends true} {:verb :depends})])))))
+                [k (if (seq cs)
+                     (relation (for [{:keys [verb] :as c} cs]
+                                 (if (qualified-keyword? verb) (assoc c :depends true) (assoc c :verb :depends))))
+                     {:verb :depends})])))))
 
 (defn ontology-vocabulary
   "The key namespaces atlas's ontologies own, its own and those of the
