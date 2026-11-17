@@ -4,7 +4,7 @@
                                            :git/sha "f8aa005764a8d8c51cdcdc534728139b30ff4b8e"}
         ;; bb source: atlas's registry read by meta-source, with atlas.meta-source/pack
         io.github.semantic-namespace/meta-source {:git/url "https://github.com/semantic-namespace/meta-source"
-                                                  :git/sha "d55322c8ff7c9f153a24be7ad124ba944c038ef6"}
+                                                  :git/sha "2e8eadbeab890da34a7c062d0bf6acaaa8a36056"}
         ;; the packs for Clojure libraries (integrant's, in the smoke)
         io.github.semantic-namespace/meta-source-packs {:git/url "https://github.com/semantic-namespace/meta-source-packs"
                                                         :git/sha "db7440789c5fcb790cb32a4adba17a417d4d62d4"}}
