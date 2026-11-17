@@ -178,7 +178,7 @@
                             "(registry/register! :component/db :atlas/structure-component #{:tier/foundation} {:structure-component/deps #{}})\n"
                             "(registry/register! :failure-mode/slow :atlas/risk-failure-mode #{:tier/service} {})\n"
                             "(registry/register! :decision/cache :atlas/decision #{:tier/service}\n"
-                            "  {:decision/realized-by [:fn/a] :decision/mitigates [:failure-mode/slow]})\n"
+                            "  {:decision/realized-by [:fn/a] :decision/mitigates [:failure-mode/slow] :decision/discussed-with [:component/db]})\n"
                             ";; the project's own type-ref, and a key no type-ref types\n"
                             "(registry/register! :type-ref/job-needs :atlas/type-ref #{:meta/job-needs}\n"
                             "  {:type-ref/source :app/job :type-ref/property :job/needs :type-ref/datalog-verb :entity/depends})\n"
@@ -193,6 +193,11 @@
                 (= #{:component/db} (reached :fn/a))
                 (= {:fn/a :decision/realized-by :failure-mode/slow :decision/mitigates} (select-keys (verbs :decision/cache) [:fn/a :failure-mode/slow]))
                 (empty? (reached :decision/cache))))
+    (check "relations: a key in a namespace an ontology owns that no ontology declares is a relation by its own name (atlas draws no edge); a type with no ontology keeps its keys dependencies"
+           (and (= :decision/discussed-with (:component/db (verbs :decision/cache)))
+                (= :atlas (get-in idx [:untyped-relations :decision/discussed-with]))
+                (not (contains? (:untyped-relations idx) :job/notes))
+                (= #{:fn/a :component/db} (reached :job/nightly))))
     (check "relations: reach follows a decision's verb when :via names it"
            (= #{:fn/a :component/db} (reached :decision/cache [:deps :decision/realized-by])))
     (check "relations: an entity's type is a relation, not a dependency: uses still lists its entities, and a decision realizing a fn doesn't reach the db"
