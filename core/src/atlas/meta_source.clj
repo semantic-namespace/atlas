@@ -32,8 +32,11 @@
      decision's :decision/mitigates), and an ontology key atlas draws no
      edge from, are relations of their own, which reach doesn't follow and
      rules follow with :related; an entity's type and aspects, and what an
-     ontology or a type-ref is for, are relations too; an invariant's
-     :invariant/rule names nothing;
+     ontology or a type-ref is for, are relations too; so is a key no
+     ontology declares in a namespace an ontology owns (:llm-prompt/* for
+     :atlas/llm-prompt, `ontology-vocabulary`), as atlas draws no edge from
+     it; other libraries' keys and the project's own stay dependencies; an
+     invariant's :invariant/rule names nothing;
    - atlas's context and response keys are dataflow: what an execution
      function, an endpoint or a workflow consumes and produces, and what the
      project's own ontologies declare as theirs (:dataflow/context-key,
@@ -185,6 +188,22 @@
                     :let [v (:verb (get declared k))]]
                 ;; a verb of its own stays, and the key is a dependency too
                 [k (if (qualified-keyword? v) {:verb v :depends true} {:verb :depends})])))))
+
+(defn ontology-vocabulary
+  "The key namespaces atlas's ontologies own, its own and those of the
+   entries read: each ontology's type's name (`llm-prompt` for
+   :atlas/llm-prompt). With :pack/untyped :relation, a key in one of them
+   that no ontology or type-ref declares is a relation by its own name, as
+   atlas's datalog draws no edge from it. Keys an ontology lists from another
+   namespace (:grain/* on execution functions) are declared one by one in
+   `atlas-relations`: that namespace is the other library's."
+  [entries]
+  (into (sorted-set)
+        (for [e (vals (merge @builtin-ontologies entries))
+              :when (= :atlas/ontology (:atlas/type e))
+              :let [t (:ontology/for e)]
+              :when (qualified-keyword? t)]
+          (name t))))
 
 (def builtin-rule-files
   "atlas's own ontologies whose invariants carry an :invariant/rule, read
@@ -428,6 +447,10 @@
    :pack/kinds #{kind}
    :pack/id-key :atlas.source/id
    :pack/vocabulary #{"atlas"}
+   ;; the namespaces its ontologies own: a key there no ontology declares is
+   ;; a relation, not a dependency (atlas draws no edge from it)
+   :pack/vocabulary-of ontology-vocabulary
+   :pack/untyped :relation
    :pack/data-keys? false
    ;; atlas describes what other libraries declare: an entity under an
    ;; integrant component's key, a resolver's, a spec's
