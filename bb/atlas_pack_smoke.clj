@@ -224,6 +224,23 @@
                   (= #{:widget/two} (set (map :dev-id (:reaches (index/reach wi :widget/one)))))
                   ;; and :related follows its type-ref verb
                   (true? (:depends (first (filter #(= :widget/parts (:via %)) (:depends-on (index/dependencies wi :widget/one)))))))))
+    (check "relations: two type-refs giving one property different verbs are a conflict naming both, never one picked; agreeing, one relation"
+           (let [src (fn [verb-b]
+                       (str "(ns app.t (:require [atlas.registry :as registry]))\n"
+                            "(registry/register! :type-ref/job-blocks :atlas/type-ref #{:meta/job-blocks}\n"
+                            "  {:type-ref/source :app/job :type-ref/property :job/blocks :type-ref/datalog-verb :job/blocks})\n"
+                            "(registry/register! :type-ref/task-blocks :atlas/type-ref #{:meta/task-blocks}\n"
+                            "  {:type-ref/source :app/task :type-ref/property :job/blocks :type-ref/datalog-verb " verb-b "})\n"))
+                 differ (build {:root (project {"src/app/t.clj" (src ":job/waits-on")}) :src ["src"]})
+                 agree (build {:root (project {"src/app/t.clj" (src ":job/blocks")}) :src ["src"]})
+                 [p] (problems differ :conflicting-relations)]
+             (and (= {:job/blocks ["atlas :type-ref/job-blocks"] :job/waits-on ["atlas :type-ref/task-blocks"]} (:verbs p))
+                  (nil? (get-in differ [:relations :job/blocks]))
+                  (= {:verb :job/blocks} (get (atlas-pack/atlas-relations {:type-ref/a {:atlas/type :atlas/type-ref :type-ref/property :job/blocks :type-ref/datalog-verb :job/blocks}
+                                                                           :type-ref/b {:atlas/type :atlas/type-ref :type-ref/property :job/blocks :type-ref/datalog-verb :job/blocks}})
+                                              :job/blocks))
+                  (= :job/blocks (get-in agree [:relations :job/blocks]))
+                  (empty? (problems agree :conflicting-relations)))))
     (check "relations: atlas's own workflow producers and test targets stay dependencies, keeping their type-ref verbs"
            (and (= {:verb :workflow/has-producer :depends true} (get (atlas-pack/atlas-relations {}) :workflow/producers))
                 (= {:verb :test/tests :depends true} (get (atlas-pack/atlas-relations {}) :test-case/target))))
